@@ -1,0 +1,17 @@
+# local artefacts — never commit
+.env
+home/
+spike/demos/
+spike/out/
+spike/cfg/spike_autoexec.cfg
+demos/
+clips/
+*.dem
+*.dem.gz
+*.mp4
+*.avi
+*.tga
+console.log
+.venv/
+node_modules/
+data/

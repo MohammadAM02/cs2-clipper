@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass(frozen=True)
@@ -37,3 +38,22 @@ class Highlight:
     frag_ticks: tuple[int, ...]
     round_start_tick: int
     round_end_tick: int
+
+
+@dataclass(frozen=True)
+class MatchInfo:
+    """A match as seen from the subject's team."""
+
+    checksum: str
+    map_name: str
+    played_at: datetime
+    team_score: int
+    opponent_score: int
+
+    @property
+    def result(self) -> str:
+        if self.team_score > self.opponent_score:
+            return "win"
+        if self.team_score < self.opponent_score:
+            return "loss"
+        return "tie"

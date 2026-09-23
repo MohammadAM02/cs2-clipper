@@ -1,6 +1,6 @@
 # 09 — Knife bonus never fires
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 
 ## Problem
@@ -20,3 +20,9 @@ Test `k.weapon_type = 'melee'`.
 ## Done when
 
 A knife Frag earns `knife kill` and +30. Needs a Demo with a knife Frag, or a fixture row.
+
+## Answer
+
+Fixed: `clipper/csdm_db.py` counts knife Frags with `weapon_type = 'melee'`, and
+`clipper/scoring.py` gives them the +30 bonus
+(`tests/test_scoring.py::test_a_knife_frag_earns_thirty`).

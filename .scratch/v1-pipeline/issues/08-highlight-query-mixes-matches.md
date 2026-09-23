@@ -1,6 +1,6 @@
 # 08 — Highlight query mixes rounds from different matches
 
-Status: ready-for-agent
+Status: resolved
 Type: task
 
 ## Problem
@@ -30,3 +30,10 @@ Every new Demo is analyzed into the same database, so this breaks on the pipelin
 - With two analyzed matches, there is one row per (match, round), carrying that match's own Ticks.
 - For `aea4e59ccfc6c962` the output is unchanged: 15 rows, 34 Frags in total, round 12 = `4K`,
   Score 80.
+
+## Answer
+
+Fixed by `clipper/csdm_db.py`, which replaced `db/highlights.sql`: the per-round facts group and
+join on `match_checksum` as well as on the round number and SteamID.
+`tests/test_csdm_db.py::test_round_facts_stay_within_one_match` clones the match under a second
+checksum and checks both keep exactly their own facts.

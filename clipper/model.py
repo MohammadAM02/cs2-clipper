@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 
 @dataclass(frozen=True)
@@ -57,3 +58,14 @@ class MatchInfo:
         if self.team_score < self.opponent_score:
             return "loss"
         return "tie"
+
+
+@dataclass(frozen=True)
+class ClipFile:
+    """One rendered Sequence. CS:DM names it sequence-<n>-tick-<start>-to-<end>.mp4."""
+
+    sequence: int
+    start_tick: int
+    end_tick: int
+    path: Path
+    duration_s: float

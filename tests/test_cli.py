@@ -1,6 +1,7 @@
 import pytest
 
-from clipper.cli import AlreadyRunning, cmd_retry, format_status, single_instance
+from clipper.cli import AlreadyRunning, cmd_retry, cmd_run, format_status, single_instance
+from clipper.config import Config
 from clipper.gate import GateStatus
 from clipper.index import Index
 
@@ -44,3 +45,29 @@ def test_only_one_instance_can_hold_the_lock(tmp_path):
                 pass
     with single_instance(lock):   # released again
         pass
+
+
+def test_a_failed_start_is_reported_and_stops(tmp_path, monkeypatch):
+    # Build a Config with folders under tmp_path
+    cfg = Config(downloads_dir=tmp_path / "downloads", data_root=tmp_path / "clips",
+                 index_path=tmp_path / "clipper.sqlite")
+
+    # Monkeypatch _setup_logging to a no-op
+    monkeypatch.setattr("clipper.cli._setup_logging", lambda logs_dir: None)
+
+    # Monkeypatch postgres.ensure_running to raise RuntimeError
+    monkeypatch.setattr("clipper.cli.postgres.ensure_running",
+                       lambda pg_bin, pg_data: (_ for _ in ()).throw(RuntimeError("pg_ctl start failed")))
+
+    # Monkeypatch notify to record (title, body)
+    notifications = []
+    monkeypatch.setattr("clipper.cli.notify", lambda title, body: notifications.append((title, body)))
+
+    # cmd_run should return 1
+    assert cmd_run(cfg) == 1
+
+    # Exactly one notification should be recorded
+    assert len(notifications) == 1
+    title, body = notifications[0]
+    assert title == "clipper could not start"
+    assert "pg_ctl start failed" in body

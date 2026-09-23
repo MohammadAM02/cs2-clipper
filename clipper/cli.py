@@ -157,12 +157,17 @@ def _setup_logging(logs_dir: Path) -> None:
 def cmd_run(cfg: Config) -> int:
     try:
         with single_instance(cfg.index_path.with_name("clipper.lock")):
-            _setup_logging(cfg.logs_dir)
-            for folder in (cfg.demos_dir, cfg.renders_dir, cfg.library_dir):
-                folder.mkdir(parents=True, exist_ok=True)
-            postgres.ensure_running(cfg.pg_bin, cfg.pg_data)
-            index = Index(cfg.index_path)
-            worker = build_worker(cfg, index)
+            try:  # noqa: BLE001 - at sign-in there is no console: say why, then stop
+                _setup_logging(cfg.logs_dir)
+                for folder in (cfg.demos_dir, cfg.renders_dir, cfg.library_dir):
+                    folder.mkdir(parents=True, exist_ok=True)
+                postgres.ensure_running(cfg.pg_bin, cfg.pg_data)
+                index = Index(cfg.index_path)
+                worker = build_worker(cfg, index)
+            except Exception as exc:
+                log.exception("clipper could not start")
+                notify("clipper could not start", str(exc) or type(exc).__name__)
+                return 1
             log.info("clipper is running; watching %s", cfg.downloads_dir)
             while True:
                 try:

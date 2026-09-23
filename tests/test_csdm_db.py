@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 import psycopg
 import pytest
+from psycopg import sql
 
 from clipper import csdm_db
 from clipper.config import load_config
@@ -41,12 +42,15 @@ def test_round_facts_match_the_fixture(conn):
 
 
 def test_round_facts_stay_within_one_match(conn):   # issue 08
-    """A second match with the same round numbers must not leak into the first match's facts.
+    """'second-match' is a copy of the fixture match alone, added next to every real match.
     Temp tables shadow the real ones for this transaction only; the rollback removes them."""
     with conn.transaction(force_rollback=True):
         conn.execute("SET LOCAL search_path = pg_temp, public")
         for table in ("kills", "rounds", "players"):
-            conn.execute(f"CREATE TEMP TABLE {table} ON COMMIT DROP AS SELECT * FROM public.{table}")
+            conn.execute(
+                sql.SQL("CREATE TEMP TABLE {t} ON COMMIT DROP AS SELECT * FROM public.{t} WHERE match_checksum = {c}")
+                .format(t=sql.Identifier(table), c=sql.Literal(MATCH_CHECKSUM))
+            )
             conn.execute(f"UPDATE {table} SET match_checksum = 'second-match'")
             conn.execute(f"INSERT INTO {table} SELECT * FROM public.{table}")
         assert csdm_db.round_facts(conn, MATCH_CHECKSUM, SUBJECT) == list(MATCH_FACTS)

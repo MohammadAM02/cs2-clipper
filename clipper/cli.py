@@ -15,7 +15,8 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from clipper import csdm_db, postgres
-from clipper.config import Config, load_config
+from clipper.config import REPO_ROOT, Config, load_config
+from clipper.install import install, uninstall
 from clipper.csdm_cli import CsdmCli
 from clipper.gate import Gate, GateStatus
 from clipper.index import Index
@@ -184,10 +185,20 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("resume", help="resume rendering after a pause")
     commands.add_parser("highlights", help="print the scored Highlights of an analyzed Demo").add_argument(
         "demo", help="index id, file name, or CS:DM match checksum")
+    commands.add_parser("install", help="start the app when you sign in (Task Scheduler)")
+    commands.add_parser("uninstall", help="remove the sign-in task")
     args = parser.parse_args(argv)
     cfg = load_config()
     if args.command == "run":
         return cmd_run(cfg)
+    if args.command == "install":
+        install(REPO_ROOT)
+        print("clipper will start when you sign in (Task Scheduler task 'cs2-clipper')")
+        return 0
+    if args.command == "uninstall":
+        uninstall()
+        print("sign-in task removed")
+        return 0
     index = Index(cfg.index_path)
     try:
         if args.command == "status":

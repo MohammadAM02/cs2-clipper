@@ -86,10 +86,17 @@ rendering can start"). It never kills a CS:DM instance it did not start.
 de_inferno, about 5 minutes") and waits 30 s; if the Gate closes during that wait, the launch is
 cancelled.
 
-**While rendering**, condition 2 is re-checked every 5 s. If FACEIT AC appears, the app closes CS2
-immediately; the attempt is recorded as `aborted`, which does not count as a failure, and the job is
-queued again. A CS:DM GUI opened mid-render is not watched for: if it breaks the attempt, that is an
-ordinary failure. While a render runs, the app also asks Windows not to sleep.
+**While rendering**, condition 2 is re-checked every 5 s. If FACEIT AC appears, the app closes the
+hooked CS2 immediately, stops csdm once no hooked CS2 is left, and keeps closing any hooked CS2 that
+appears for 30 s afterwards (HLAE may still be starting one). The attempt is recorded as `aborted`,
+which does not count as a failure, and the job is queued again. A CS:DM GUI opened mid-render is not
+watched for: if it breaks the attempt, that is an ordinary failure. While a render runs, the app also
+asks Windows not to sleep.
+
+**The hooked CS2** is the `cs2.exe` whose command line contains `-insecure`; only renders start CS2
+that way. Every "close CS2" in this spec means closing the hooked CS2 — the app never closes a CS2
+the user started. If csdm exits normally and a hooked CS2 is still running, it is left alone and the
+Gate holds further renders until it has closed.
 
 ## Rendering
 
@@ -126,12 +133,16 @@ csdm video <demo.dem> --mode player --steamids <subject SteamID64> --event kills
 
 For each selected Highlight and each Perspective:
 
-1. Take the Clips that contain one of the Highlight's Frag Ticks (from the `tick-A-to-B` in their
-   file names).
-2. Order them by start Tick, numerically.
+1. Assign each Clip (its Ticks come from the `tick-A-to-B` in its file name) to the selected round it
+   starts in: the latest selected round whose start Tick is at or before the Clip's start Tick.
+   CS:DM renders only the rounds it was given, so this is always the Clip's own round — including
+   Sequences around Kills the Highlight query does not count, such as team kills. A Clip that starts
+   before every selected round, or a selected round with no Clip, fails the render attempt.
+2. Order each round's Clips by start Tick, numerically.
 3. One Clip: copy it. Several: concatenate with FFmpeg's concat demuxer and `-c copy`, using a list
    file written at a native path next to the output.
-4. Verify with `ffprobe`: the Reel's duration must be within 0.25 s of the sum of its Clips.
+4. Verify with `ffprobe`: the Reel's duration must be within 0.25 s, plus 0.05 s per join, of the sum
+   of its Clips (joining two MP3-audio Clips measured +0.045 s on this machine).
 
 Reels are written to `E:\cs2clips\library\videos\<match checksum>\r<round>-<perspective>.mp4`.
 
@@ -191,12 +202,13 @@ instead.
 
 | Table | Columns |
 | --- | --- |
-| `demos` | id, file_name (unique), sha256 (unique), archive_path, dem_path, match_checksum, state, attempts, last_error, created_at, updated_at |
+| `demos` | id, file_name (unique), sha256 (unique), archive_path, dem_path, match_checksum, state, resume_state (the step a `failed` Demo resumes at), attempts, last_error, created_at, updated_at |
 | `matches` | checksum (key), map, played_at, team_score, opponent_score, result (`win` / `loss` / `tie`) — copied from CS:DM at step 3 |
 | `highlights` | id, match_checksum, round, type, score, reasons (JSON list), frag_ticks (JSON list), round_start_tick, round_end_tick, selected; unique (match_checksum, round) |
 | `render_jobs` | id, demo_id, perspective, attempt, state (`queued` / `running` / `done` / `failed` / `aborted`), output_dir, log_path, started_at, finished_at, failure |
 | `clips` | id, render_job_id, highlight_id, sequence, start_tick, end_tick, path, duration_s |
 | `reels` | id, highlight_id, perspective, path, duration_s; unique (highlight_id, perspective) |
+| `app_state` | key, value — `paused` and `consecutive_failures`, so a pause survives a reboot |
 
 This carries everything the Clip library spec lists under "What the library needs from the index".
 

@@ -95,6 +95,12 @@ ffmpeg -y -f concat -safe 0 -i <list.txt> -c copy <reel>.mp4
 - **The `--output` folder must already exist** or CS:DM aborts with `Output folder does not exist`.
 - **Every path passed to CS:DM or FFmpeg must be a NATIVE path** (`C:/...`, `E:/...`). An MSYS path
   (`/c/...`, `/tmp/...`) breaks CS:DM's database lookup and FFmpeg's input handling in confusing ways.
+- **Aspect ratio is a resolution choice, not a pipeline change.** CS:DM forwards `--width`/`--height`
+  to CS2 as `-width`/`-height`. `scripts/render_reel.sh` exposes it as `REEL_RATIO`:
+  `16:9` = 1920×1080, `4:3` = 1440×1080 (a genuinely 4:3 video), `4:3-stretched` = render 1440×1080
+  then bake `scale=1920:1080` into the Reel. Only the stretched variant costs a re-encode; the other
+  two are stream copies. `REEL_EVENT` picks the Sequence unit: `kills` (per-frag) or `rounds` (whole
+  rounds, ~70–95 s each).
 - Every headless invocation needs `USERPROFILE=<native repo>/home` and `psql` on `PATH`.
 - Never wrap `csdm` in a timeout: killing the CLI orphans CS2 in a reconnect loop.
 

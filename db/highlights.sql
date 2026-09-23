@@ -16,7 +16,8 @@
 \endif
 
 WITH frags AS (
-  SELECT k.round_number,
+  SELECT k.match_checksum,
+         k.round_number,
          count(*)                                    AS frags,
          count(*) FILTER (WHERE k.is_headshot)       AS headshots,
          count(*) FILTER (WHERE k.is_killer_blinded) AS blind_kills,
@@ -28,7 +29,7 @@ WITH frags AS (
   FROM kills k
   WHERE k.killer_steam_id = :'steamid'
     :match_filter
-  GROUP BY k.round_number
+  GROUP BY k.match_checksum, k.round_number
 )
 SELECT f.round_number AS round,
        f.first_kill_tick,
@@ -62,7 +63,9 @@ SELECT f.round_number AS round,
          CASE WHEN f.blind_kills > 0 AND f.frags >= 2 THEN 'blind kill' END
        ], NULL) AS reasons
 FROM frags f
-JOIN rounds r ON r.number = f.round_number
+-- The match_checksum join is NOT optional: rounds holds a row per round per match, so joining on
+-- round number alone silently mixes another match's Ticks into this one and duplicates every row.
+JOIN rounds r ON r.number = f.round_number AND r.match_checksum = f.match_checksum
 ORDER BY score DESC, f.round_number;
 
 -- Not yet covered: MATCH_POINT (needs the match format / score state at round start) and

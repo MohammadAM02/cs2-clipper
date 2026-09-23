@@ -53,7 +53,7 @@ esac
 [[ -x "$CSDM" || -f "$CSDM" ]] || { echo "csdm CLI not found at $CSDM" >&2; exit 2; }
 
 # --- preflight ------------------------------------------------------------------------------------
-if tasklist 2>/dev/null | grep -qi '^cs2\.exe'; then
+if [[ "${DRY_RUN:-0}" != "1" ]] && tasklist 2>/dev/null | grep -qi '^cs2\.exe'; then
   echo "ABORT: cs2.exe is running. Close CS2 first — never launch a second HLAE-hooked instance." >&2
   exit 3
 fi
@@ -86,6 +86,19 @@ mkdir -p "$OUT_DIR"
 mkdir -p "$LOGDIR"
 LOG="$LOGDIR/reel_${PERSPECTIVE}_$(date '+%Y%m%d_%H%M%S').log"
 
+# Aspect ratio. "4:3-stretched" renders 4:3 then bakes the horizontal stretch into 16:9 in the reel
+# step, which is what CS players mean by 4:3; plain "4:3" stays a true 4:3 video.
+# REEL_EVENT selects what a Sequence covers: kills = per-frag clips, rounds = whole rounds.
+RATIO="${REEL_RATIO:-16:9}"
+EVENT="${REEL_EVENT:-kills}"
+case "$RATIO" in
+  16:9)          WIDTH=1920; HEIGHT=1080; STRETCH=0 ;;
+  4:3)           WIDTH=1280; HEIGHT=960;  STRETCH=0 ;;   # the classic 4:3 res
+  4:3-hd)        WIDTH=1440; HEIGHT=1080; STRETCH=0 ;;
+  4:3-stretched) WIDTH=1280; HEIGHT=960;  STRETCH=1 ;;   # 4:3 geometry baked out to 16:9
+  *) echo "REEL_RATIO must be 16:9, 4:3, 4:3-hd or 4:3-stretched (got '$RATIO')" >&2; exit 2 ;;
+esac
+
 # Clip padding stays at CS:DM's default 2s/2s, and the Reel is assembled by us with FFmpeg below.
 # (An earlier note here blamed CS:DM's --concatenate-sequences/--output-file-name/padding flags for
 # breaking the run. That was wrong: those runs were all script runs, and the real culprit was the MSYS
@@ -94,13 +107,24 @@ ARGS=(
   video "$DEMO_ABS"
   --mode player
   --steamids "$STEAMID"
-  --event kills
+  --event "$EVENT"
   --perspective "$PERSPECTIVE"
+  --width "$WIDTH"
+  --height "$HEIGHT"
   --output "$OUT_DIR"
   --close-game-after-recording
 )
 [[ "$ROUNDS" != "all" ]] && ARGS+=(--rounds "$ROUNDS")
 ARGS+=("$@")
+
+if [[ "${DRY_RUN:-0}" == "1" ]]; then
+  echo "DRY RUN — would execute:"
+  printf '  %s' "$CSDM"
+  printf ' %q' "${ARGS[@]}"
+  printf '\n'
+  [[ "$STRETCH" == "1" ]] && echo "  reel step: scale ${WIDTH}x${HEIGHT} -> 1920x1080 (baked stretch)"
+  exit 0
+fi
 
 echo "reel    : $REEL_NAME"
 echo "demo    : $DEMO_ABS"
@@ -155,7 +179,13 @@ done
 shopt -u nullglob
 
 if [[ -s "$LIST" ]]; then
-  if ffmpeg -y -loglevel error -f concat -safe 0 -i "$LIST" -c copy "$REEL_PATH"; then
+  # A baked 4:3 stretch needs a real re-encode; everything else is a stream copy.
+  if [[ "$STRETCH" == "1" ]]; then
+    REEL_FFMPEG=(-vf "scale=1920:1080,setsar=1" -c:v libx264 -crf 23 -preset medium -c:a copy)
+  else
+    REEL_FFMPEG=(-c copy)
+  fi
+  if ffmpeg -y -loglevel error -f concat -safe 0 -i "$LIST" "${REEL_FFMPEG[@]}" "$REEL_PATH"; then
     echo "reel    : $REEL_PATH"
     ffprobe -v error -show_entries format=duration,size -of default=noprint_wrappers=1 "$REEL_PATH" 2>/dev/null | sed 's/^/          /'
   else

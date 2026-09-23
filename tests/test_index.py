@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -68,6 +69,27 @@ def test_fail_remembers_the_step_and_retry_returns_to_it(index):
     assert (latest["state"], latest["attempt"]) == ("queued", 1)
     with pytest.raises(ValueError):
         index.retry(demo_id)
+
+
+def test_a_retry_that_fails_midway_changes_nothing(index, monkeypatch):
+    demo_id = add(index)
+    index.advance(demo_id, "rendering")
+    job = index.queue_render(demo_id, "player", attempt=3)
+    index.finish_render(job, "failed", "csdm reported: Game error")
+    index.fail(demo_id, "player render failed 3 times")
+
+    # Monkeypatch queue_render to raise an error
+    def failing_queue_render(demo_id, perspective, attempt):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(index, "queue_render", failing_queue_render)
+
+    # Retry should raise the error
+    with pytest.raises(sqlite3.OperationalError):
+        index.retry(demo_id)
+
+    # Demo state should still be failed
+    assert index.demo(demo_id)["state"] == "failed"
 
 
 def test_saving_highlights_again_updates_them_in_place(index):

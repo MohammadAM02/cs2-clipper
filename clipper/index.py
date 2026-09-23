@@ -168,17 +168,27 @@ class Index:
         )
 
     def retry(self, demo_id: int) -> str:
-        """Send a failed Demo back to the step that failed; returns that step's state."""
-        demo = self.demo(demo_id)
-        if demo is None or demo["state"] != "failed":
-            raise ValueError(f"demo {demo_id} has not failed")
-        state = demo["resume_state"] or "spotted"
-        self.advance(demo_id, state, last_error=None)
-        if state == "rendering":
-            for perspective in ("player", "enemy"):
-                job = self.latest_render(demo_id, perspective)
-                if job is not None and job["state"] == "failed":
-                    self.queue_render(demo_id, perspective, attempt=1)
+        """Send a failed Demo back to the step that failed; returns that step's state.
+
+        Runs as one transaction so the worker never sees the Demo back in rendering
+        before its Render Jobs are queued again.
+        """
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            demo = self.demo(demo_id)
+            if demo is None or demo["state"] != "failed":
+                raise ValueError(f"demo {demo_id} has not failed")
+            state = demo["resume_state"] or "spotted"
+            self.advance(demo_id, state, last_error=None)
+            if state == "rendering":
+                for perspective in ("player", "enemy"):
+                    job = self.latest_render(demo_id, perspective)
+                    if job is not None and job["state"] == "failed":
+                        self.queue_render(demo_id, perspective, attempt=1)
+        except BaseException:
+            self._db.execute("ROLLBACK")
+            raise
+        self._db.execute("COMMIT")
         return state
 
     # --- Matches and Highlights ------------------------------------------------------------------

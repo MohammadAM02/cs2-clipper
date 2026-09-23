@@ -1,0 +1,16 @@
+# Copy to clipper.toml to override any default. Every setting is optional.
+# subject_steamid = "76561198192858303"
+# downloads_dir = "C:/Users/AMG/Downloads"   # default: Windows' Downloads folder
+# data_root = "E:/cs2clips"
+# top_n = 5
+# padding_before_s = 4.0
+# padding_after_s = 2.0
+# stall_seconds = 180.0
+# launch_timeout_seconds = 300.0
+# min_free_gb = 5.0
+# heads_up_seconds = 30.0
+# poll_seconds = 5.0
+# ffmpeg = "ffmpeg"
+# ffprobe = "ffprobe"
+# aspect_ratio = "16:9"        # 16:9, 4:3, 4:3-hd or 4:3-stretched
+# sequence_event = "kills"     # kills (a Sequence per Frag) or rounds (whole rounds)

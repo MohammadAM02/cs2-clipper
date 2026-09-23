@@ -1,0 +1,30 @@
+[project]
+name = "cs2-clipper"
+version = "0.1.0"
+description = "Hands-off CS2 highlight clipper: a FACEIT Demo in, Reels out."
+requires-python = ">=3.13"
+dependencies = [
+    "psycopg[binary]>=3.2",
+    "psutil>=6.0",
+    "zstandard>=0.23",
+]
+
+[project.scripts]
+clipper = "clipper.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3"]
+
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["clipper"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: reads the local CS:DM Postgres (skipped when it is not reachable)",
+    "ffmpeg: needs ffmpeg and ffprobe on PATH (skipped when missing)",
+]

@@ -23,6 +23,7 @@
 - Use the glossary's words (Demo, Tick, Highlight, Frag, Kill, Clip, Reel, Sequence, Perspective, Render Job, Gate) in names, messages and tests.
 - Modules pass Ticks, never seconds (64 Ticks per second); seconds appear only as durations and as the padding handed to csdm.
 - Defaults: top 5 by Score (ties go to the earlier round), padding 4 s before / 2 s after, stall 180 s, csdm-never-launched 300 s, 5 GB minimum free, 30 s heads-up, 5 s poll, 3 attempts per step and per Render Job, pause after 3 failed render attempts in a row.
+- Picture and Sequence unit are settings: `aspect_ratio` = `16:9` (default, 1920×1080), `4:3` (1280×960), `4:3-hd` (1440×1080) or `4:3-stretched` (rendered 1280×960, stretched to 1920×1080 when joining — the only re-encode); `sequence_event` = `kills` (default, a Sequence per Frag) or `rounds` (whole rounds).
 - One deliberate simplification: the Gate is checked on every tick (every 5 s), more often than the spec's "every 15 s", which is harmless.
 - Run tests with `uv run pytest -q`. Tests marked `integration` skip when CS:DM's Postgres is unreachable; `ffmpeg` tests skip when FFmpeg is missing.
 - **Tasks 1 and 13 launch CS2, and Task 7 Step 6 needs the FACEIT client opened for a minute — all three need the user at the PC.** An executing agent stops at them and hands over.
@@ -102,15 +103,25 @@ sequence-3-tick-78105-to-78489.mp4  6.0 (±0.1)
 
 Watch `sequence-1`: the Frag lands about 4 s in. If the names still read `74007-to-74263` (2 s padding), the flags are ignored — record ❌ in Step 4 and stop: the spec's padding needs rethinking before Task 13.
 
-- [ ] **Step 4: Record the run**
+- [ ] **Step 4 (optional): Check the picture and Sequence options you plan to use**
 
-Add a row to the Run log table in `spike/ACCEPTANCE.md` with the date, wall-clock time and total size you saw, for example:
+Only needed before you set `aspect_ratio` or `sequence_event` in `clipper.toml`; Steps 2–3 already checked the defaults (16:9, `kills`). For example, 4:3 stretched with whole rounds:
+
+```bash
+REEL_OUT_DIR=E:/cs2clips/_options_test REEL_RATIO=4:3-stretched REEL_EVENT=rounds scripts/render_reel.sh spike/demos/1-2b882547-d8dd-4ef7-b5c3-6e9558217b17-1-1.dem player 12
+```
+
+Expected: one Sequence whose Ticks lie within round 12 (Ticks 72031–81477, give or take the padding), and a 1920×1080 Reel — check with `ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 <reel>`. Repeat with `enemy` instead of `player` to see what the victims' view does with whole rounds; the spec marks that unverified.
+
+- [ ] **Step 5: Record the run**
+
+Add a row to the Run log table in `spike/ACCEPTANCE.md` for each run, with the date, wall-clock time and total size you saw, for example:
 
 ```
 | 4 | 2026-09-23 | `video <demo> --mode player --steamids … --event kills --rounds 12 --perspective player --start-seconds-before 4 --end-seconds-after 2` | 3 | ~90 s | 25 MB | ✅ padding flags honoured |
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add spike/ACCEPTANCE.md
@@ -125,7 +136,7 @@ git commit -m "docs: record the padding-flag check (orchestrator plan, task 1)"
 - Create: `.gitattributes`, `pyproject.toml`, `clipper.example.toml`, `clipper/__init__.py`, `clipper/windows.py`, `clipper/config.py`, `tests/__init__.py`, `tests/test_windows.py`, `tests/test_config.py`
 
 **Interfaces:**
-- Produces: `clipper.windows.downloads_dir() -> Path`; `clipper.windows.keep_awake()` (context manager); `clipper.config.REPO_ROOT: Path`; `clipper.config.Config` (frozen dataclass — fields `subject_steamid, downloads_dir, data_root, index_path, csdm_home, csdm_app_dir, pg_bin, pg_data, ffmpeg, ffprobe, top_n, padding_before_s, padding_after_s, stall_seconds, launch_timeout_seconds, min_free_gb, heads_up_seconds, poll_seconds`; properties `demos_dir, renders_dir, library_dir, logs_dir, csdm_exe, csdm_cli_js`; method `database_conninfo() -> dict[str, object]`); `clipper.config.load_config(path: Path | None = None) -> Config`.
+- Produces: `clipper.windows.downloads_dir() -> Path`; `clipper.windows.keep_awake()` (context manager); `clipper.config.REPO_ROOT: Path`; `clipper.config.Config` (frozen dataclass — fields `subject_steamid, downloads_dir, data_root, index_path, csdm_home, csdm_app_dir, pg_bin, pg_data, ffmpeg, ffprobe, top_n, padding_before_s, padding_after_s, stall_seconds, launch_timeout_seconds, min_free_gb, heads_up_seconds, poll_seconds, aspect_ratio, sequence_event`; properties `demos_dir, renders_dir, library_dir, logs_dir, csdm_exe, csdm_cli_js, video_size -> tuple[int, int], stretch -> bool`; method `database_conninfo() -> dict[str, object]`; an unknown `aspect_ratio` or `sequence_event` raises `ValueError`); `clipper.config.RATIOS`, `clipper.config.SEQUENCE_EVENTS`; `clipper.config.load_config(path: Path | None = None) -> Config`.
 
 - [ ] **Step 1: Pin line endings**
 
@@ -212,6 +223,8 @@ markers = [
 # poll_seconds = 5.0
 # ffmpeg = "ffmpeg"
 # ffprobe = "ffprobe"
+# aspect_ratio = "16:9"        # 16:9, 4:3, 4:3-hd or 4:3-stretched
+# sequence_event = "kills"     # kills (a Sequence per Frag) or rounds (whole rounds)
 ```
 
 - [ ] **Step 3: Install the environment**
@@ -289,6 +302,22 @@ def test_database_conninfo_comes_from_csdm_settings(tmp_path):
     assert cfg.database_conninfo() == {
         "host": "127.0.0.1", "port": 5432, "user": "postgres", "password": "pw", "dbname": "csdm",
     }
+
+
+def test_picture_and_sequence_settings(tmp_path):
+    cfg = load_config(tmp_path / "missing.toml")
+    assert (cfg.aspect_ratio, cfg.video_size, cfg.stretch, cfg.sequence_event) == ("16:9", (1920, 1080), False, "kills")
+    toml = tmp_path / "clipper.toml"
+    toml.write_text('aspect_ratio = "4:3-stretched"\nsequence_event = "rounds"\n', encoding="utf-8")
+    cfg = load_config(toml)
+    assert (cfg.video_size, cfg.stretch, cfg.sequence_event) == ((1280, 960), True, "rounds")
+
+
+def test_an_unknown_value_is_rejected(tmp_path):
+    toml = tmp_path / "clipper.toml"
+    toml.write_text('aspect_ratio = "21:9"\n', encoding="utf-8")
+    with pytest.raises(ValueError, match="aspect_ratio"):
+        load_config(toml)
 ```
 
 - [ ] **Step 5: Run them to see them fail**
@@ -363,6 +392,15 @@ _PATH_SETTINGS = frozenset(
     {"downloads_dir", "data_root", "index_path", "csdm_home", "csdm_app_dir", "pg_bin", "pg_data"}
 )
 
+# aspect_ratio -> (width, height, stretched to 1920x1080 when joining). Mirrors render_reel.sh's REEL_RATIO.
+RATIOS: dict[str, tuple[int, int, bool]] = {
+    "16:9": (1920, 1080, False),
+    "4:3": (1280, 960, False),
+    "4:3-hd": (1440, 1080, False),
+    "4:3-stretched": (1280, 960, True),
+}
+SEQUENCE_EVENTS = ("kills", "rounds")
+
 
 @dataclass(frozen=True)
 class Config:
@@ -384,6 +422,26 @@ class Config:
     min_free_gb: float = 5.0
     heads_up_seconds: float = 30.0
     poll_seconds: float = 5.0
+    aspect_ratio: str = "16:9"
+    sequence_event: str = "kills"
+
+    def __post_init__(self) -> None:
+        if self.aspect_ratio not in RATIOS:
+            raise ValueError(f"aspect_ratio must be one of {', '.join(RATIOS)} (got {self.aspect_ratio!r})")
+        if self.sequence_event not in SEQUENCE_EVENTS:
+            raise ValueError(
+                f"sequence_event must be one of {', '.join(SEQUENCE_EVENTS)} (got {self.sequence_event!r})"
+            )
+
+    @property
+    def video_size(self) -> tuple[int, int]:
+        width, height, _ = RATIOS[self.aspect_ratio]
+        return width, height
+
+    @property
+    def stretch(self) -> bool:
+        """Whether Reels are stretched to 1920x1080 when joining (4:3-stretched)."""
+        return RATIOS[self.aspect_ratio][2]
 
     @property
     def demos_dir(self) -> Path:
@@ -437,7 +495,7 @@ def load_config(path: Path | None = None) -> Config:
 - [ ] **Step 8: Run the tests**
 
 Run: `uv run pytest tests/test_windows.py tests/test_config.py -q`
-Expected: `6 passed`.
+Expected: `8 passed`.
 
 - [ ] **Step 9: Commit**
 
@@ -966,7 +1024,7 @@ Expected: `5 passed` and no `SKIPPED` lines.
 - [ ] **Step 6: Run the whole suite**
 
 Run: `uv run pytest -q`
-Expected: all pass (18 tests).
+Expected: all pass (20 tests).
 
 - [ ] **Step 7: Retire the old query and close the tickets**
 
@@ -2135,7 +2193,7 @@ git commit -m "feat: the Gate — CS2, FACEIT AC, CS:DM GUI and disk checks"
 
 **Interfaces:**
 - Consumes: `ClipFile` (Task 5), `ProcessProbe` (Task 7), `keep_awake` (Task 2).
-- Produces: `clipper.csdm_cli.CsdmCli(prefix: tuple[str, ...], home: Path, pg_bin: Path)` with `command(*args) -> list[str]`, `env() -> dict[str, str]`, `analyze(dem: Path, log_path: Path) -> str`; `clipper.media.probe_duration(path: Path, ffprobe: str = "ffprobe") -> float` and `MediaError`; `clipper.render.RenderRequest(demo_path, perspective, rounds: tuple[int, ...], output_dir, log_path, steamid, padding_before_s, padding_after_s)`, `RenderResult(ok: bool, aborted: bool = False, failure: str | None = None, clips: tuple[ClipFile, ...] = ())`, `render(req, *, csdm, probe, should_abort, stall_seconds, launch_timeout_seconds, duration_of, poll_seconds=5.0, exit_grace_seconds=120.0, abort_sweep_seconds=30.0) -> RenderResult`, `video_args(req) -> list[str]`, constants `NEVER_LAUNCHED`, `ABORTED`.
+- Produces: `clipper.csdm_cli.CsdmCli(prefix: tuple[str, ...], home: Path, pg_bin: Path)` with `command(*args) -> list[str]`, `env() -> dict[str, str]`, `analyze(dem: Path, log_path: Path) -> str`; `clipper.media.probe_duration(path: Path, ffprobe: str = "ffprobe") -> float` and `MediaError`; `clipper.render.RenderRequest(demo_path, perspective, rounds: tuple[int, ...], output_dir, log_path, steamid, padding_before_s, padding_after_s, event: str = "kills", width: int = 1920, height: int = 1080)`, `RenderResult(ok: bool, aborted: bool = False, failure: str | None = None, clips: tuple[ClipFile, ...] = ())`, `render(req, *, csdm, probe, should_abort, stall_seconds, launch_timeout_seconds, duration_of, poll_seconds=5.0, exit_grace_seconds=120.0, abort_sweep_seconds=30.0) -> RenderResult`, `video_args(req) -> list[str]`, constants `NEVER_LAUNCHED`, `ABORTED`.
 
 - [ ] **Step 1: Write the fake csdm**
 
@@ -2234,6 +2292,7 @@ def test_a_real_clip_reports_its_duration(tmp_path):
 import json
 import sys
 import threading
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -2321,12 +2380,13 @@ def test_the_command_line_and_environment(req, csdm, stopfile, tmp_path, monkeyp
     monkeypatch.setenv("FAKE_CSDM_MODE", "argv")
     monkeypatch.setenv("FAKE_CSDM_ARGV", str(argv_file))
     monkeypatch.setenv("PGPASSWORD", "must-not-leak")
-    run(req, csdm, FakeProbe(stopfile))
+    run(replace(req, event="rounds", width=1280, height=960), csdm, FakeProbe(stopfile))
     seen = json.loads(argv_file.read_text(encoding="utf-8"))
     assert seen["argv"] == [
-        "video", str(req.demo_path), "--mode", "player", "--steamids", SUBJECT, "--event", "kills",
-        "--rounds", "3,12", "--perspective", "enemy", "--output", str(req.output_dir),
-        "--close-game-after-recording", "--start-seconds-before", "4", "--end-seconds-after", "2",
+        "video", str(req.demo_path), "--mode", "player", "--steamids", SUBJECT, "--event", "rounds",
+        "--rounds", "3,12", "--perspective", "enemy", "--width", "1280", "--height", "960",
+        "--output", str(req.output_dir), "--close-game-after-recording",
+        "--start-seconds-before", "4", "--end-seconds-after", "2",
     ]
     assert seen["USERPROFILE"] == str(tmp_path / "home")
     assert seen["ELECTRON_RUN_AS_NODE"] == "1"
@@ -2512,6 +2572,9 @@ class RenderRequest:
     steamid: str
     padding_before_s: float
     padding_after_s: float
+    event: str = "kills"        # "kills" (a Sequence per Frag) or "rounds" (whole rounds)
+    width: int = 1920
+    height: int = 1080
 
 
 @dataclass(frozen=True)
@@ -2527,9 +2590,11 @@ def video_args(req: RenderRequest) -> list[str]:
         "video", str(req.demo_path),
         "--mode", "player",
         "--steamids", req.steamid,
-        "--event", "kills",
+        "--event", req.event,
         "--rounds", ",".join(str(number) for number in req.rounds),
         "--perspective", req.perspective,
+        "--width", str(req.width),
+        "--height", str(req.height),
         "--output", str(req.output_dir),
         "--close-game-after-recording",
         "--start-seconds-before", f"{req.padding_before_s:g}",
@@ -2674,7 +2739,7 @@ git commit -m "feat: run and watch csdm renders — success from output, stall a
 
 **Interfaces:**
 - Consumes: `ClipFile` (Task 5), `probe_duration` (Task 8, tests only).
-- Produces: `clipper.join.assign_clips(clips: Sequence[ClipFile], rounds: Sequence[tuple[int, int]]) -> dict[int, list[ClipFile]]` (`rounds` holds `(round, round_start_tick)` per selected Highlight; each list in Tick order); `clipper.join.join_reel(clips: Sequence[Path], out_path: Path, *, ffmpeg: str, duration_of: Callable[[Path], float]) -> float`; `clipper.join.JoinError`.
+- Produces: `clipper.join.assign_clips(clips: Sequence[ClipFile], rounds: Sequence[tuple[int, int]]) -> dict[int, list[ClipFile]]` (each Clip goes to the round its middle Tick falls in; `rounds` holds `(round, round_start_tick)` per selected Highlight; each list in Tick order); `clipper.join.join_reel(clips: Sequence[Path], out_path: Path, *, ffmpeg: str, duration_of: Callable[[Path], float], stretch: bool = False) -> float` (`stretch` re-encodes to 1920×1080); `clipper.join.JoinError`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2709,8 +2774,14 @@ def test_sequence_ten_comes_after_sequence_two():   # issue 10
     assert [c.sequence for c in groups[12]] == [2, 10]
 
 
+def test_a_whole_round_clip_that_starts_early_still_belongs_to_its_round():
+    groups = assign_clips([clip(1, 67531, 71711), clip(2, 71903, 81605)], [(11, 67659), (12, 72031)])
+    assert [c.sequence for c in groups[11]] == [1]
+    assert [c.sequence for c in groups[12]] == [2]
+
+
 def test_a_clip_before_every_selected_round_is_an_error():
-    with pytest.raises(JoinError, match="starts before every selected round"):
+    with pytest.raises(JoinError, match="lies before every selected round"):
         assign_clips([clip(1, 100, 356)], [(3, 15259)])
 
 
@@ -2769,6 +2840,20 @@ def test_a_reel_that_does_not_add_up_is_rejected(tmp_path, one_second_clip):
         join_reel([a, b], out, ffmpeg="ffmpeg", duration_of=inflated)
     assert not out.exists()
     assert not list(out.parent.glob("*.partial.mp4"))
+
+
+@pytest.mark.ffmpeg
+def test_a_stretched_reel_is_re_encoded_to_1920x1080(tmp_path, one_second_clip):
+    (a,) = copies(tmp_path, one_second_clip, "a.mp4")
+    out = tmp_path / "library" / "r12-player.mp4"
+    duration = join_reel([a], out, ffmpeg="ffmpeg", duration_of=probe_duration, stretch=True)
+    size = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+         "-of", "csv=p=0", str(out)],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert size == "1920,1080"
+    assert duration == pytest.approx(1.0, abs=0.1)
 ```
 
 - [ ] **Step 2: Run them to see them fail**
@@ -2794,6 +2879,9 @@ from clipper.model import ClipFile
 
 BASE_TOLERANCE_S = 0.25
 PER_JOIN_TOLERANCE_S = 0.05   # joining two MP3-audio Clips measured +0.045 s on this machine
+# 4:3-stretched: bake the horizontal stretch into a 16:9 Reel. The only join that re-encodes.
+STRETCH_ARGS = ("-vf", "scale=1920:1080,setsar=1", "-c:v", "libx264", "-crf", "23", "-preset", "medium",
+                "-c:a", "copy")
 
 
 class JoinError(Exception):
@@ -2802,15 +2890,17 @@ class JoinError(Exception):
 
 def assign_clips(clips: Sequence[ClipFile], rounds: Sequence[tuple[int, int]]) -> dict[int, list[ClipFile]]:
     """Group Clips by selected round. `rounds` holds (round, round_start_tick) per selected
-    Highlight. A Clip belongs to the latest selected round that starts at or before it: CS:DM only
-    renders the rounds it was given, so that is always the Clip's own round."""
+    Highlight. A Clip belongs to the latest selected round that starts at or before its middle Tick:
+    CS:DM only renders the rounds it was given, so that is always the Clip's own round — even for a
+    whole-round Sequence that begins a little before the round's start Tick."""
     ordered = sorted(rounds, key=lambda pair: pair[1])
     starts = [start for _, start in ordered]
     groups: dict[int, list[ClipFile]] = {number: [] for number, _ in ordered}
     for clip in sorted(clips, key=lambda c: c.start_tick):
-        position = bisect.bisect_right(starts, clip.start_tick) - 1
+        middle = (clip.start_tick + clip.end_tick) // 2
+        position = bisect.bisect_right(starts, middle) - 1
         if position < 0:
-            raise JoinError(f"{clip.path.name} starts before every selected round")
+            raise JoinError(f"{clip.path.name} lies before every selected round")
         groups[ordered[position][0]].append(clip)
     empty = [str(number) for number, got in groups.items() if not got]
     if empty:
@@ -2823,23 +2913,24 @@ def _concat_line(path: Path) -> str:
 
 
 def join_reel(clips: Sequence[Path], out_path: Path, *, ffmpeg: str,
-              duration_of: Callable[[Path], float]) -> float:
-    """Concatenate `clips` (already in Sequence order) into out_path without re-encoding, check the
-    result's length, and return it in seconds."""
+              duration_of: Callable[[Path], float], stretch: bool = False) -> float:
+    """Concatenate `clips` (already in Sequence order) into out_path — a stream copy, or a re-encode
+    to 1920x1080 when `stretch` — check the result's length, and return it in seconds."""
     if not clips:
         raise JoinError(f"no Clips for {out_path.name}")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     expected = sum(duration_of(clip) for clip in clips)
     partial = out_path.with_name(out_path.stem + ".partial.mp4")
-    if len(clips) == 1:
+    if len(clips) == 1 and not stretch:
         shutil.copyfile(clips[0], partial)
     else:
         listing = out_path.with_name(out_path.stem + ".concat.txt")
         listing.write_text("".join(_concat_line(clip) for clip in clips), encoding="utf-8")
+        codec = STRETCH_ARGS if stretch else ("-c", "copy")
         try:
             result = subprocess.run(
                 [ffmpeg, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
-                 "-i", str(listing), "-c", "copy", str(partial)],
+                 "-i", str(listing), *codec, str(partial)],
                 capture_output=True, text=True, timeout=600, creationflags=subprocess.CREATE_NO_WINDOW,
             )
         finally:
@@ -2859,7 +2950,7 @@ def join_reel(clips: Sequence[Path], out_path: Path, *, ffmpeg: str,
 - [ ] **Step 4: Run the tests**
 
 Run: `uv run pytest tests/test_join.py -q`
-Expected: `7 passed`.
+Expected: `9 passed`.
 
 - [ ] **Step 5: Commit**
 
@@ -3006,6 +3097,8 @@ def test_a_demo_goes_from_spotted_to_done(world):
     assert world.index.demo(demo_id)["state"] == "done"
     assert [call.perspective for call in world.render.calls] == ["player", "enemy"]
     assert world.render.calls[0].rounds == (3, 4, 8, 12, 14)
+    first = world.render.calls[0]
+    assert (first.event, first.width, first.height) == ("kills", 1920, 1080)
     assert world.index.reel_count(MATCH_CHECKSUM) == 10
     assert world.titles() == ["Rendering highlights", "Rendering highlights", "Highlights ready"]
 
@@ -3310,6 +3403,9 @@ class Worker:
             steamid=self.cfg.subject_steamid,
             padding_before_s=self.cfg.padding_before_s,
             padding_after_s=self.cfg.padding_after_s,
+            event=self.cfg.sequence_event,
+            width=self.cfg.video_size[0],
+            height=self.cfg.video_size[1],
         )
         try:
             result = self.services.render(request, self.services.gate.faceit_running)
@@ -3731,7 +3827,7 @@ def build_worker(cfg: Config, index: Index) -> Worker:
         facts=csdm_db.CsdmFacts(cfg.database_conninfo()),
         gate=gate,
         render=render_job,
-        join=partial(join_reel, ffmpeg=cfg.ffmpeg, duration_of=duration_of),
+        join=partial(join_reel, ffmpeg=cfg.ffmpeg, duration_of=duration_of, stretch=cfg.stretch),
         notify=notify,
     )
     return Worker(cfg, index, services)
@@ -4097,6 +4193,16 @@ and replace the second line of the Safety bullet with
 
 ```
   Never join a VAC-secured server with a hooked process, and never run one while FACEIT AC is running.
+```
+
+and, since `render_reel.sh` is retired, replace the whole **Aspect ratio** bullet (six lines) with this. It also corrects the old note, which gave `4:3` as 1440×1080 while the script used 1280×960:
+
+```
+- **Aspect ratio is a resolution choice, not a pipeline change.** CS:DM forwards `--width`/`--height`
+  to CS2 as `-width`/`-height`. The orchestrator's `aspect_ratio` setting picks it: `16:9` = 1920×1080,
+  `4:3` = 1280×960, `4:3-hd` = 1440×1080 (both genuinely 4:3 videos), `4:3-stretched` = render
+  1280×960, then bake `scale=1920:1080` into the Reel. Only the stretched variant costs a re-encode.
+  `sequence_event` picks the Sequence unit: `kills` (per Frag) or `rounds` (whole rounds, ~70–95 s each).
 ```
 
 Tickets:

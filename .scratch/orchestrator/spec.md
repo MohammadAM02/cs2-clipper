@@ -20,6 +20,8 @@ per-match input. CS:DM deliberately does not do this; everything around its CLI 
 | Run model | A **background app** started at sign-in by Task Scheduler |
 | Who picks Sequences | **CS:DM**, via `--rounds` with the selected rounds (the only verified form) |
 | Output unit | One **Reel per Highlight per Perspective**: that Highlight's Clips joined in Sequence order |
+| Picture | `aspect_ratio` setting: `16:9` (default, 1920×1080), `4:3` (1280×960), `4:3-hd` (1440×1080), or `4:3-stretched` (rendered 1280×960, stretched to 1920×1080 when joining) — the same four options `render_reel.sh` gained |
+| Sequence unit | `sequence_event` setting: `kills` (default — one Sequence per Frag, nearby Frags merged) or `rounds` (one Sequence per whole round, ~70–95 s) |
 | Language / state | **Python 3.13** (uv); our index in **SQLite**; CS:DM keeps its own Postgres |
 | Storage | Everything under `E:\cs2clips\`; only `library\` is ever shared |
 | Downloads kept | The compressed Demo is kept; the unpacked `.dem` is deleted after rendering |
@@ -103,11 +105,14 @@ Gate holds further renders until it has closed.
 One `csdm video` call per Render Job:
 
 ```
-csdm video <demo.dem> --mode player --steamids <subject SteamID64> --event kills
-  --rounds <selected rounds> --perspective <player|enemy>
+csdm video <demo.dem> --mode player --steamids <subject SteamID64> --event <sequence_event>
+  --rounds <selected rounds> --perspective <player|enemy> --width <W> --height <H>
   --output <E:/cs2clips/renders/<match>/<perspective>/<attempt>/>
   --close-game-after-recording --start-seconds-before 4 --end-seconds-after 2
 ```
+
+- `<W>`×`<H>` comes from `aspect_ratio`. With `sequence_event = rounds`, how the padding flags and
+  the enemy view behave is unverified until checked on a real Demo (plan Task 1, optional step).
 
 - Environment from phase 1: every path native (`E:/…`, `C:/…`), `USERPROFILE=<repo>/home`, the
   portable Postgres `bin` on `PATH`, and `PGPASSWORD` not exported into csdm's environment.
@@ -133,14 +138,16 @@ csdm video <demo.dem> --mode player --steamids <subject SteamID64> --event kills
 
 For each selected Highlight and each Perspective:
 
-1. Assign each Clip (its Ticks come from the `tick-A-to-B` in its file name) to the selected round it
-   starts in: the latest selected round whose start Tick is at or before the Clip's start Tick.
-   CS:DM renders only the rounds it was given, so this is always the Clip's own round — including
-   Sequences around Kills the Highlight query does not count, such as team kills. A Clip that starts
-   before every selected round, or a selected round with no Clip, fails the render attempt.
+1. Assign each Clip (its Ticks come from the `tick-A-to-B` in its file name) to the selected round its
+   middle Tick falls in: the latest selected round whose start Tick is at or before that Tick. CS:DM
+   renders only the rounds it was given, so this is always the Clip's own round — including Sequences
+   around Kills the Highlight query does not count (such as team kills) and whole-round Sequences that
+   begin a little before the round's start Tick. A Clip whose middle lies before every selected
+   round, or a selected round with no Clip, fails the render attempt.
 2. Order each round's Clips by start Tick, numerically.
 3. One Clip: copy it. Several: concatenate with FFmpeg's concat demuxer and `-c copy`, using a list
-   file written at a native path next to the output.
+   file written at a native path next to the output. With `4:3-stretched`, the join re-encodes
+   instead — `scale=1920:1080,setsar=1`, libx264 CRF 23, audio copied — even for a single Clip.
 4. Verify with `ffprobe`: the Reel's duration must be within 0.25 s, plus 0.05 s per join, of the sum
    of its Clips (joining two MP3-audio Clips measured +0.045 s on this machine).
 
@@ -236,7 +243,8 @@ Today's phase-1 files at the root of `E:\cs2clips` move into `E:\cs2clips\_phase
 - `clipper status` prints each Demo's state, each Render Job's attempts, the Gate's current answer
   (e.g. "waiting: FACEIT AC is running") and whether rendering is paused.
 - Settings live in `clipper.toml`, all optional: subject SteamID, Downloads path, data root, top N,
-  padding, stall seconds, minimum free space.
+  padding, stall seconds, minimum free space, `aspect_ratio`, `sequence_event`. An unknown setting
+  or value stops the app with an error rather than being ignored.
 
 ## Failure handling
 

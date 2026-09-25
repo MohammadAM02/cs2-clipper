@@ -1,6 +1,6 @@
 # Spec: Match alerts — which Demos are worth grabbing
 
-Status: design approved 2026-09-25; this write-up awaits review.
+Status: design approved 2026-09-25; write-up reviewed the same day (the clutch rule dropped).
 The first piece of the faceitperf integration (the user's fork of `iffypixy/faceitperf`, MIT).
 Builds on ADR-0002 (FACEIT-only, manual acquisition) and the orchestrator
 (`.scratch/orchestrator/spec.md`). The mockups the choices below were made on (private to the user):
@@ -12,8 +12,8 @@ Acquisition is the one manual step left. After playing, the user has to remember
 open on FACEIT, press Watch Demo in each, and do it before the download link expires (about 30 days
 after the match). Nothing tells them which matches hold anything worth clipping.
 
-FACEIT's Data API already knows. `/matches/{id}/stats` gives each player's 3K, 4K and 5K counts and
-their 1v1 / 1v2 clutch wins (verified 2026-09-25 on the user's last five matches), which is what the
+FACEIT's Data API already knows. `/matches/{id}/stats` gives each player's 3K, 4K and 5K counts
+(verified 2026-09-25 on the user's last five matches): exactly the rounds with 3+ Frags that the
 clipping rule looks for. So the app can tell which matches have Highlights **before** a Demo is
 downloaded, and put them in front of the user at the right moment.
 
@@ -22,7 +22,7 @@ downloaded, and put them in front of the user at the right moment.
 | Topic | Decision |
 | --- | --- |
 | When | One **summary notification after the user stops playing**: CS2 has been closed for 5 minutes |
-| Which matches | Finished FACEIT matches in which the subject has a round with **3+ Frags** or a **won 1v2 clutch**, and whose Demo FACEIT lists |
+| Which matches | Finished FACEIT matches in which the subject has a round with **3+ Frags** (a 3K, 4K or Ace), and whose Demo FACEIT lists. Clutches play no part (dropped by the user 2026-09-25) |
 | Notification | **Detailed**: which maps had which Highlights, with **Show matches** and **Not now** buttons |
 | Show matches | Opens the **Demos to grab** page |
 | Page reach | Served by the worker to the PC, the LAN and Tailscale; **no password** |
@@ -49,7 +49,7 @@ downloaded, and put them in front of the user at the right moment.
    next one.
 3. **Announce.** One notification covers every qualifying match not yet announced. Title
    "3 new matches have Highlights"; the body lists up to three matches
-   ("Inferno 4K + 2× 3K · Ancient 1v2 clutch + 3K · Nuke 3K"), then "+N more". **Show matches** opens
+   ("Inferno 4K + 2× 3K · Ancient 2× 3K · Nuke 3K"), then "+N more". **Show matches** opens
    `http://127.0.0.1:<page_port>/demos`; **Not now** dismisses it and records nothing.
 4. **Pick on the page.** See below.
 5. **Grabbed.** When intake takes a Demo whose file name carries an announced match's ID
@@ -70,7 +70,7 @@ downloaded, and put them in front of the user at the right moment.
 - **Header.** "Demos to grab" and a summary line: "4 matches · 8 Highlights · Overpass expires in
   3 days", or "All caught up. New matches show up here after you play." when nothing is waiting.
 - **Rows.** One table row per match, newest first: map and time · result and score · Highlight
-  badges (ACE, 4K, 3K, 1v2 CLUTCH, with counts such as "2× 3K") · Rating 2.0 · K–D · ADR · when the
+  badges (ACE, 4K, 3K, with counts such as "2× 3K") · Rating 2.0 · K–D · ADR · when the
   link expires (marked at 3 days or less, with a Reminder pill) · actions.
 - **On the PC.** Open goes to the matchroom (FACEIT's `faceit_url`) in a new tab, and the row shows
   "Waiting for the download…" on that screen until the Demo arrives. Skip dims the row and offers
@@ -108,7 +108,7 @@ One new table; adding it leaves existing data alone.
 | `match_id` | FACEIT match ID (`1-<uuid>`), primary key |
 | `finished_at` | When the match ended; the Demo link expires about 30 days later |
 | `map`, `score`, `result` | For the page and notifications |
-| `highlights` | JSON counts: `{"3k": n, "4k": n, "5k": n, "clutch_1v2": n}` |
+| `highlights` | JSON counts: `{"3k": n, "4k": n, "5k": n}` |
 | `kills`, `deaths`, `assists`, `adr`, `rounds`, `rating` | The subject's stat line |
 | `matchroom_url` | FACEIT's `faceit_url` |
 | `state` | `waiting` (stats or Demo not ready) → `ready` → `announced` → `grabbed` / `skipped` / `expired`; `no_highlights` for matches that do not qualify |
@@ -184,9 +184,6 @@ settle:
 
 - **Toast buttons that open a URL** are untested with the PowerShell app ID `notify.py` borrows.
   Check on the PC before building on them.
-- **The Clutch definition** is still open (see the selection decisions). If it widens to 1v1 or lost
-  clutches, the alert rule follows. FACEIT has no 1v3+ fields, so a won 1v3+ counts only when it
-  also has 3+ Frags.
 - **Whether the Clip library reuses this server** instead of `tailscale serve` is decided when the
   library design resumes.
 - **Tailscale** is not installed yet; until it is, other devices reach the page only on the home

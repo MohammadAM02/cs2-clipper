@@ -27,9 +27,13 @@ An Allstar.gg-style place to watch the Clips the pipeline makes, from the phone,
   - An exporter writes `library.json` (atomically), thumbnails and the page files into the shared
     folder `E:\cs2clips\library\` after each finished Render Job. Re-running it gives the same
     result. Nothing outside `library\` is ever shared (see `.scratch/orchestrator/spec.md`).
-  - `tailscale serve` shares that folder. The page only reads; nothing of ours listens on the
-    network.
+  - `tailscale serve` shares that folder. The page only reads.
   - A Python web app later (for pipeline control or a Reel editor) would reuse the same index.
+- **Update 2026-09-25: something of ours now listens on the network.** The match-alerts worker
+  serves its Demos to grab page to the PC, the LAN and Tailscale (`.scratch/match-alerts/spec.md`).
+  The user dropped this spec's old "nothing of ours listens on the network" rule to allow it.
+  Whether the library reuses that server instead of `tailscale serve` is decided when this design
+  resumes.
 - **Build order: orchestrator first**, then the library on top of its real output.
 - **One card plays one video.** The orchestrator joins each Highlight's Clips into one Reel per
   Perspective (`.scratch/orchestrator/spec.md`, Joining), so a card plays one file and downloads

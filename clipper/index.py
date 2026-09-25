@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from pathlib import Path
 
-from clipper.model import ClipFile, Highlight, MatchInfo
+from clipper.model import ClipFile, FaceitStats, Highlight, MatchInfo
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS demos (
@@ -77,6 +77,27 @@ CREATE TABLE IF NOT EXISTS reels (
     duration_s   REAL NOT NULL,
     UNIQUE (highlight_id, perspective)
 );
+CREATE TABLE IF NOT EXISTS faceit_matches (
+    match_id       TEXT PRIMARY KEY,
+    finished_at    TEXT NOT NULL,
+    state          TEXT NOT NULL,
+    map            TEXT NOT NULL DEFAULT '',
+    team_score     INTEGER NOT NULL DEFAULT 0,
+    opponent_score INTEGER NOT NULL DEFAULT 0,
+    won            INTEGER NOT NULL DEFAULT 0,
+    highlights     TEXT NOT NULL DEFAULT '{}',
+    kills          INTEGER NOT NULL DEFAULT 0,
+    deaths         INTEGER NOT NULL DEFAULT 0,
+    assists        INTEGER NOT NULL DEFAULT 0,
+    adr            REAL NOT NULL DEFAULT 0,
+    rounds         INTEGER NOT NULL DEFAULT 0,
+    rating         REAL NOT NULL DEFAULT 0,
+    matchroom_url  TEXT NOT NULL DEFAULT '',
+    announced_at   TEXT,
+    reminded_at    TEXT,
+    decided_at     TEXT,
+    demo_id        INTEGER REFERENCES demos (id)
+);
 CREATE TABLE IF NOT EXISTS app_state (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -88,6 +109,10 @@ _DEMO_FIELDS = frozenset({"dem_path", "match_checksum", "last_error"})
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _iso(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).isoformat(timespec="seconds")
 
 
 class Index:
@@ -285,6 +310,86 @@ class Index:
             (checksum,),
         )
         return row[0]
+
+    # --- FACEIT matches (match alerts) ---------------------------------------------------------------
+
+    def save_faceit_match(self, match_id: str, finished_at: datetime, state: str,
+                          stats: FaceitStats | None = None, rating: float = 0.0, matchroom_url: str = "") -> None:
+        """What FACEIT says about a match. The announced, reminded and decided times and the Demo stay."""
+        s = stats or FaceitStats()
+        self._db.execute(
+            "INSERT INTO faceit_matches (match_id, finished_at, state, map, team_score, opponent_score, won,"
+            " highlights, kills, deaths, assists, adr, rounds, rating, matchroom_url)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT (match_id) DO UPDATE SET state = excluded.state, map = excluded.map,"
+            " team_score = excluded.team_score, opponent_score = excluded.opponent_score, won = excluded.won,"
+            " highlights = excluded.highlights, kills = excluded.kills, deaths = excluded.deaths,"
+            " assists = excluded.assists, adr = excluded.adr, rounds = excluded.rounds,"
+            " rating = excluded.rating, matchroom_url = excluded.matchroom_url",
+            (match_id, _iso(finished_at), state, s.map_name, s.team_score, s.opponent_score, int(s.won),
+             json.dumps(s.highlights), s.kills, s.deaths, s.assists, s.adr, s.rounds, rating, matchroom_url),
+        )
+
+    def faceit_match(self, match_id: str) -> sqlite3.Row | None:
+        return self._one("SELECT * FROM faceit_matches WHERE match_id = ?", (match_id,))
+
+    def faceit_matches_in(self, states: Iterable[str]) -> list[sqlite3.Row]:
+        """Newest first."""
+        states = tuple(states)
+        marks = ", ".join("?" * len(states))
+        return self._all(
+            f"SELECT * FROM faceit_matches WHERE state IN ({marks}) ORDER BY finished_at DESC", states)
+
+    def announce(self, match_ids: Iterable[str], at: datetime) -> None:
+        """These ready matches were in a Match Alert."""
+        for match_id in match_ids:
+            self._db.execute(
+                "UPDATE faceit_matches SET state = 'announced', announced_at = ?"
+                " WHERE match_id = ? AND state = 'ready'", (_iso(at), match_id))
+
+    def remind(self, match_ids: Iterable[str], at: datetime) -> None:
+        for match_id in match_ids:
+            self._db.execute("UPDATE faceit_matches SET reminded_at = ? WHERE match_id = ?", (_iso(at), match_id))
+
+    def skip_match(self, match_id: str, at: datetime) -> bool:
+        cursor = self._db.execute(
+            "UPDATE faceit_matches SET state = 'skipped', decided_at = ?"
+            " WHERE match_id = ? AND state IN ('ready', 'announced')", (_iso(at), match_id))
+        return cursor.rowcount == 1
+
+    def undo_skip(self, match_id: str) -> bool:
+        cursor = self._db.execute(
+            "UPDATE faceit_matches SET decided_at = NULL,"
+            " state = CASE WHEN announced_at IS NULL THEN 'ready' ELSE 'announced' END"
+            " WHERE match_id = ? AND state = 'skipped'", (match_id,))
+        return cursor.rowcount == 1
+
+    def link_grabbed_matches(self, at: datetime) -> int:
+        """A match whose Demo is in the index has been grabbed, announced or not. Returns how many changed."""
+        demo = ("(SELECT d.id FROM demos d WHERE d.file_name LIKE faceit_matches.match_id || '-%'"
+                " ORDER BY d.id LIMIT 1)")
+        cursor = self._db.execute(
+            f"UPDATE faceit_matches SET state = 'grabbed', decided_at = ?, demo_id = {demo}"
+            f" WHERE state IN ('waiting', 'ready', 'announced', 'skipped') AND {demo} IS NOT NULL",
+            (_iso(at),))
+        return cursor.rowcount
+
+    def expire_faceit_matches(self, finished_before: datetime) -> int:
+        cursor = self._db.execute(
+            "UPDATE faceit_matches SET state = 'expired'"
+            " WHERE state IN ('waiting', 'ready', 'announced') AND finished_at < ?", (_iso(finished_before),))
+        return cursor.rowcount
+
+    def page_matches(self, decided_since: datetime) -> list[sqlite3.Row]:
+        """What the Demos to grab page lists, newest first: every match still to grab, and those skipped or
+        grabbed since `decided_since`. `demo_state` is the grabbed Demo's pipeline state."""
+        return self._all(
+            "SELECT f.*, d.state AS demo_state FROM faceit_matches f LEFT JOIN demos d ON d.id = f.demo_id"
+            " WHERE f.state IN ('ready', 'announced')"
+            " OR (f.state IN ('skipped', 'grabbed') AND f.decided_at >= ?)"
+            " ORDER BY f.finished_at DESC",
+            (_iso(decided_since),),
+        )
 
     # --- App state -----------------------------------------------------------------------------------
 

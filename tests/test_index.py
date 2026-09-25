@@ -1,12 +1,12 @@
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from clipper.index import Index
-from clipper.model import ClipFile, Highlight, MatchInfo
+from clipper.model import ClipFile, FaceitStats, Highlight, MatchInfo
 
 MATCH = MatchInfo(checksum="aea4e59ccfc6c962", map_name="de_inferno",
                   played_at=datetime(2026, 9, 22, 9, 39, 14, tzinfo=timezone.utc),
@@ -146,3 +146,105 @@ def test_matches_and_flags_round_trip(index):
     assert index.get_flag("paused", "0") == "0"
     index.set_flag("paused", "1")
     assert index.get_flag("paused") == "1"
+
+
+NOW = datetime(2026, 9, 25, 20, 0, tzinfo=timezone.utc)
+FIRST = "1-00000000-0000-0000-0000-000000000001"
+SECOND = "1-00000000-0000-0000-0000-000000000002"
+THREE_K = FaceitStats(map_name="de_inferno", team_score=13, opponent_score=9, won=True, rounds=22,
+                      kills=24, deaths=15, assists=5, adr=94.0, double_kills=3, triple_kills=2, quadro_kills=1)
+ROOM = "https://www.faceit.com/en/cs2/room/"
+
+
+def test_a_faceit_match_is_saved_then_filled_in(index):
+    index.save_faceit_match(FIRST, NOW - timedelta(hours=2), "waiting")
+    assert index.faceit_match(FIRST)["state"] == "waiting"
+    index.save_faceit_match(FIRST, NOW - timedelta(hours=2), "ready", THREE_K, 1.5, ROOM + FIRST)
+    row = index.faceit_match(FIRST)
+    assert (row["state"], row["map"], row["won"], row["rating"], row["matchroom_url"]) == (
+        "ready", "de_inferno", 1, 1.5, ROOM + FIRST)
+    assert json.loads(row["highlights"]) == {"3k": 2, "4k": 1, "5k": 0}
+    assert row["finished_at"] == "2026-09-25T18:00:00+00:00"
+
+
+def test_faceit_matches_come_newest_first(index):
+    index.save_faceit_match(FIRST, NOW - timedelta(hours=3), "ready", THREE_K)
+    index.save_faceit_match(SECOND, NOW - timedelta(hours=1), "ready", THREE_K)
+    assert [r["match_id"] for r in index.faceit_matches_in(("ready",))] == [SECOND, FIRST]
+
+
+def test_announce_and_remind_stamp_the_times(index):
+    index.save_faceit_match(FIRST, NOW, "ready", THREE_K)
+    index.announce([FIRST], NOW)
+    index.remind([FIRST], NOW + timedelta(days=27))
+    row = index.faceit_match(FIRST)
+    assert row["state"] == "announced"
+    assert row["announced_at"] == "2026-09-25T20:00:00+00:00"
+    assert row["reminded_at"] == "2026-10-22T20:00:00+00:00"
+
+
+def test_skip_and_undo(index):
+    index.save_faceit_match(FIRST, NOW, "ready", THREE_K)
+    index.announce([FIRST], NOW)
+    assert index.skip_match(FIRST, NOW) is True
+    assert index.faceit_match(FIRST)["state"] == "skipped"
+    assert index.skip_match(FIRST, NOW) is False               # already skipped
+    assert index.undo_skip(FIRST) is True
+    assert (index.faceit_match(FIRST)["state"], index.faceit_match(FIRST)["decided_at"]) == ("announced", None)
+    index.save_faceit_match(SECOND, NOW, "ready", THREE_K)
+    index.skip_match(SECOND, NOW)
+    index.undo_skip(SECOND)
+    assert index.faceit_match(SECOND)["state"] == "ready"      # never announced
+    assert index.undo_skip("1-00000000-0000-0000-0000-00000000dead") is False
+
+
+def test_a_demo_in_the_index_grabs_its_match(index):
+    index.save_faceit_match(FIRST, NOW, "announced", THREE_K)
+    index.save_faceit_match(SECOND, NOW, "no_highlights")
+    demo_id = add(index, name=f"{FIRST}-1-1.dem.zst")
+    add(index, name=f"{SECOND}-1-1.dem.zst", sha="b" * 64)
+    assert index.link_grabbed_matches(NOW) == 1
+    row = index.faceit_match(FIRST)
+    assert (row["state"], row["demo_id"], row["decided_at"]) == ("grabbed", demo_id, "2026-09-25T20:00:00+00:00")
+    assert index.faceit_match(SECOND)["state"] == "no_highlights"
+    assert index.link_grabbed_matches(NOW) == 0
+
+
+def test_matches_whose_link_expired_drop_out(index):
+    index.save_faceit_match(FIRST, NOW - timedelta(days=31), "announced", THREE_K)
+    index.save_faceit_match(SECOND, NOW - timedelta(days=29), "announced", THREE_K)
+    assert index.expire_faceit_matches(NOW - timedelta(days=30)) == 1
+    assert index.faceit_match(FIRST)["state"] == "expired"
+    assert index.faceit_match(SECOND)["state"] == "announced"
+
+
+def test_the_page_lists_matches_to_grab_and_what_was_decided_in_the_last_day(index):
+    third, fourth = FIRST[:-1] + "3", FIRST[:-1] + "4"
+    index.save_faceit_match(FIRST, NOW - timedelta(hours=5), "announced", THREE_K)
+    index.save_faceit_match(SECOND, NOW - timedelta(hours=4), "ready", THREE_K)
+    index.save_faceit_match(third, NOW - timedelta(days=3), "ready", THREE_K)
+    index.skip_match(third, NOW - timedelta(days=2))          # decided two days ago: gone
+    index.save_faceit_match(fourth, NOW - timedelta(hours=1), "no_highlights")
+    rows = index.page_matches(NOW - timedelta(hours=24))
+    assert [r["match_id"] for r in rows] == [SECOND, FIRST]
+    assert rows[0]["demo_state"] is None
+
+
+def test_an_existing_index_gains_the_faceit_table(tmp_path):
+    path = tmp_path / "clipper.sqlite"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE demos (id INTEGER PRIMARY KEY, file_name TEXT NOT NULL UNIQUE,"
+                " sha256 TEXT NOT NULL UNIQUE, archive_path TEXT NOT NULL, dem_path TEXT, match_checksum TEXT,"
+                " state TEXT NOT NULL, resume_state TEXT, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,"
+                " created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    old.execute("INSERT INTO demos (file_name, sha256, archive_path, state, created_at, updated_at)"
+                " VALUES ('1-a.dem.zst', 'aaa', 'E:/a', 'done', 'x', 'x')")
+    old.commit()
+    old.close()
+    index = Index(path)
+    try:
+        assert index.find_demo("1-a.dem.zst")["state"] == "done"
+        index.save_faceit_match(FIRST, NOW, "ready", THREE_K)
+        assert index.faceit_match(FIRST)["state"] == "ready"
+    finally:
+        index.close()

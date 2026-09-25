@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from clipper.config import Config, load_config
+from clipper.config import Config, load_config, load_env
 
 
 def test_defaults_match_the_spec(tmp_path):
@@ -58,3 +58,19 @@ def test_an_unknown_value_is_rejected(tmp_path):
     toml.write_text('aspect_ratio = "21:9"\n', encoding="utf-8")
     with pytest.raises(ValueError, match="aspect_ratio"):
         load_config(toml)
+
+
+def test_match_alert_settings_have_defaults(tmp_path):
+    cfg = load_config(tmp_path / "missing.toml")
+    assert (cfg.match_alerts, cfg.stopped_playing_minutes, cfg.page_port) == (True, 5.0, 8765)
+
+
+def test_load_env_reads_keys_and_skips_comments(tmp_path):
+    env = tmp_path / ".env"
+    env.write_text('# a comment\n\nFACEIT_API_KEY="abc-123"\nFACEIT_NICKNAME=someone\nBROKEN LINE\n',
+                   encoding="utf-8")
+    assert load_env(env) == {"FACEIT_API_KEY": "abc-123", "FACEIT_NICKNAME": "someone"}
+
+
+def test_load_env_of_a_missing_file_is_empty(tmp_path):
+    assert load_env(tmp_path / ".env") == {}

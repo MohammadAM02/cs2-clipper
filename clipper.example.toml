@@ -14,3 +14,6 @@
 # ffprobe = "ffprobe"
 # aspect_ratio = "16:9"        # 16:9, 4:3, 4:3-hd or 4:3-stretched
 # sequence_event = "kills"     # kills (a Sequence per Frag) or rounds (whole rounds)
+# match_alerts = true            # after you play, say which FACEIT matches have Highlights (needs .env)
+# stopped_playing_minutes = 5.0  # how long CS2 stays closed before that notification
+# page_port = 8765               # the Demos to grab page: http://<this PC>:8765/demos

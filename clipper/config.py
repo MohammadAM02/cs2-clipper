@@ -48,6 +48,9 @@ class Config:
     poll_seconds: float = 5.0
     aspect_ratio: str = "16:9"
     sequence_event: str = "kills"
+    match_alerts: bool = True
+    stopped_playing_minutes: float = 5.0
+    page_port: int = 8765
 
     def __post_init__(self) -> None:
         if self.aspect_ratio not in RATIOS:
@@ -114,3 +117,18 @@ def load_config(path: Path | None = None) -> Config:
     if unknown:
         raise ValueError(f"unknown setting(s) in {path}: {', '.join(unknown)}")
     return Config(**{key: Path(value) if key in _PATH_SETTINGS else value for key, value in raw.items()})
+
+
+def load_env(path: Path) -> dict[str, str]:
+    """KEY=value lines of a .env file. Comments, blank lines and lines without '=' are skipped;
+    quotes around a value are dropped. A missing file gives no values."""
+    if not path.exists():
+        return {}
+    values = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values

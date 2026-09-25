@@ -69,3 +69,31 @@ class ClipFile:
     end_tick: int
     path: Path
     duration_s: float
+
+
+@dataclass(frozen=True)
+class FaceitStats:
+    """The subject's line in one finished FACEIT match, as FACEIT's match stats report it."""
+
+    map_name: str = ""
+    team_score: int = 0
+    opponent_score: int = 0
+    won: bool = False
+    rounds: int = 0
+    kills: int = 0
+    deaths: int = 0
+    assists: int = 0
+    adr: float = 0.0
+    double_kills: int = 0
+    triple_kills: int = 0
+    quadro_kills: int = 0
+    penta_kills: int = 0
+
+    @property
+    def highlights(self) -> dict[str, int]:
+        """Rounds with 3+ Frags, by size: what the clipping rule looks for."""
+        return {"3k": self.triple_kills, "4k": self.quadro_kills, "5k": self.penta_kills}
+
+    @property
+    def multi_kill_rounds(self) -> int:
+        return self.double_kills + self.triple_kills + self.quadro_kills + self.penta_kills

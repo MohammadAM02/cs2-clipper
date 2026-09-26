@@ -69,7 +69,7 @@ class Services:
     gate: GateLike
     render: Callable[[RenderRequest, Callable[[], bool]], RenderResult]
     join: Callable[[list[Path], Path], float]
-    notify: Callable[[str, str], None]
+    notify: Callable[..., None]
     sleep: Callable[[float], None] = time.sleep
     alerts: AlertsStep | None = None
 

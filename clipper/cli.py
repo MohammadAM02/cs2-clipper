@@ -6,6 +6,7 @@ import argparse
 import logging
 import msvcrt
 import re
+import socket
 import sys
 import time
 from collections.abc import Iterator
@@ -15,15 +16,18 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from clipper import csdm_db, postgres
-from clipper.config import REPO_ROOT, Config, load_config
+from clipper.alerts import MatchAlerts
+from clipper.config import REPO_ROOT, Config, load_config, load_env
 from clipper.install import install, uninstall
 from clipper.csdm_cli import CsdmCli
+from clipper.faceit import FaceitClient
 from clipper.gate import Gate, GateStatus
 from clipper.index import Index
 from clipper.intake import Intake
 from clipper.join import join_reel
 from clipper.media import probe_duration
 from clipper.notify import notify
+from clipper.page import PageServer
 from clipper.procs import SystemProbe
 from clipper.render import render
 from clipper.scoring import score_match, select
@@ -57,8 +61,15 @@ def single_instance(lock_path: Path) -> Iterator[None]:
         handle.close()
 
 
-def format_status(index: Index, gate: GateStatus) -> str:
+def format_status(index: Index, gate: GateStatus, host: str | None = None) -> str:
     lines = ["Gate: " + ("clear" if gate.ok else "waiting: " + "; ".join(gate.reasons))]
+    alerts = index.get_flag("alerts_status")
+    if alerts is not None:
+        port = index.get_flag("page_port")
+        if alerts == "on" and port:
+            waiting = len(index.faceit_matches_in(("ready", "announced")))
+            alerts += f" · {waiting} to grab · http://{host or socket.gethostname()}:{port}/demos"
+        lines.append(f"Match alerts: {alerts}")
     if index.get_flag("paused") == "1":
         lines.append("Rendering: PAUSED after repeated failures. Check HLAE/CS2, then run: clipper resume")
     demos = index.all_demos()
@@ -119,6 +130,25 @@ def cmd_highlights(cfg: Config, index: Index, key: str) -> int:
     return 0
 
 
+def start_match_alerts(cfg: Config, index: Index, probe: SystemProbe, gate: Gate) -> MatchAlerts | None:
+    """Start the Demos to grab page and return the match alerts step. When alerts are off, say why in
+    the index (clipper status shows it) and return None."""
+    if not cfg.match_alerts:
+        index.set_flag("alerts_status", "off: match_alerts = false in clipper.toml")
+        return None
+    env = load_env(REPO_ROOT / ".env")
+    key, nickname = env.get("FACEIT_API_KEY", ""), env.get("FACEIT_NICKNAME", "")
+    if not (key and nickname):
+        index.set_flag("alerts_status", "off: set FACEIT_API_KEY and FACEIT_NICKNAME in .env")
+        return None
+    page = PageServer(cfg.index_path, cfg.page_port, gate_reasons=lambda: gate.check().reasons)
+    page.start()
+    index.set_flag("page_port", str(page.port))
+    return MatchAlerts(index, FaceitClient(key), notify, probe.user_cs2_running, nickname=nickname,
+                       subject_steamid=cfg.subject_steamid, page_url=f"http://127.0.0.1:{page.port}/demos",
+                       stopped_playing_minutes=cfg.stopped_playing_minutes)
+
+
 def build_worker(cfg: Config, index: Index) -> Worker:
     probe = SystemProbe()
     gate = Gate(probe, cfg.data_root, cfg.min_free_gb)
@@ -139,6 +169,7 @@ def build_worker(cfg: Config, index: Index) -> Worker:
         render=render_job,
         join=partial(join_reel, ffmpeg=cfg.ffmpeg, duration_of=duration_of, stretch=cfg.stretch),
         notify=notify,
+        alerts=start_match_alerts(cfg, index, probe, gate),
     )
     return Worker(cfg, index, services)
 

@@ -54,6 +54,10 @@ class GateLike(Protocol):
     def faceit_running(self) -> bool: ...
 
 
+class AlertsStep(Protocol):
+    def tick(self) -> None: ...
+
+
 @dataclass
 class Services:
     """Everything the worker talks to. Tests swap in fakes."""
@@ -67,6 +71,7 @@ class Services:
     join: Callable[[list[Path], Path], float]
     notify: Callable[[str, str], None]
     sleep: Callable[[float], None] = time.sleep
+    alerts: AlertsStep | None = None
 
 
 def _fresh_dir(path: Path) -> Path:
@@ -88,7 +93,7 @@ class Worker:
     # --- the loop --------------------------------------------------------------------------------
 
     def tick(self) -> None:
-        """Take any new Demos, then move every unfinished Demo on by at most one step."""
+        """Take any new Demos, move every unfinished Demo on by at most one step, then run match alerts."""
         for path in self.services.intake.ready():
             try:
                 self.services.intake.take(path, self.index)
@@ -96,6 +101,11 @@ class Worker:
                 log.exception("could not take %s; will try again", path.name)
         for demo in self.index.demos_in(ACTIVE_STATES):
             self._advance(demo)
+        if self.services.alerts is not None:
+            try:
+                self.services.alerts.tick()
+            except Exception:  # noqa: BLE001 - match alerts must never stop the pipeline
+                log.exception("match alerts failed")
 
     def _advance(self, demo) -> None:
         steps = {

@@ -14,6 +14,7 @@ class ProcessProbe(Protocol):
     def running(self, name: str) -> bool: ...
     def service_running(self, name: str) -> bool: ...
     def hooked_cs2_running(self) -> bool: ...
+    def user_cs2_running(self) -> bool: ...
     def kill_hooked_cs2(self) -> None: ...
     def children_named(self, pid: int, name: str) -> set[tuple[int, float]]: ...
     def kill_processes(self, processes: set[tuple[int, float]]) -> None: ...
@@ -49,6 +50,21 @@ class SystemProbe:
 
     def hooked_cs2_running(self) -> bool:
         return bool(self._hooked_cs2())
+
+    def user_cs2_running(self) -> bool:
+        """A CS2 the user started: any cs2.exe without the render flag. One whose command line cannot
+        be read counts as the user's."""
+        for process in psutil.process_iter(["name"]):
+            if (process.info["name"] or "").lower() != "cs2.exe":
+                continue
+            try:
+                if not any(arg.lower() == HOOKED_FLAG for arg in process.cmdline()):
+                    return True
+            except psutil.NoSuchProcess:
+                continue
+            except psutil.AccessDenied:
+                return True
+        return False
 
     def kill_hooked_cs2(self) -> None:
         for process in self._hooked_cs2():

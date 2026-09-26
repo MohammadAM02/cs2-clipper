@@ -206,3 +206,20 @@ def test_a_match_without_frags_finishes_without_rendering(world):
     assert world.index.demo(demo_id)["state"] == "done"
     assert world.render.calls == []
     assert world.notices == []
+
+
+class FailingAlerts:
+    def __init__(self):
+        self.ticks = 0
+
+    def tick(self):
+        self.ticks += 1
+        raise RuntimeError("FACEIT is having a bad day")
+
+
+def test_match_alerts_run_every_tick_and_never_stop_the_pipeline(world):
+    world.services.alerts = FailingAlerts()
+    demo_id = world.add_demo()
+    world.ticks(8)
+    assert world.services.alerts.ticks == 8
+    assert world.index.demo(demo_id)["state"] == "done"

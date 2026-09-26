@@ -1,6 +1,8 @@
+from datetime import datetime, timezone
+
 import pytest
 
-from clipper.cli import AlreadyRunning, cmd_retry, cmd_run, format_status, single_instance
+from clipper.cli import AlreadyRunning, cmd_retry, cmd_run, format_status, single_instance, start_match_alerts
 from clipper.config import Config
 from clipper.gate import GateStatus
 from clipper.index import Index
@@ -71,3 +73,27 @@ def test_a_failed_start_is_reported_and_stops(tmp_path, monkeypatch):
     title, body = notifications[0]
     assert title == "clipper could not start"
     assert "pg_ctl start failed" in body
+
+
+def test_status_shows_match_alerts_and_the_page(index):
+    index.set_flag("alerts_status", "on")
+    index.set_flag("page_port", "8765")
+    index.save_faceit_match("1-00000000-0000-0000-0000-000000000001",
+                            datetime(2026, 9, 25, tzinfo=timezone.utc), "ready")
+    lines = format_status(index, GateStatus(ok=True), host="gaming-pc").splitlines()
+    assert lines[1] == "Match alerts: on · 1 to grab · http://gaming-pc:8765/demos"
+
+
+def test_status_says_why_match_alerts_are_off(index):
+    index.set_flag("alerts_status", "off: set FACEIT_API_KEY and FACEIT_NICKNAME in .env")
+    lines = format_status(index, GateStatus(ok=True)).splitlines()
+    assert lines[1] == "Match alerts: off: set FACEIT_API_KEY and FACEIT_NICKNAME in .env"
+
+
+def test_match_alerts_stay_off_without_the_setting_or_the_key(index, tmp_path, monkeypatch):
+    folders = {"downloads_dir": tmp_path, "data_root": tmp_path / "clips", "index_path": tmp_path / "clipper.sqlite"}
+    assert start_match_alerts(Config(**folders, match_alerts=False), index, probe=None, gate=None) is None
+    assert index.get_flag("alerts_status") == "off: match_alerts = false in clipper.toml"
+    monkeypatch.setattr("clipper.cli.load_env", lambda path: {})
+    assert start_match_alerts(Config(**folders), index, probe=None, gate=None) is None
+    assert index.get_flag("alerts_status") == "off: set FACEIT_API_KEY and FACEIT_NICKNAME in .env"

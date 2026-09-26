@@ -6,7 +6,8 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-from xml.sax.saxutils import escape
+from collections.abc import Sequence
+from xml.sax.saxutils import escape, quoteattr
 
 log = logging.getLogger(__name__)
 
@@ -24,16 +25,26 @@ _SCRIPT = (
 )
 
 
-def toast_xml(title: str, body: str) -> str:
+Action = tuple[str, str | None]   # (button label, URL to open); no URL means "dismiss"
+
+
+def toast_xml(title: str, body: str, actions: Sequence[Action] = ()) -> str:
+    buttons = "".join(
+        f'<action content={quoteattr(label)} activationType="protocol" arguments={quoteattr(url)}/>'
+        if url else f'<action content={quoteattr(label)} activationType="system" arguments="dismiss"/>'
+        for label, url in actions
+    )
+    first_url = next((url for _, url in actions if url), None)
+    launch = f' activationType="protocol" launch={quoteattr(first_url)}' if first_url else ""
     return (
-        "<toast><visual><binding template='ToastGeneric'>"
+        f"<toast{launch}><visual><binding template='ToastGeneric'>"
         f"<text>{escape(title)}</text><text>{escape(body)}</text>"
-        "</binding></visual></toast>"
+        "</binding></visual>" + (f"<actions>{buttons}</actions>" if buttons else "") + "</toast>"
     )
 
 
-def notify(title: str, body: str) -> None:
-    env = {**os.environ, "CLIPPER_TOAST": toast_xml(title, body)}
+def notify(title: str, body: str, actions: Sequence[Action] = ()) -> None:
+    env = {**os.environ, "CLIPPER_TOAST": toast_xml(title, body, actions)}
     try:
         result = subprocess.run(
             ["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", _SCRIPT],

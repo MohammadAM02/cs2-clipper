@@ -141,7 +141,11 @@ def start_match_alerts(cfg: Config, index: Index, probe: SystemProbe, gate: Gate
     if not (key and nickname):
         index.set_flag("alerts_status", "off: set FACEIT_API_KEY and FACEIT_NICKNAME in .env")
         return None
-    page = PageServer(cfg.index_path, cfg.page_port, gate_reasons=lambda: gate.check().reasons)
+    try:
+        page = PageServer(cfg.index_path, cfg.page_port, gate_reasons=lambda: gate.check().reasons)
+    except OSError as exc:
+        index.set_flag("alerts_status", f"off: the Demos to grab page could not start: {exc}")
+        return None
     page.start()
     index.set_flag("page_port", str(page.port))
     return MatchAlerts(index, FaceitClient(key), notify, probe.user_cs2_running, nickname=nickname,

@@ -97,3 +97,13 @@ def test_match_alerts_stay_off_without_the_setting_or_the_key(index, tmp_path, m
     monkeypatch.setattr("clipper.cli.load_env", lambda path: {})
     assert start_match_alerts(Config(**folders), index, probe=None, gate=None) is None
     assert index.get_flag("alerts_status") == "off: set FACEIT_API_KEY and FACEIT_NICKNAME in .env"
+
+
+def test_match_alerts_stay_off_when_the_page_cannot_start(index, tmp_path, monkeypatch):
+    folders = {"downloads_dir": tmp_path, "data_root": tmp_path / "clips", "index_path": tmp_path / "clipper.sqlite"}
+    monkeypatch.setattr("clipper.cli.load_env",
+                        lambda path: {"FACEIT_API_KEY": "k", "FACEIT_NICKNAME": "someone"})
+    monkeypatch.setattr("clipper.cli.PageServer",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("no free port in 8765–8774")))
+    assert start_match_alerts(Config(**folders), index, probe=None, gate=None) is None
+    assert index.get_flag("alerts_status") == "off: the Demos to grab page could not start: no free port in 8765–8774"

@@ -4,16 +4,30 @@ say so, and in what words."""
 from __future__ import annotations
 
 import json
+import logging
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
+from typing import Protocol
 
+from clipper.faceit import AuthError, FaceitError, MatchDetails, Player
+from clipper.index import Index
 from clipper.model import FaceitStats
+from clipper.rating import rating
 
 LINK_LIFETIME = timedelta(days=30)   # FACEIT's Demo links expire about 30 days after the match (ADR-0002)
 REMIND_BEFORE = timedelta(days=3)
 SHOWN_IN_SUMMARY = 3
 _WORDS = (("5k", "Ace"), ("4k", "4K"), ("3k", "3K"))
+
+log = logging.getLogger(__name__)
+
+RECHECK_EVERY = timedelta(minutes=3)
+WAIT_AT_MOST = timedelta(minutes=30)
+RETRY_AFTER = timedelta(minutes=5)
+LOOK_BACK_OVERLAP = timedelta(hours=1)
+FRESH = timedelta(hours=2)   # FACEIT publishes stats and Demos within minutes; older waiting matches hold nothing
+PENDING = ("ready", "announced")
 
 
 def utc_now() -> datetime:
@@ -97,3 +111,146 @@ class StoppedPlaying:
             return False
         self._played, self._closed_at = False, None
         return True
+
+
+class FaceitLike(Protocol):
+    def player(self, nickname: str) -> Player: ...
+    def finished_since(self, player_id: str, since: datetime) -> list[tuple[str, datetime]]: ...
+    def stats(self, match_id: str, player_id: str) -> FaceitStats | None: ...
+    def details(self, match_id: str) -> MatchDetails: ...
+
+
+class MatchAlerts:
+    """The worker's match-alerts step, run every tick (spec: Flow)."""
+
+    def __init__(self, index: Index, faceit: FaceitLike, notify: Callable[..., None],
+                 cs2_running: Callable[[], bool], *, nickname: str, subject_steamid: str, page_url: str,
+                 stopped_playing_minutes: float, clock: Callable[[], datetime] = utc_now):
+        self._index = index
+        self._faceit = faceit
+        self._notify = notify
+        self._cs2_running = cs2_running
+        self._nickname = nickname
+        self._subject = subject_steamid
+        self._page_url = page_url
+        self._clock = clock
+        self._stopped = StoppedPlaying(stopped_playing_minutes)
+        self._player_id: str | None = None
+        self._off = False
+        self._check_at: datetime | None = clock()      # the start-up check
+        self._recheck_at: datetime | None = None
+        self._summary_by: datetime | None = None
+        self._session: set[str] = set()                # waiting matches that hold this Match Alert back
+        index.set_flag("alerts_status", "on")
+
+    def tick(self) -> None:
+        now = self._clock()
+        self._index.link_grabbed_matches(now)
+        self._index.expire_faceit_matches(now - LINK_LIFETIME)
+        playing = self._cs2_running()
+        if self._stopped.update(playing, now):
+            self._check_at = now
+        if self._off or playing:
+            return
+        try:
+            if self._check_at is not None and now >= self._check_at:
+                self._check(now)
+            elif self._recheck_at is not None and now >= self._recheck_at:
+                self._recheck(now)
+        except AuthError as exc:
+            self._turn_off(f"FACEIT rejected the key ({exc})")
+            return
+        except FaceitError as exc:
+            log.warning("could not ask FACEIT (%s); trying again in 5 minutes", exc)
+            self._check_at = now + RETRY_AFTER
+            return
+        if self._off:
+            return
+        self._send_summary(now)
+        self._send_reminders(now)
+
+    # --- asking FACEIT --------------------------------------------------------------------------
+
+    def _identify(self) -> str | None:
+        """The FACEIT player ID, once per run; None (and alerts off) if it is not the subject's account."""
+        if self._player_id is None:
+            player = self._faceit.player(self._nickname)
+            if player.steamid != self._subject:
+                self._turn_off(f"FACEIT_NICKNAME {self._nickname} plays as SteamID {player.steamid},"
+                               f" not subject_steamid {self._subject}")
+                return None
+            self._player_id = player.player_id
+        return self._player_id
+
+    def _check(self, now: datetime) -> None:
+        player_id = self._identify()
+        if player_id is None:
+            return
+        last = self._index.get_flag("faceit_checked_at")
+        since = datetime.fromisoformat(last) - LOOK_BACK_OVERLAP if last else now - LINK_LIFETIME
+        seen = set()
+        for match_id, finished_at in self._faceit.finished_since(player_id, since):
+            if self._index.faceit_match(match_id) is None:
+                self._evaluate(match_id, finished_at, player_id)
+                seen.add(match_id)
+        for row in self._index.faceit_matches_in(("waiting",)):
+            if row["match_id"] not in seen:
+                self._evaluate(row["match_id"], _finished(row), player_id)
+        self._index.set_flag("faceit_checked_at", now.isoformat(timespec="seconds"))
+        self._check_at = None
+        self._session = {row["match_id"] for row in self._index.faceit_matches_in(("waiting",))
+                         if now - _finished(row) <= FRESH}
+        self._summary_by = now + WAIT_AT_MOST if self._session else now
+        self._recheck_at = now + RECHECK_EVERY if self._session else None
+
+    def _recheck(self, now: datetime) -> None:
+        player_id = self._identify()
+        if player_id is None:
+            return
+        for row in self._index.faceit_matches_in(("waiting",)):
+            if row["match_id"] in self._session:
+                self._evaluate(row["match_id"], _finished(row), player_id)
+        self._session &= {row["match_id"] for row in self._index.faceit_matches_in(("waiting",))}
+        self._recheck_at = now + RECHECK_EVERY if self._session else None
+
+    def _evaluate(self, match_id: str, finished_at: datetime, player_id: str) -> None:
+        stats = self._faceit.stats(match_id, player_id)
+        if stats is None:
+            self._index.save_faceit_match(match_id, finished_at, "waiting")
+        elif not qualifies(stats):
+            self._index.save_faceit_match(match_id, finished_at, "no_highlights", stats)
+        else:
+            details = self._faceit.details(match_id)
+            state = "ready" if details.demo_listed else "waiting"
+            self._index.save_faceit_match(match_id, finished_at, state, stats, rating(stats),
+                                          details.matchroom_url)
+
+    # --- telling the user -----------------------------------------------------------------------
+
+    def _send_summary(self, now: datetime) -> None:
+        if self._summary_by is None or (self._session and now < self._summary_by):
+            return
+        self._summary_by, self._recheck_at, self._session = None, None, set()
+        self._index.link_grabbed_matches(now)
+        ready = self._index.faceit_matches_in(("ready",))
+        if not ready:
+            return
+        title, body = summary_text(ready)
+        self._notify(title, body, actions=(("Show matches", self._page_url), ("Not now", None)))
+        self._index.announce([row["match_id"] for row in ready], now)
+        # A match announced inside its last 3 days has had its one reminder.
+        self._index.remind([row["match_id"] for row in ready if reminder_due(_finished(row), now)], now)
+
+    def _send_reminders(self, now: datetime) -> None:
+        due = [row for row in self._index.faceit_matches_in(PENDING)
+               if row["reminded_at"] is None and reminder_due(_finished(row), now)]
+        if not due:
+            return
+        title, body = reminder_text(due, now)
+        self._notify(title, body, actions=(("Show matches", self._page_url), ("Dismiss", None)))
+        self._index.remind([row["match_id"] for row in due], now)
+
+    def _turn_off(self, reason: str) -> None:
+        log.warning("match alerts are off: %s", reason)
+        self._off = True
+        self._index.set_flag("alerts_status", f"off: {reason}")

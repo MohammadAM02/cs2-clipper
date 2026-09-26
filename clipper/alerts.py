@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
-from clipper.faceit import AuthError, FaceitError, MatchDetails, Player
+from clipper.faceit import AuthError, FaceitError, MatchDetails, Player, PlayerNotFound
 from clipper.index import Index
 from clipper.model import FaceitStats
 from clipper.rating import rating
@@ -159,6 +159,9 @@ class MatchAlerts:
                 self._recheck(now)
         except AuthError as exc:
             self._turn_off(f"FACEIT rejected the key ({exc})")
+            return
+        except PlayerNotFound as exc:
+            self._turn_off(f"{exc}; check FACEIT_NICKNAME in .env")
             return
         except FaceitError as exc:
             log.warning("could not ask FACEIT (%s); trying again in 5 minutes", exc)

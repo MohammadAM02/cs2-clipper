@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import pytest
 
 from clipper import faceit
-from clipper.faceit import AuthError, FaceitClient, FaceitError, MatchDetails, Player, http_get_json
+from clipper.faceit import AuthError, FaceitClient, FaceitError, MatchDetails, Player, PlayerNotFound, http_get_json
 
 SUBJECT = "76561198000000001"   # made up
 MATCH_ID = "1-00000000-0000-0000-0000-000000000001"
@@ -51,7 +51,24 @@ def test_player_gives_the_ids_match_alerts_need():
 
 def test_a_player_without_cs2_is_an_error():
     fetch = FakeFetch({"/players": {"player_id": "p-1", "nickname": "someone", "games": {}}})
-    with pytest.raises(FaceitError, match="no CS2 profile"):
+    with pytest.raises(PlayerNotFound, match="no CS2 profile"):
+        FaceitClient("key", fetch).player("someone")
+
+
+def test_an_unknown_nickname_is_player_not_found():
+    fetch = FakeFetch({"/players": FaceitError("HTTP 404 from FACEIT", 404)})
+    with pytest.raises(PlayerNotFound, match="no player called someone"):
+        FaceitClient("key", fetch).player("someone")
+
+
+def test_other_errors_from_the_player_lookup_stay_as_they_are():
+    fetch = FakeFetch({"/players": FaceitError("HTTP 503 from FACEIT", 503)})
+    with pytest.raises(FaceitError) as caught:
+        FaceitClient("key", fetch).player("someone")
+    assert not isinstance(caught.value, PlayerNotFound)
+
+    fetch = FakeFetch({"/players": AuthError("HTTP 401 from FACEIT", 401)})
+    with pytest.raises(AuthError):
         FaceitClient("key", fetch).player("someone")
 
 

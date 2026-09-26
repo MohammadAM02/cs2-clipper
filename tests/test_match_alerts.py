@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from clipper.alerts import MatchAlerts
-from clipper.faceit import AuthError, FaceitError, MatchDetails, Player
+from clipper.faceit import AuthError, FaceitError, MatchDetails, Player, PlayerNotFound
 from clipper.index import Index
 from clipper.model import FaceitStats
 
@@ -213,6 +213,15 @@ def test_a_rejected_key_turns_alerts_off(world):
     world.tick(minutes=10)
     assert world.faceit.calls == ["player"]
     assert world.index.get_flag("alerts_status") == "off: FACEIT rejected the key (HTTP 401 from FACEIT)"
+
+
+def test_an_unknown_faceit_nickname_turns_alerts_off(world):
+    world.faceit.error = PlayerNotFound("FACEIT has no player called someone", 404)
+    world.tick()
+    world.tick(minutes=10)
+    assert world.faceit.calls == ["player"]
+    assert world.index.get_flag("alerts_status") == (
+        "off: FACEIT has no player called someone; check FACEIT_NICKNAME in .env")
 
 
 def test_faceit_trouble_is_tried_again_5_minutes_later(world):

@@ -29,6 +29,10 @@ class AuthError(FaceitError):
     """FACEIT rejected the key (HTTP 401 or 403)."""
 
 
+class PlayerNotFound(FaceitError):
+    """FACEIT has no CS2 player by that nickname."""
+
+
 @dataclass(frozen=True)
 class Player:
     player_id: str
@@ -74,10 +78,15 @@ class FaceitClient:
         self._fetch = fetch or (lambda url: http_get_json(url, api_key))
 
     def player(self, nickname: str) -> Player:
-        data = self._fetch(f"{DATA_API}/players?nickname={urllib.parse.quote(nickname)}")
+        try:
+            data = self._fetch(f"{DATA_API}/players?nickname={urllib.parse.quote(nickname)}")
+        except FaceitError as exc:
+            if exc.status == 404:
+                raise PlayerNotFound(f"FACEIT has no player called {nickname}", 404) from None
+            raise
         cs2 = (data.get("games") or {}).get("cs2")
         if not cs2:
-            raise FaceitError(f"{nickname} has no CS2 profile on FACEIT")
+            raise PlayerNotFound(f"{nickname} has no CS2 profile on FACEIT")
         return Player(data["player_id"], data["nickname"], str(cs2["game_player_id"]))
 
     def finished_since(self, player_id: str, since: datetime) -> list[tuple[str, datetime]]:

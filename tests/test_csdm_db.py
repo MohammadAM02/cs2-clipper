@@ -4,8 +4,7 @@ import psycopg
 import pytest
 from psycopg import sql
 
-from clipper import csdm_db
-from clipper.config import load_config
+from clipper import csdm_db, paths, settings
 from tests.fixtures import DEMO_NAME, MATCH_CHECKSUM, MATCH_FACTS, SUBJECT
 
 pytestmark = pytest.mark.integration
@@ -14,7 +13,8 @@ pytestmark = pytest.mark.integration
 @pytest.fixture
 def conn():
     try:
-        connection = psycopg.connect(**load_config().database_conninfo(), connect_timeout=5, autocommit=True)
+        cfg = settings.load(paths.settings_file()).config
+        connection = psycopg.connect(**cfg.database_conninfo(), connect_timeout=5, autocommit=True)
     except (OSError, KeyError, psycopg.OperationalError) as exc:
         pytest.skip(f"CS:DM's Postgres is not reachable: {exc}")
     with connection:

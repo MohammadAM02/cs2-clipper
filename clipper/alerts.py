@@ -13,6 +13,7 @@ from typing import Protocol
 from clipper.faceit import AuthError, FaceitError, MatchDetails, Player, PlayerNotFound
 from clipper.index import Index
 from clipper.model import FaceitStats
+from clipper.protect import ProtectError
 from clipper.rating import rating
 
 LINK_LIFETIME = timedelta(days=30)   # FACEIT's Demo links expire about 30 days after the match (ADR-0002)
@@ -157,11 +158,15 @@ class MatchAlerts:
                 self._check(now)
             elif self._recheck_at is not None and now >= self._recheck_at:
                 self._recheck(now)
+        except ProtectError:
+            self._turn_off(
+                "the saved FACEIT key can't be read on this Windows account; enter it again in Settings")
+            return
         except AuthError as exc:
             self._turn_off(f"FACEIT rejected the key ({exc})")
             return
         except PlayerNotFound as exc:
-            self._turn_off(f"{exc}; check FACEIT_NICKNAME in .env")
+            self._turn_off(f"{exc}; check the FACEIT nickname in Settings")
             return
         except FaceitError as exc:
             log.warning("could not ask FACEIT (%s); trying again in 5 minutes", exc)
@@ -179,8 +184,8 @@ class MatchAlerts:
         if self._player_id is None:
             player = self._faceit.player(self._nickname)
             if player.steamid != self._subject:
-                self._turn_off(f"FACEIT_NICKNAME {self._nickname} plays as SteamID {player.steamid},"
-                               f" not subject_steamid {self._subject}")
+                self._turn_off(f"FACEIT nickname {self._nickname} plays as SteamID {player.steamid},"
+                               f" not your SteamID {self._subject}")
                 return None
             self._player_id = player.player_id
         return self._player_id

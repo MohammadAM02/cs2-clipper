@@ -2,10 +2,12 @@ from datetime import datetime, timezone
 
 import pytest
 
-from clipper.cli import AlreadyRunning, cmd_retry, cmd_run, format_status, single_instance, start_match_alerts
+from clipper.cli import (
+    AlreadyRunning, cmd_retry, cmd_run, format_status, main, single_instance, start_match_alerts)
 from clipper.config import Config
 from clipper.gate import GateStatus
 from clipper.index import Index
+from clipper.settings import Loaded
 
 
 @pytest.fixture
@@ -50,9 +52,9 @@ def test_only_one_instance_can_hold_the_lock(tmp_path):
 
 
 def test_a_failed_start_is_reported_and_stops(tmp_path, monkeypatch):
-    # Build a Config with folders under tmp_path
+    # Build a Config with folders under tmp_path, and settings that clear the missing-settings check
     cfg = Config(downloads_dir=tmp_path / "downloads", data_root=tmp_path / "clips",
-                 index_path=tmp_path / "clipper.sqlite")
+                 index_path=tmp_path / "clipper.sqlite", subject_steamid="76561198000000001")
 
     # Monkeypatch _setup_logging to a no-op
     monkeypatch.setattr("clipper.cli._setup_logging", lambda logs_dir: None)
@@ -75,6 +77,23 @@ def test_a_failed_start_is_reported_and_stops(tmp_path, monkeypatch):
     assert "pg_ctl start failed" in body
 
 
+def test_a_missing_steamid_or_clips_folder_fails_the_start_and_names_what_to_set(tmp_path, monkeypatch):
+    monkeypatch.setattr("clipper.cli._setup_logging", lambda logs_dir: None)
+    notifications = []
+    monkeypatch.setattr("clipper.cli.notify", lambda title, body: notifications.append((title, body)))
+
+    cfg = Config(downloads_dir=tmp_path / "downloads", index_path=tmp_path / "clipper.sqlite")
+
+    assert cmd_run(cfg) == 1
+
+    assert len(notifications) == 1
+    title, body = notifications[0]
+    assert title == "clipper could not start"
+    assert "your SteamID" in body
+    assert "your clips folder" in body
+    assert "Settings" in body
+
+
 def test_status_shows_match_alerts_and_the_page(index):
     index.set_flag("alerts_status", "on")
     index.set_flag("page_port", "8765")
@@ -85,24 +104,31 @@ def test_status_shows_match_alerts_and_the_page(index):
 
 
 def test_status_says_why_match_alerts_are_off(index):
-    index.set_flag("alerts_status", "off: set FACEIT_API_KEY and FACEIT_NICKNAME in .env")
+    index.set_flag("alerts_status", "off: set your FACEIT nickname and API key in Settings")
     lines = format_status(index, GateStatus(ok=True)).splitlines()
-    assert lines[1] == "Match alerts: off: set FACEIT_API_KEY and FACEIT_NICKNAME in .env"
+    assert lines[1] == "Match alerts: off: set your FACEIT nickname and API key in Settings"
 
 
-def test_match_alerts_stay_off_without_the_setting_or_the_key(index, tmp_path, monkeypatch):
+def test_status_says_the_clips_folder_is_not_set_instead_of_crashing(monkeypatch, capsys):
+    monkeypatch.setattr("clipper.settings.load", lambda path: Loaded(Config(), ()))
+
+    assert main(["status"]) == 0
+
+    out = capsys.readouterr().out
+    assert "Gate: waiting: the clips folder is not set" in out
+
+
+def test_match_alerts_stay_off_without_the_setting_or_the_key(index, tmp_path):
     folders = {"downloads_dir": tmp_path, "data_root": tmp_path / "clips", "index_path": tmp_path / "clipper.sqlite"}
     assert start_match_alerts(Config(**folders, match_alerts=False), index, probe=None, gate=None) is None
-    assert index.get_flag("alerts_status") == "off: match_alerts = false in clipper.toml"
-    monkeypatch.setattr("clipper.cli.load_env", lambda path: {})
+    assert index.get_flag("alerts_status") == "off: switched off in Settings"
     assert start_match_alerts(Config(**folders), index, probe=None, gate=None) is None
-    assert index.get_flag("alerts_status") == "off: set FACEIT_API_KEY and FACEIT_NICKNAME in .env"
+    assert index.get_flag("alerts_status") == "off: set your FACEIT nickname and API key in Settings"
 
 
 def test_match_alerts_stay_off_when_the_page_cannot_start(index, tmp_path, monkeypatch):
-    folders = {"downloads_dir": tmp_path, "data_root": tmp_path / "clips", "index_path": tmp_path / "clipper.sqlite"}
-    monkeypatch.setattr("clipper.cli.load_env",
-                        lambda path: {"FACEIT_API_KEY": "k", "FACEIT_NICKNAME": "someone"})
+    folders = {"downloads_dir": tmp_path, "data_root": tmp_path / "clips", "index_path": tmp_path / "clipper.sqlite",
+              "faceit_nickname": "someone", "faceit_api_key_protected": "a-protected-blob"}
     monkeypatch.setattr("clipper.cli.PageServer",
                         lambda *args, **kwargs: (_ for _ in ()).throw(OSError("no free port in 8765–8774")))
     assert start_match_alerts(Config(**folders), index, probe=None, gate=None) is None

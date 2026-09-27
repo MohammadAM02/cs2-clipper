@@ -15,9 +15,9 @@ from functools import partial
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from clipper import csdm_db, postgres
+from clipper import csdm_db, paths, postgres, protect, settings
 from clipper.alerts import MatchAlerts
-from clipper.config import REPO_ROOT, Config, load_config, load_env
+from clipper.config import REPO_ROOT, Config
 from clipper.install import install, uninstall
 from clipper.csdm_cli import CsdmCli
 from clipper.faceit import FaceitClient
@@ -134,12 +134,10 @@ def start_match_alerts(cfg: Config, index: Index, probe: SystemProbe, gate: Gate
     """Start the Demos to grab page and return the match alerts step. When alerts are off, say why in
     the index (clipper status shows it) and return None."""
     if not cfg.match_alerts:
-        index.set_flag("alerts_status", "off: match_alerts = false in clipper.toml")
+        index.set_flag("alerts_status", "off: switched off in Settings")
         return None
-    env = load_env(REPO_ROOT / ".env")
-    key, nickname = env.get("FACEIT_API_KEY", ""), env.get("FACEIT_NICKNAME", "")
-    if not (key and nickname):
-        index.set_flag("alerts_status", "off: set FACEIT_API_KEY and FACEIT_NICKNAME in .env")
+    if not (cfg.faceit_nickname and cfg.faceit_api_key_protected):
+        index.set_flag("alerts_status", "off: set your FACEIT nickname and API key in Settings")
         return None
     try:
         page = PageServer(cfg.index_path, cfg.page_port, gate_reasons=lambda: gate.check().reasons)
@@ -148,7 +146,8 @@ def start_match_alerts(cfg: Config, index: Index, probe: SystemProbe, gate: Gate
         return None
     page.start()
     index.set_flag("page_port", str(page.port))
-    return MatchAlerts(index, FaceitClient(key), notify, probe.user_cs2_running, nickname=nickname,
+    faceit = FaceitClient(lambda: protect.unprotect(cfg.faceit_api_key_protected))
+    return MatchAlerts(index, faceit, notify, probe.user_cs2_running, nickname=cfg.faceit_nickname,
                        subject_steamid=cfg.subject_steamid, page_url=f"http://127.0.0.1:{page.port}/demos",
                        stopped_playing_minutes=cfg.stopped_playing_minutes)
 
@@ -191,9 +190,13 @@ def _setup_logging(logs_dir: Path) -> None:
 
 def cmd_run(cfg: Config) -> int:
     try:
-        with single_instance(cfg.index_path.with_name("clipper.lock")):
+        with single_instance(paths.lock_file()):
             try:
                 _setup_logging(cfg.logs_dir)
+                missing = [name for name, value in (("your SteamID", cfg.subject_steamid),
+                                                    ("your clips folder", cfg.data_root)) if not value]
+                if missing:
+                    raise RuntimeError(f"set {' and '.join(missing)} in Settings")
                 for folder in (cfg.demos_dir, cfg.renders_dir, cfg.library_dir):
                     folder.mkdir(parents=True, exist_ok=True)
                 postgres.ensure_running(cfg.pg_bin, cfg.pg_data)
@@ -228,7 +231,7 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("install", help="start the app when you sign in (Task Scheduler)")
     commands.add_parser("uninstall", help="remove the sign-in task")
     args = parser.parse_args(argv)
-    cfg = load_config()
+    cfg = settings.load(paths.settings_file()).config
     if args.command == "run":
         return cmd_run(cfg)
     if args.command == "install":
@@ -242,7 +245,11 @@ def main(argv: list[str] | None = None) -> int:
     index = Index(cfg.index_path)
     try:
         if args.command == "status":
-            print(format_status(index, Gate(SystemProbe(), cfg.data_root, cfg.min_free_gb).check()))
+            if cfg.data_root is None:
+                gate_status = GateStatus(ok=False, reasons=("the clips folder is not set",))
+            else:
+                gate_status = Gate(SystemProbe(), cfg.data_root, cfg.min_free_gb).check()
+            print(format_status(index, gate_status))
             return 0
         if args.command == "retry":
             return cmd_retry(index, args.demo)

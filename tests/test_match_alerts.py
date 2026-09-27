@@ -8,6 +8,7 @@ from clipper.alerts import MatchAlerts
 from clipper.faceit import AuthError, FaceitError, MatchDetails, Player, PlayerNotFound
 from clipper.index import Index
 from clipper.model import FaceitStats
+from clipper.protect import ProtectError
 
 SUBJECT = "76561198192858303"
 PAGE = "http://127.0.0.1:8765/demos"
@@ -203,7 +204,7 @@ def test_the_wrong_faceit_account_turns_alerts_off(world):
     world.tick(minutes=10)
     assert world.faceit.calls == ["player"]
     assert world.index.get_flag("alerts_status") == (
-        "off: FACEIT_NICKNAME someone plays as SteamID 76561198000000009, not subject_steamid 76561198192858303")
+        "off: FACEIT nickname someone plays as SteamID 76561198000000009, not your SteamID 76561198192858303")
 
 
 def test_a_rejected_key_turns_alerts_off(world):
@@ -221,7 +222,17 @@ def test_an_unknown_faceit_nickname_turns_alerts_off(world):
     world.tick(minutes=10)
     assert world.faceit.calls == ["player"]
     assert world.index.get_flag("alerts_status") == (
-        "off: FACEIT has no player called someone; check FACEIT_NICKNAME in .env")
+        "off: FACEIT has no player called someone; check the FACEIT nickname in Settings")
+
+
+def test_an_unreadable_saved_key_turns_alerts_off(world):
+    world.faceit.error = ProtectError("cannot be decrypted")
+    world.tick()
+    world.faceit.error = None
+    world.tick(minutes=10)
+    assert world.faceit.calls == ["player"]
+    assert world.index.get_flag("alerts_status") == (
+        "off: the saved FACEIT key can't be read on this Windows account; enter it again in Settings")
 
 
 def test_faceit_trouble_is_tried_again_5_minutes_later(world):

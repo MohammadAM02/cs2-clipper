@@ -1,20 +1,21 @@
-"""Settings. Defaults fit this machine; any of them can be overridden in clipper.toml at the repo root."""
+"""Settings: the one frozen object every module reads (spec: Settings and data).
+
+Defaults fit a fresh install: no SteamID, no clips folder, no FACEIT nickname or key. ``settings.py``
+reads ``settings.json``, validates it against these defaults, and builds this ``Config``; nothing here
+reads a file."""
 
 from __future__ import annotations
 
 import json
 import os
-import tomllib
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field
 from pathlib import Path
 
+from clipper import paths
 from clipper.windows import downloads_dir
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 _LOCALAPPDATA = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
-_PATH_SETTINGS = frozenset(
-    {"downloads_dir", "data_root", "index_path", "csdm_home", "csdm_app_dir", "pg_bin", "pg_data"}
-)
 
 # aspect_ratio -> (width, height, stretched to 1920x1080 when joining). Mirrors render_reel.sh's REEL_RATIO.
 RATIOS: dict[str, tuple[int, int, bool]] = {
@@ -28,11 +29,14 @@ SEQUENCE_EVENTS = ("kills", "rounds")
 
 @dataclass(frozen=True)
 class Config:
-    subject_steamid: str = "76561198192858303"
+    subject_steamid: str = ""
+    faceit_nickname: str = ""
+    faceit_api_key_protected: str = field(default="", repr=False)
     downloads_dir: Path = field(default_factory=downloads_dir)
-    data_root: Path = Path("E:/cs2clips")
-    index_path: Path = REPO_ROOT / "data" / "clipper.sqlite"
-    csdm_home: Path = REPO_ROOT / "home"
+    data_root: Path | None = None
+    index_path: Path = field(default_factory=paths.index_file)
+    csdm_home: Path = field(default_factory=paths.csdm_home)
+    logs_dir: Path = field(default_factory=paths.logs_dir)
     csdm_app_dir: Path = _LOCALAPPDATA / "Programs" / "cs-demo-manager"
     pg_bin: Path = _LOCALAPPDATA / "pg17" / "pgsql" / "bin"
     pg_data: Path = _LOCALAPPDATA / "pg17" / "data"
@@ -83,10 +87,6 @@ class Config:
         return self.data_root / "library"
 
     @property
-    def logs_dir(self) -> Path:
-        return self.data_root / "logs"
-
-    @property
     def csdm_exe(self) -> Path:
         return self.csdm_app_dir / "cs-demo-manager.exe"
 
@@ -105,30 +105,3 @@ class Config:
             "password": db["password"],
             "dbname": db["database"],
         }
-
-
-def load_config(path: Path | None = None) -> Config:
-    """Defaults, overridden by the TOML file at `path` (default: <repo>/clipper.toml) if it exists."""
-    path = path or REPO_ROOT / "clipper.toml"
-    if not path.exists():
-        return Config()
-    raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    unknown = sorted(set(raw) - {f.name for f in fields(Config)})
-    if unknown:
-        raise ValueError(f"unknown setting(s) in {path}: {', '.join(unknown)}")
-    return Config(**{key: Path(value) if key in _PATH_SETTINGS else value for key, value in raw.items()})
-
-
-def load_env(path: Path) -> dict[str, str]:
-    """KEY=value lines of a .env file. Comments, blank lines and lines without '=' are skipped;
-    quotes around a value are dropped. A missing file gives no values."""
-    if not path.exists():
-        return {}
-    values = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip().strip('"').strip("'")
-    return values

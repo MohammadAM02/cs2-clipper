@@ -152,3 +152,33 @@ def test_a_json_answer_is_parsed(monkeypatch):
 
     monkeypatch.setattr(faceit.urllib.request, "urlopen", lambda request, timeout: Response())
     assert http_get_json(f"{faceit.DATA_API}/x", "key") == {"ok": True}
+
+
+def test_the_api_key_getter_is_called_fresh_for_every_request_not_cached(monkeypatch):
+    calls: list[int] = []
+
+    def api_key() -> str:
+        calls.append(len(calls))
+        return "secret-key"
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b'{"ok": true}'
+
+    def urlopen(request, timeout):
+        assert request.get_header("Authorization") == "Bearer secret-key"
+        return Response()
+
+    monkeypatch.setattr(faceit.urllib.request, "urlopen", urlopen)
+    client = FaceitClient(api_key)
+
+    client.details(MATCH_ID)
+    client.details(MATCH_ID)
+
+    assert calls == [0, 1]   # asked again for the second request, not reused from the first

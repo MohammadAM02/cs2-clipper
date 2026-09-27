@@ -1,5 +1,7 @@
-"""The FACEIT Data API, read-only (spec: match alerts). The key travels only in the Authorization
-header; it never appears in a log line, an error message or the index."""
+"""The FACEIT Data API, read-only (spec: match alerts). ``api_key`` is a getter, called once per
+request and never cached, so the decrypted key (spec: Settings and data, The FACEIT key) is held no
+longer than one call. The key travels only in the Authorization header; it never appears in a log
+line, an error message or the index."""
 
 from __future__ import annotations
 
@@ -74,8 +76,8 @@ def _float(value: object) -> float:
 
 
 class FaceitClient:
-    def __init__(self, api_key: str, fetch: Callable[[str], dict] | None = None):
-        self._fetch = fetch or (lambda url: http_get_json(url, api_key))
+    def __init__(self, api_key: Callable[[], str], fetch: Callable[[str], dict] | None = None):
+        self._fetch = fetch or (lambda url: http_get_json(url, api_key()))
 
     def player(self, nickname: str) -> Player:
         try:

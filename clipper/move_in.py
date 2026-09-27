@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import sqlite3
 import tomllib
@@ -73,13 +74,18 @@ def on_start(repo_root: Path = REPO_ROOT) -> list[str]:
 
 
 def _copy_index(repo_root: Path, data_dir: Path) -> bool:
+    """All-or-nothing: copies into `clipper.sqlite.partial`, then `os.replace`s it onto the final
+    name (atomic on both Windows and POSIX), so a crash or a full disk mid-copy can never leave a
+    half-written `clipper.sqlite` and can never lose an existing one being replaced."""
     src = repo_root / "data" / "clipper.sqlite"
     if not src.is_file():
         return False
     dest = data_dir / "clipper.sqlite"
     if dest.exists() and not _index_is_empty(dest):
         return False
-    shutil.copy2(src, dest)
+    partial = data_dir / "clipper.sqlite.partial"
+    shutil.copy2(src, partial)
+    os.replace(partial, dest)
     return True
 
 
@@ -109,13 +115,20 @@ def _index_is_empty(path: Path) -> bool:
 
 
 def _copy_csdm_home(repo_root: Path, data_dir: Path) -> bool:
+    """All-or-nothing: copies into `csdm-home.partial` (removing any leftover one from an earlier
+    failed attempt first), then renames it onto `csdm-home` only once the whole tree has copied —
+    a crash or a full disk mid-copy can never leave CS:DM's settings half there."""
     src = repo_root / "home"
     if not src.is_dir():
         return False
     dest = data_dir / "csdm-home"
     if dest.exists():
         return False
-    shutil.copytree(src, dest)
+    partial = data_dir / "csdm-home.partial"
+    if partial.exists():
+        shutil.rmtree(partial)
+    shutil.copytree(src, partial)
+    os.replace(partial, dest)
     return True
 
 

@@ -15,7 +15,7 @@ from functools import partial
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from clipper import csdm_db, paths, postgres, protect, settings
+from clipper import csdm_db, move_in, paths, postgres, protect, settings
 from clipper.alerts import MatchAlerts
 from clipper.config import REPO_ROOT, Config
 from clipper.install import install, uninstall
@@ -219,6 +219,10 @@ def cmd_run(cfg: Config) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    copied = move_in.on_start()
+    if copied:
+        print(f"Moved in from {REPO_ROOT}: {', '.join(copied)}", file=sys.stderr)
+
     parser = argparse.ArgumentParser(prog="clipper", description="Hands-off CS2 highlight clipper.")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("run", help="run the background app")

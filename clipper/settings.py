@@ -309,7 +309,7 @@ def save(path: Path, changes: Mapping[str, object]) -> dict[str, str]:
     defaults_ = defaults()
     kept = {
         name: value for name, value in merged.items()
-        if name not in _STORED_NAMES or _differs_from_default(name, value, defaults_[name])
+        if name not in _STORED_NAMES or differs_from_default(name, value, defaults_[name])
     }
     if key_given:
         if key_value is None:
@@ -329,7 +329,7 @@ def _read_raw(path: Path) -> dict[str, object]:
     return raw if isinstance(raw, dict) else {}
 
 
-def _differs_from_default(name: str, value: object, default_value: object) -> bool:
+def differs_from_default(name: str, value: object, default_value: object) -> bool:
     if name in _FOLDER_FIELDS:
         return Path(str(value)) != Path(str(default_value))
     return value != default_value

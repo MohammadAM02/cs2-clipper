@@ -1,22 +1,42 @@
+import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 import psycopg
 import pytest
 from psycopg import sql
 
-from clipper import csdm_db, paths, settings
+from clipper import csdm_db, paths
+from clipper.config import REPO_ROOT, Config
 from tests.fixtures import DEMO_NAME, MATCH_CHECKSUM, MATCH_FACTS, SUBJECT
 
 pytestmark = pytest.mark.integration
 
+# These tests read CS:DM's own Postgres settings, read-only, to check our SQL against the real database
+# (constraints.md's "no test touches the real app data folder or home\" is amended for this opt-in
+# check only). Never CLIPPER_DATA_DIR's isolated csdm-home (conftest.py points it at a temp folder for
+# every test): the real one, at the app data folder's true location or, until the app's first start,
+# the repo's home\.
+_CANDIDATE_CSDM_HOMES = (
+    Path(os.environ["LOCALAPPDATA"]) / paths.APP_FOLDER / "csdm-home",
+    REPO_ROOT / "home",
+)
+
+
+def _live_csdm_home() -> Path | None:
+    return next((home for home in _CANDIDATE_CSDM_HOMES if (home / ".csdm" / "settings.json").is_file()), None)
+
 
 @pytest.fixture
 def conn():
+    home = _live_csdm_home()
+    if home is None:
+        pytest.skip("no CS:DM settings.json in the app data folder or the repo's home\\")
     try:
-        cfg = settings.load(paths.settings_file()).config
-        connection = psycopg.connect(**cfg.database_conninfo(), connect_timeout=5, autocommit=True)
-    except (OSError, KeyError, psycopg.OperationalError) as exc:
-        pytest.skip(f"CS:DM's Postgres is not reachable: {exc}")
+        conninfo = Config(csdm_home=home).database_conninfo()
+        connection = psycopg.connect(**conninfo, connect_timeout=5, autocommit=True)
+    except (OSError, KeyError, ValueError, psycopg.OperationalError) as exc:
+        pytest.skip(f"CS:DM's Postgres is not reachable ({type(exc).__name__})")
     with connection:
         yield connection
 

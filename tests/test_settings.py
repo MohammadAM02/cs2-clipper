@@ -237,10 +237,13 @@ def test_data_root_alone_may_be_blank():
     assert "downloads_dir" in validate({"downloads_dir": ""}, check_exists=True)
 
 
-def test_program_existence_is_only_checked_when_asked():
+def test_program_existence_is_only_checked_when_asked(tmp_path):
     assert validate({"ffmpeg": "some-tool-not-on-path.exe"}, check_exists=False) == {}
     assert "ffmpeg" in validate({"ffmpeg": "some-tool-not-on-path.exe"}, check_exists=True)
-    assert validate({"ffmpeg": "cmd"}, check_exists=True) == {}   # a real program on PATH
+
+    real_file = tmp_path / "ffmpeg.exe"    # an existing file, not a lookup on PATH: no real program needed
+    real_file.write_bytes(b"")
+    assert validate({"ffmpeg": str(real_file)}, check_exists=True) == {}
 
 
 def test_an_unknown_name_is_reported():
@@ -274,11 +277,17 @@ def test_numbers_are_compared_by_value_not_type(tmp_path):
     assert read_raw(path) == {}
 
 
-def test_folder_values_are_compared_as_paths_not_strings(tmp_path):
+def test_folder_values_are_compared_as_paths_not_strings(tmp_path, monkeypatch):
+    # A tmp folder standing in for pg_bin's default, so this doesn't depend on a real portable Postgres
+    # being installed on whatever machine runs the suite (save() only needs *a* default to compare
+    # against; monkeypatching defaults() controls that without touching any other setting).
     path = tmp_path / "settings.json"
-    cfg = Config()
-    same_path_forward_slashes = str(cfg.pg_bin).replace("\\", "/")
-    assert same_path_forward_slashes != str(cfg.pg_bin)   # a genuinely different string, same path
+    default_pg_bin = tmp_path / "pg" / "bin"
+    default_pg_bin.mkdir(parents=True)
+    monkeypatch.setattr("clipper.settings.defaults", lambda: {"pg_bin": str(default_pg_bin)})
+
+    same_path_forward_slashes = str(default_pg_bin).replace("\\", "/")
+    assert same_path_forward_slashes != str(default_pg_bin)   # a genuinely different string, same path
 
     assert save(path, {"pg_bin": same_path_forward_slashes}) == {}
 

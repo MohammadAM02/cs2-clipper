@@ -45,31 +45,31 @@ class FakeFetch:
 def test_player_gives_the_ids_match_alerts_need():
     fetch = FakeFetch({"/players": {"player_id": "p-1", "nickname": "someone",
                                     "games": {"cs2": {"game_player_id": SUBJECT}}}})
-    assert FaceitClient("key", fetch).player("some one") == Player("p-1", "someone", SUBJECT)
+    assert FaceitClient(lambda: "key", fetch).player("some one") == Player("p-1", "someone", SUBJECT)
     assert fetch.urls == [f"{faceit.DATA_API}/players?nickname=some%20one"]
 
 
 def test_a_player_without_cs2_is_an_error():
     fetch = FakeFetch({"/players": {"player_id": "p-1", "nickname": "someone", "games": {}}})
     with pytest.raises(PlayerNotFound, match="no CS2 profile"):
-        FaceitClient("key", fetch).player("someone")
+        FaceitClient(lambda: "key", fetch).player("someone")
 
 
 def test_an_unknown_nickname_is_player_not_found():
     fetch = FakeFetch({"/players": FaceitError("HTTP 404 from FACEIT", 404)})
     with pytest.raises(PlayerNotFound, match="no player called someone"):
-        FaceitClient("key", fetch).player("someone")
+        FaceitClient(lambda: "key", fetch).player("someone")
 
 
 def test_other_errors_from_the_player_lookup_stay_as_they_are():
     fetch = FakeFetch({"/players": FaceitError("HTTP 503 from FACEIT", 503)})
     with pytest.raises(FaceitError) as caught:
-        FaceitClient("key", fetch).player("someone")
+        FaceitClient(lambda: "key", fetch).player("someone")
     assert not isinstance(caught.value, PlayerNotFound)
 
     fetch = FakeFetch({"/players": AuthError("HTTP 401 from FACEIT", 401)})
     with pytest.raises(AuthError):
-        FaceitClient("key", fetch).player("someone")
+        FaceitClient(lambda: "key", fetch).player("someone")
 
 
 def test_finished_since_pages_through_the_history():
@@ -85,7 +85,7 @@ def test_finished_since_pages_through_the_history():
 
     fetch = FakeFetch({"/players/p-1/history": page})
     since = datetime(2026, 9, 1, tzinfo=timezone.utc)
-    found = FaceitClient("key", fetch).finished_since("p-1", since)
+    found = FaceitClient(lambda: "key", fetch).finished_since("p-1", since)
     assert len(found) == 101
     assert found[0] == ("m0", datetime.fromtimestamp(1_790_000_000, timezone.utc))
     assert f"from={int(since.timestamp())}" in fetch.urls[0]
@@ -93,7 +93,7 @@ def test_finished_since_pages_through_the_history():
 
 
 def test_stats_are_the_subjects_line():
-    stats = FaceitClient("key", FakeFetch({f"/matches/{MATCH_ID}/stats": STATS})).stats(MATCH_ID, "p-1")
+    stats = FaceitClient(lambda: "key", FakeFetch({f"/matches/{MATCH_ID}/stats": STATS})).stats(MATCH_ID, "p-1")
     assert (stats.map_name, stats.team_score, stats.opponent_score, stats.won, stats.rounds) == (
         "de_inferno", 13, 9, True, 22)
     assert (stats.kills, stats.deaths, stats.assists, stats.adr) == (24, 15, 5, 94.0)
@@ -101,22 +101,22 @@ def test_stats_are_the_subjects_line():
 
 
 def test_stats_from_the_losing_side():
-    stats = FaceitClient("key", FakeFetch({f"/matches/{MATCH_ID}/stats": STATS})).stats(MATCH_ID, "p-9")
+    stats = FaceitClient(lambda: "key", FakeFetch({f"/matches/{MATCH_ID}/stats": STATS})).stats(MATCH_ID, "p-9")
     assert (stats.team_score, stats.opponent_score, stats.won) == (9, 13, False)
 
 
 def test_stats_not_published_yet_are_none():
     fetch = FakeFetch({f"/matches/{MATCH_ID}/stats": FaceitError("HTTP 404 from FACEIT", 404)})
-    assert FaceitClient("key", fetch).stats(MATCH_ID, "p-1") is None
+    assert FaceitClient(lambda: "key", fetch).stats(MATCH_ID, "p-1") is None
 
 
 def test_details_say_whether_the_demo_is_listed_and_where_the_matchroom_is():
     fetch = FakeFetch({f"/matches/{MATCH_ID}": {"demo_url": ["https://demos.example/x.dem.zst"],
                                                   "faceit_url": "https://www.faceit.com/{lang}/cs2/room/" + MATCH_ID}})
-    assert FaceitClient("key", fetch).details(MATCH_ID) == MatchDetails(
+    assert FaceitClient(lambda: "key", fetch).details(MATCH_ID) == MatchDetails(
         demo_listed=True, matchroom_url=f"https://www.faceit.com/en/cs2/room/{MATCH_ID}")
     fetch = FakeFetch({f"/matches/{MATCH_ID}": {"demo_url": []}})
-    assert FaceitClient("key", fetch).details(MATCH_ID).demo_listed is False
+    assert FaceitClient(lambda: "key", fetch).details(MATCH_ID).demo_listed is False
 
 
 @pytest.mark.parametrize(("error", "kind", "status"), [

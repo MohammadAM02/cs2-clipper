@@ -9,7 +9,9 @@ import pytest
 
 from clipper import protect
 from clipper.config import Config
-from clipper.settings import FIELDS, KEY_FIELD, STORED_KEY, Loaded, SettingsStore, defaults, load, save, validate
+from clipper.settings import (
+    FIELDS, KEY_FIELD, STORED_KEY, Loaded, SettingsStore, defaults, json_values, load, save, validate,
+)
 
 
 def read_raw(path: Path) -> dict:
@@ -54,6 +56,26 @@ def test_defaults_excludes_the_app_data_fields():
     assert "index_path" not in values
     assert "csdm_home" not in values
     assert "logs_dir" not in values
+
+
+# --- json_values(): the Settings page's GET, without the protected key (Task 13) ---------------------
+
+
+def test_json_values_matches_defaults_minus_the_protected_key():
+    assert json_values(Config()) == {k: v for k, v in defaults().items() if k != STORED_KEY}
+    assert STORED_KEY not in json_values(Config())
+
+
+def test_json_values_reflects_the_given_configs_effective_values(tmp_path):
+    cfg = Config(top_n=9, data_root=tmp_path, faceit_api_key_protected=protect.protect("a-key"))
+    values = json_values(cfg)
+    assert values["top_n"] == 9
+    assert values["data_root"] == str(tmp_path)
+    assert STORED_KEY not in values
+
+
+def test_json_values_data_root_is_empty_string_when_none():
+    assert json_values(Config())["data_root"] == ""
 
 
 # --- load(): missing / unreadable file -------------------------------------------------------------

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settings</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<script src="/app.js"></script>
+<script>renderNav("/settings");</script>
+<main>
+  <p class="brand"><span>CS2</span>clipper</p>
+  <h1>Settings</h1>
+  <div id="notice"></div>
+  <form id="form"></form>
+  <p><button class="skip" id="save" type="button">Save</button> <span id="result"></span></p>
+</main>
+<script>
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+let fields = [], values = {}, faceitKeySet = false, keyRemoved = false;
+
+function inputFor(f) {
+  const id = `f-${f.name}`;
+  const value = values[f.name];
+  if (f.kind === "secret") {
+    const status = faceitKeySet
+      ? '<span class="muted">A key is saved.</span> <button type="button" class="skip" data-remove-key="1">Remove key</button>'
+      : "";
+    return `<input type="password" id="${id}" autocomplete="new-password"> ${status}`;
+  }
+  if (f.kind === "bool") {
+    return `<input type="checkbox" id="${id}" ${value ? "checked" : ""}>`;
+  }
+  if (f.kind === "choice") {
+    const options = f.choices.map(c => `<option value="${esc(c)}"${c === value ? " selected" : ""}>${esc(c)}</option>`);
+    return `<select id="${id}">${options.join("")}</select>`;
+  }
+  if (f.kind === "int" || f.kind === "number") {
+    const min = f.minimum === null ? "" : `min="${f.minimum}"`;
+    const max = f.maximum === null ? "" : `max="${f.maximum}"`;
+    const step = f.kind === "int" ? "1" : "any";
+    return `<input type="number" id="${id}" value="${esc(value)}" ${min} ${max} step="${step}">`;
+  }
+  return `<input type="text" id="${id}" value="${esc(value)}">`;
+}
+
+function fieldRow(f) {
+  const note = f.name === "data_root"
+    ? '<p class="note">A new folder applies to Demos from now on; files already in the old one stay.</p>' : "";
+  const help = f.help ? `<small>${esc(f.help)}</small>` : "";
+  return `<p class="field">
+    <label for="f-${f.name}">${esc(f.label)}</label>
+    ${inputFor(f)}
+    ${help}
+    <span class="err" id="err-${f.name}"></span>
+  </p>${note}`;
+}
+
+function render() {
+  const groups = [];
+  for (const f of fields) {
+    let group = groups.find(g => g.name === f.group);
+    if (!group) { group = {name: f.group, fields: []}; groups.push(group); }
+    group.fields.push(f);
+  }
+  document.getElementById("form").innerHTML = groups
+    .map(g => `<h2>${esc(g.name)}</h2>${g.fields.map(fieldRow).join("")}`).join("");
+}
+
+async function load() {
+  const response = await api("api/settings");
+  const data = await response.json();
+  fields = data.fields;
+  values = data.values;
+  faceitKeySet = data.faceit_key_set;
+  keyRemoved = false;
+  document.getElementById("notice").innerHTML = data.warnings.length
+    ? `<ul>${data.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : "";
+  render();
+}
+
+function valueOf(f) {
+  const el = document.getElementById(`f-${f.name}`);
+  if (f.kind === "bool") return el.checked;
+  if (f.kind === "int") return el.value === "" ? null : parseInt(el.value, 10);
+  if (f.kind === "number") return el.value === "" ? null : parseFloat(el.value);
+  return el.value;
+}
+
+document.getElementById("form").addEventListener("click", e => {
+  if (e.target.closest("button[data-remove-key]")) {
+    keyRemoved = true;
+    faceitKeySet = false;
+    render();
+  }
+});
+
+document.getElementById("save").addEventListener("click", async () => {
+  const changes = {};
+  for (const f of fields) {
+    if (f.kind === "secret") {
+      const typed = document.getElementById(`f-${f.name}`).value;
+      if (typed) changes[f.name] = typed;
+      else if (keyRemoved) changes[f.name] = null;
+      continue;
+    }
+    changes[f.name] = valueOf(f);
+  }
+  const response = await api("api/settings", {
+    method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify(changes),
+  });
+  const data = await response.json();
+  const result = document.getElementById("result");
+  document.querySelectorAll(".err").forEach(el => el.textContent = "");
+  if (response.status === 400) {
+    result.textContent = "";
+    for (const [name, message] of Object.entries(data.errors || {})) {
+      const el = document.getElementById(`err-${name}`);
+      if (el) el.textContent = message;
+    }
+    return;
+  }
+  result.textContent = data.restart_needed ? "Saved. The port changes at the next start." : "Saved.";
+  load();
+});
+
+load();
+</script>
+</body>
+</html>

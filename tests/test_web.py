@@ -12,9 +12,11 @@ from pathlib import Path
 
 import pytest
 
+from clipper import protect
 from clipper.checks import Check
 from clipper.index import Index
 from clipper.model import FaceitStats, Highlight, MatchInfo
+from clipper.settings import FIELDS, KEY_FIELD, STORED_KEY, SettingsStore
 from clipper.state import Rendering, Snapshot
 from clipper.web import MARKER_HEADER, WebContext, WebServer, create_app
 
@@ -60,12 +62,20 @@ def pc_post(client, path, **kw):
     return client.post(path, base_url=PC, **kw)
 
 
+def pc_put(client, path, **kw):
+    return client.put(path, base_url=PC, **kw)
+
+
 def phone_get(client, path, **kw):
     return client.get(path, base_url=LAN, environ_base=PHONE_ENVIRON, **kw)
 
 
 def phone_post(client, path, **kw):
     return client.post(path, base_url=LAN, environ_base=PHONE_ENVIRON, **kw)
+
+
+def phone_put(client, path, **kw):
+    return client.put(path, base_url=LAN, environ_base=PHONE_ENVIRON, **kw)
 
 
 # --- ported from tests/test_page.py ---------------------------------------------------------------
@@ -571,3 +581,128 @@ def test_open_folder_refuses_a_phone_and_needs_the_marker(tmp_path):
     app = app_for(tmp_path)
     assert pc_post(app.test_client(), f"/api/reels/{checksum}/open-folder").status_code == 403
     assert phone_post(app.test_client(), f"/api/reels/{checksum}/open-folder", headers=MARKED).status_code == 403
+
+
+# --- Settings page (Task 13) ------------------------------------------------------------------------
+
+
+def _settings_app(tmp_path, **overrides):
+    """A real SettingsStore on tmp_path (isolated; never the real app data folder), wired the way
+    App.start_web wires it."""
+    store = SettingsStore(tmp_path / "settings.json")
+    overrides.setdefault("load_settings", store.current)
+    overrides.setdefault("save_settings", store.save)
+    overrides.setdefault("port_in_use", lambda: 8765)
+    return app_for(tmp_path, **overrides), store
+
+
+def test_settings_page_is_served(client):
+    response = pc_get(client, "/settings")
+    assert response.status_code == 200
+    assert response.content_type == "text/html; charset=utf-8"
+
+
+def test_settings_page_and_api_refuse_a_phone(client):
+    assert phone_get(client, "/settings").status_code == 403
+    assert phone_get(client, "/api/settings").status_code == 403
+
+
+def test_api_settings_get_shape_and_field_order(tmp_path):
+    app, _store = _settings_app(tmp_path)
+
+    data = pc_get(app.test_client(), "/api/settings").get_json()
+
+    assert [f["name"] for f in data["fields"]] == [f.name for f in FIELDS]
+    assert data["fields"][0] == {
+        "name": "subject_steamid", "group": "You", "label": "SteamID", "kind": "steamid",
+        "minimum": None, "maximum": None, "choices": [],
+        "help": "Your SteamID64: 17 digits starting with 7656119.",
+    }
+    assert data["values"]["top_n"] == 5
+    assert "faceit_api_key_protected" not in data["values"]
+    assert data["faceit_key_set"] is False
+    assert data["warnings"] == []
+    assert data["port_in_use"] == 8765
+
+
+def test_api_settings_get_with_a_saved_key_never_echoes_it_or_its_blob(tmp_path):
+    app, store = _settings_app(tmp_path)
+    assert store.save({KEY_FIELD: "super-secret-value"}) == {}
+    blob = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))[STORED_KEY]
+
+    response = pc_get(app.test_client(), "/api/settings")
+    data = response.get_json()
+    text = response.get_data(as_text=True)
+
+    assert data["faceit_key_set"] is True
+    assert "super-secret-value" not in text
+    assert blob not in text
+
+
+def test_put_settings_saves_a_change_and_the_file_holds_only_that_value(tmp_path):
+    app, _store = _settings_app(tmp_path)
+
+    response = pc_put(app.test_client(), "/api/settings", headers=MARKED, json={"top_n": 9})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"saved": True, "restart_needed": False}
+    assert json.loads((tmp_path / "settings.json").read_text(encoding="utf-8")) == {"top_n": 9}
+
+
+def test_put_settings_with_bad_fields_is_400_with_one_message_each_and_nothing_written(tmp_path):
+    app, _store = _settings_app(tmp_path)
+
+    response = pc_put(app.test_client(), "/api/settings", headers=MARKED,
+                      json={"top_n": 999, "aspect_ratio": "21:9"})
+
+    assert response.status_code == 400
+    assert set(response.get_json()["errors"]) == {"top_n", "aspect_ratio"}
+    assert not (tmp_path / "settings.json").exists()
+
+
+def test_put_settings_stores_the_key_protected_and_never_echoes_it(tmp_path):
+    app, _store = _settings_app(tmp_path)
+
+    response = pc_put(app.test_client(), "/api/settings", headers=MARKED, json={KEY_FIELD: "super-secret-value"})
+
+    assert response.status_code == 200
+    assert "super-secret-value" not in response.get_data(as_text=True)
+    raw = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert STORED_KEY in raw
+    assert protect.unprotect(raw[STORED_KEY]) == "super-secret-value"
+
+
+def test_put_settings_null_removes_the_key(tmp_path):
+    app, store = _settings_app(tmp_path)
+    store.save({KEY_FIELD: "the-original-key"})
+
+    response = pc_put(app.test_client(), "/api/settings", headers=MARKED, json={KEY_FIELD: None})
+
+    assert response.status_code == 200
+    raw = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert STORED_KEY not in raw
+
+
+def test_put_settings_restart_needed_when_the_saved_port_differs_from_port_in_use(tmp_path):
+    app, _store = _settings_app(tmp_path)   # port_in_use defaults to 8765
+
+    response = pc_put(app.test_client(), "/api/settings", headers=MARKED, json={"page_port": 8766})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"saved": True, "restart_needed": True}
+
+
+def test_put_settings_not_an_object_is_400(tmp_path):
+    app, _store = _settings_app(tmp_path)
+    client = app.test_client()
+
+    assert pc_put(client, "/api/settings", headers=MARKED, data=b"not json").status_code == 400
+    assert pc_put(client, "/api/settings", headers=MARKED, json=[1, 2, 3]).status_code == 400
+
+
+def test_put_settings_refuses_a_phone_and_needs_the_marker(tmp_path):
+    app, _store = _settings_app(tmp_path)
+    client = app.test_client()
+
+    assert pc_put(client, "/api/settings", json={"top_n": 9}).status_code == 403
+    assert phone_put(client, "/api/settings", headers=MARKED, json={"top_n": 9}).status_code == 403

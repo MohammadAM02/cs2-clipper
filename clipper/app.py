@@ -226,6 +226,9 @@ class App:
             quit=self.quit,
             resume=self.resume,
             open_folder=os.startfile,
+            load_settings=self.settings.current,
+            save_settings=self.settings.save,
+            port_in_use=lambda: self.page_port,
         )
         try:
             self._web = web.WebServer(web.create_app(ctx), self.settings.current().config.page_port,

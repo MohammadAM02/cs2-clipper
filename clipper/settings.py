@@ -96,6 +96,13 @@ def _to_json(value: object) -> object:
     return value
 
 
+def json_values(cfg: Config) -> dict[str, object]:
+    """Every stored setting's effective value on `cfg`, in JSON form (paths as ``str``, ``data_root``
+    as ``""`` when unset) -- without `faceit_api_key_protected` (spec: Settings; The FACEIT key: no
+    response may ever carry the key or its protected blob)."""
+    return {name: _to_json(getattr(cfg, name)) for name in _STORED_NAMES if name != STORED_KEY}
+
+
 # --- validate ---------------------------------------------------------------------------------------------
 
 

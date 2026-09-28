@@ -67,3 +67,14 @@ h2{font:600 11px/1 Consolas,monospace;letter-spacing:.06em;text-transform:upperc
 .hl:first-of-type{border-top:0}
 .hl .skip[disabled]{opacity:.35;cursor:default}
 video{display:block;max-width:100%;width:100%;border-radius:8px;margin:12px 0;background:#000}
+
+/* Settings page (spec: Pages -> Settings) */
+.field{margin:0 0 14px}
+.field label{display:block;font:600 12px/1 "Segoe UI",system-ui,sans-serif;color:var(--muted);margin-bottom:5px}
+.field input[type="text"],.field input[type="password"],.field input[type="number"],.field select{
+  background:var(--panel2);border:1px solid var(--line);border-radius:6px;color:var(--ink);
+  padding:8px 10px;font:14px/1.4 "Segoe UI",system-ui,sans-serif;width:320px;max-width:100%}
+.field input[type="checkbox"]{width:18px;height:18px;vertical-align:middle}
+.field small{display:block;color:var(--muted);font-size:12px;margin-top:4px}
+.err{display:block;color:var(--bad);font-size:12px;margin-top:4px}
+#result{color:var(--good);font-weight:600;margin-left:8px}

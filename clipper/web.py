@@ -37,7 +37,7 @@ import re
 import socket
 import sqlite3
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -50,7 +50,9 @@ from werkzeug.routing import BaseConverter
 from clipper import applog
 from clipper.alerts import LINK_LIFETIME, map_label, utc_now
 from clipper.checks import Check
+from clipper.config import Config
 from clipper.index import Index
+from clipper.settings import FIELDS, Field, Loaded, json_values
 from clipper.state import Snapshot, summary
 
 MARKER_HEADER = "X-CS2-Clipper"
@@ -142,6 +144,12 @@ def status_demos(index: Index) -> list[dict]:
     return demos
 
 
+def field_dict(f: Field) -> dict:
+    """One `FIELDS` entry as JSON for the Settings page (spec: Pages, Settings)."""
+    return {"name": f.name, "group": f.group, "label": f.label, "kind": f.kind,
+            "minimum": f.minimum, "maximum": f.maximum, "choices": list(f.choices), "help": f.help}
+
+
 def reels_row(index: Index, match: sqlite3.Row) -> dict:
     """One entry of `/api/reels`: `match`'s Reels, in round order (spec: Pages, Reels)."""
     highlights = [
@@ -173,6 +181,9 @@ class WebContext:
     resume: Callable[[], None] = lambda: None
     log_lines: Callable[[int], list[str]] = applog.recent
     open_folder: Callable[[Path], None] = lambda folder: None
+    load_settings: Callable[[], Loaded] = lambda: Loaded(Config(), ())
+    save_settings: Callable[[Mapping[str, object]], dict[str, str]] = lambda changes: {}
+    port_in_use: Callable[[], int | None] = lambda: None
 
 
 def _client_address() -> str:
@@ -322,6 +333,35 @@ def create_app(ctx: WebContext) -> Flask:
             return Response(status=404)
         ctx.open_folder(Path(row["path"]).parent)
         return Response(status=204)
+
+    @app.get("/settings")
+    def settings_page():
+        return _no_store(Response((PAGES_DIR / "settings.html").read_bytes(), mimetype="text/html"))
+
+    @app.get("/api/settings")
+    def api_get_settings():
+        loaded = ctx.load_settings()
+        body = {
+            "fields": [field_dict(f) for f in FIELDS],
+            "values": json_values(loaded.config),
+            "faceit_key_set": bool(loaded.config.faceit_api_key_protected),
+            "warnings": list(loaded.warnings),
+            "port_in_use": ctx.port_in_use(),
+        }
+        return _no_store(jsonify(body))
+
+    @app.put("/api/settings")
+    def api_put_settings():
+        changes = request.get_json(silent=True)
+        if not isinstance(changes, dict):
+            return Response(status=400)
+        errors = ctx.save_settings(changes)
+        if errors:
+            response = jsonify(errors=errors)
+            response.status_code = 400
+            return _no_store(response)
+        restart_needed = ctx.load_settings().config.page_port != ctx.port_in_use()
+        return _no_store(jsonify(saved=True, restart_needed=restart_needed))
 
     @app.get("/demos")
     def demos_page():

@@ -8,61 +8,21 @@ from __future__ import annotations
 import json
 import logging
 import re
-import socket
 import threading
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-import psutil
-
-from clipper.alerts import LINK_LIFETIME, map_label, utc_now
+from clipper.alerts import utc_now
 from clipper.index import Index
+from clipper.web import IN_PIPELINE, KEEP_DECIDED, own_addresses, page_rows
 
 log = logging.getLogger(__name__)
 
 PAGE_HTML = Path(__file__).with_name("page.html")
 ACTION = re.compile(r"^/demos/(1-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/(skip|undo)$")
-KEEP_DECIDED = timedelta(hours=24)
 PORTS_TO_TRY = 10
-IN_PIPELINE = ("spotted", "unpacked", "analyzed", "scored", "rendering", "joined")
-
-
-def own_addresses() -> set[str]:
-    """Every address of this PC: loopback, LAN and Tailscale alike."""
-    found = {"127.0.0.1", "::1"}
-    for entries in psutil.net_if_addrs().values():
-        for entry in entries:
-            if entry.family in (socket.AF_INET, socket.AF_INET6):
-                found.add(entry.address.split("%")[0])
-    return found
-
-
-def page_rows(index: Index, now: datetime, waiting_for: tuple[str, ...]) -> list[dict]:
-    """The page's list, newest first. `waiting_for` is the Gate's reasons, shown on grabbed Demos that
-    have not been rendered yet."""
-    rows = []
-    for row in index.page_matches(now - KEEP_DECIDED):
-        finished = datetime.fromisoformat(row["finished_at"])
-        rendering_waits = row["state"] == "grabbed" and row["demo_state"] in IN_PIPELINE
-        rows.append({
-            "id": row["match_id"],
-            "map": map_label(row["map"]),
-            "finished_at": row["finished_at"],
-            "expires_at": (finished + LINK_LIFETIME).isoformat(timespec="seconds"),
-            "won": bool(row["won"]),
-            "score": f"{row['team_score']}–{row['opponent_score']}",
-            "highlights": json.loads(row["highlights"]),
-            "rating": round(row["rating"], 2),
-            "kd": f"{row['kills']}–{row['deaths']}",
-            "adr": round(row["adr"], 1),
-            "state": row["state"],
-            "reminded": row["reminded_at"] is not None,
-            "url": row["matchroom_url"],
-            "waiting_for": "; ".join(waiting_for) if rendering_waits else "",
-        })
-    return rows
 
 
 class PageServer:

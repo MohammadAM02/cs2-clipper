@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Demos to grab</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<script src="/app.js"></script>
+<script>renderNav("/demos");</script>
+<main>
+  <p class="brand"><span>CS2</span>clipper</p>
+  <h1>Demos to grab</h1>
+  <p class="sum" id="sum">Loading…</p>
+  <p class="note" id="note" hidden>Grab these at your PC. Watch Demo downloads to whichever device you press it on.</p>
+  <div class="wrap"><table>
+    <thead><tr><th>Match</th><th>Result</th><th>Highlights</th><th>Rating 2.0</th><th>K–D</th><th>ADR</th>
+      <th>Link expires</th><th></th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table></div>
+</main>
+<script>
+const WORDS = [["5k", "ACE", "ace"], ["4k", "4K", "k4"], ["3k", "3K", "k3"]];
+const opened = new Set();
+let data = {this_pc: false, rows: []};
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+
+function badges(h) {
+  return WORDS.filter(([k]) => h[k]).map(([k, word, cls]) =>
+    `<span class="b ${cls}">${h[k] > 1 ? h[k] + "× " : ""}${word}</span>`).join("");
+}
+function when(iso) {
+  const d = new Date(iso);
+  const time = d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+  return d.toDateString() === new Date().toDateString()
+    ? `Today, ${time}` : `${d.toLocaleDateString([], {day: "numeric", month: "short"})}, ${time}`;
+}
+function left(iso) {
+  const hours = (new Date(iso) - Date.now()) / 3600000;
+  return hours >= 48 ? `${Math.ceil(hours / 24)} days` : `${Math.max(1, Math.ceil(hours))} hours`;
+}
+function actions(r) {
+  if (r.state === "grabbed") {
+    return `<span class="got">✓ Got it${r.waiting_for ? `<small>rendering waits: ${esc(r.waiting_for)}</small>` : ""}</span>`;
+  }
+  if (r.state === "skipped") {
+    return `<span class="muted">Skipped</span> <button class="undo" data-act="undo" data-id="${esc(r.id)}">Undo</button>`;
+  }
+  const open = !data.this_pc ? "" : opened.has(r.id) ? `<span class="muted">Waiting for the download…</span>`
+    : `<a class="open" href="${esc(r.url)}" target="_blank" rel="noopener" data-open="${esc(r.id)}">Open</a>`;
+  return `${open}<button class="skip" data-act="skip" data-id="${esc(r.id)}">Skip</button>`;
+}
+function render() {
+  const pending = data.rows.filter(r => r.state === "ready" || r.state === "announced");
+  const count = pending.reduce((n, r) => n + r.highlights["3k"] + r.highlights["4k"] + r.highlights["5k"], 0);
+  const soonest = [...pending].sort((a, b) => a.expires_at.localeCompare(b.expires_at))[0];
+  const urgent = soonest && new Date(soonest.expires_at) - Date.now() <= 3 * 86400000;
+  document.getElementById("sum").textContent = pending.length
+    ? `${pending.length} match${pending.length > 1 ? "es" : ""} · ${count} Highlight${count > 1 ? "s" : ""}`
+      + (urgent ? ` · ${soonest.map} expires in ${left(soonest.expires_at)}` : "")
+    : "All caught up. New matches show up here after you play.";
+  document.getElementById("note").hidden = data.this_pc;
+  document.getElementById("rows").innerHTML = data.rows.map(r => {
+    const rating = r.rating >= 1.1 ? "good" : r.rating < 0.95 ? "bad" : "";
+    const soon = new Date(r.expires_at) - Date.now() <= 3 * 86400000;
+    return `<tr class="${r.state === "skipped" || r.state === "grabbed" ? "done" : ""}">
+      <td><b>${esc(r.map)}</b><small>${when(r.finished_at)}</small></td>
+      <td class="num ${r.won ? "good" : "bad"}">${r.won ? "W" : "L"} ${esc(r.score)}</td>
+      <td>${badges(r.highlights)}</td>
+      <td class="num ${rating}">${r.rating.toFixed(2)}</td>
+      <td class="num">${esc(r.kd)}</td>
+      <td class="num">${r.adr.toFixed(1)}</td>
+      <td><span class="${soon ? "warn" : ""}">${left(r.expires_at)}</span>${r.reminded ? '<span class="pill">Reminder</span>' : ""}</td>
+      <td class="act">${actions(r)}</td></tr>`;
+  }).join("");
+}
+async function load() {
+  try {
+    const response = await api("demos.json");
+    if (response.ok) { data = await response.json(); render(); }
+  } catch (e) {
+    document.getElementById("sum").textContent = "Can't reach clipper right now. Is it running?";
+  }
+}
+document.addEventListener("click", async e => {
+  const link = e.target.closest("a[data-open]");
+  if (link) { opened.add(link.dataset.open); setTimeout(render, 0); return; }
+  const button = e.target.closest("button[data-act]");
+  if (!button) return;
+  button.disabled = true;
+  await api(`demos/${button.dataset.id}/${button.dataset.act}`, {method: "POST"});
+  await load();
+});
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>

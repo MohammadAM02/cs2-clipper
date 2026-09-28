@@ -216,6 +216,26 @@ def test_api_window_403_from_a_non_loopback_client(client):
     assert response.status_code == 403
 
 
+# --- GET /api/window: what the open window's page polls every 2 s (Task 14) ------------------------
+
+
+def test_get_api_window_returns_the_contexts_request(tmp_path):
+    app = app_for(tmp_path, window_request=lambda: {"seq": 3, "page": "/reels"})
+    response = pc_get(app.test_client(), "/api/window")
+    assert response.status_code == 200
+    assert response.get_json() == {"seq": 3, "page": "/reels"}
+    assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_get_api_window_says_no_request_has_been_made_by_default(client):
+    assert pc_get(client, "/api/window").get_json() == {"seq": 0, "page": "/status"}
+
+
+def test_get_api_window_refuses_a_phone_and_a_foreign_host(client):
+    assert phone_get(client, "/api/window").status_code == 403
+    assert client.get("/api/window", base_url=PC, headers={"Host": "evil.example:8765"}).status_code == 403
+
+
 # --- no CORS, ever -----------------------------------------------------------------------------------
 
 

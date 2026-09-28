@@ -183,6 +183,7 @@ class WebContext:
     load_settings: Callable[[], Loaded] = lambda: Loaded(Config(), ())
     save_settings: Callable[[Mapping[str, object]], dict[str, str]] = lambda changes: {}
     port_in_use: Callable[[], int | None] = lambda: None
+    window_request: Callable[[], dict] = lambda: {"seq": 0, "page": "/status"}
 
 
 def _client_address() -> str:
@@ -407,6 +408,12 @@ def create_app(ctx: WebContext) -> Flask:
             return Response(status=400)
         ctx.open_window(page)
         return Response(status=204)
+
+    @app.get("/api/window")
+    def api_window_request():
+        """The latest request for a page. The page in the open window asks every 2 s (`app.js`), and
+        switches when `seq` has grown since it loaded. PC-only, like everything not on the phone list."""
+        return _no_store(jsonify(ctx.window_request()))
 
     return app
 

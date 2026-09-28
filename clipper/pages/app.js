@@ -27,3 +27,35 @@ function renderNav(current) {
     `<a href="${href}"${href === current ? ' class="on"' : ""}>${label}</a>`).join("");
   document.body.insertBefore(nav, document.body.firstChild);
 }
+
+// The app has one window. A request for a page (a notification button, the tray's Open, a second
+// start) is recorded by the app, and reaches the page in the open window here, within 2 s: it comes
+// to the front and goes to the page asked for. Only on the PC, and a page never reacts to the `seq` it
+// loaded with (spec: How the app runs, Two processes).
+const WINDOW_POLL_MS = 2000;
+
+function watchWindowRequests() {
+  if (!onThisPC()) return;
+  let seen = null;
+  async function poll() {
+    try {
+      const response = await api("/api/window");
+      if (response.ok) {
+        const request = await response.json();
+        if (seen === null) {
+          seen = request.seq;
+        } else if (request.seq > seen) {
+          seen = request.seq;
+          window.pywebview?.api?.front?.();
+          if (request.page !== location.pathname) location.href = request.page;
+        }
+      }
+    } catch (error) {
+      // the app is busy or has gone; ask again next time
+    }
+    setTimeout(poll, WINDOW_POLL_MS);
+  }
+  poll();
+}
+
+watchWindowRequests();

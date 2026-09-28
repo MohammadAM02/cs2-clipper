@@ -92,12 +92,22 @@ def cmd_highlights(cfg: Config, index: Index, key: str) -> int:
     return 0
 
 
+_OPEN_CHOICES = tuple(page.removeprefix("/") for page in app.PAGES)
+
+
+def _add_open_argument(target: argparse.ArgumentParser) -> None:
+    target.add_argument("--open", choices=_OPEN_CHOICES, default=None,
+                        help="show this page (asks the running copy, or starts the app and opens it)")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="clipper", description="Hands-off CS2 highlight clipper.")
+    _add_open_argument(parser)
     commands = parser.add_subparsers(dest="command")
     run_parser = commands.add_parser("run", help="run the app")
     run_parser.add_argument("--headless", action="store_true",
                             help="no tray or window: the worker and the web server only")
+    _add_open_argument(run_parser)
     commands.add_parser("status", help="show every Demo's state and the Gate")
     commands.add_parser("retry", help="send a failed Demo back through").add_argument(
         "demo", help="index id or file name")
@@ -107,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command in (None, "run"):
-        return app.run_headless()
+        return app.run_headless(f"/{args.open}" if args.open else None)
 
     copied = move_in.on_start()
     if copied:

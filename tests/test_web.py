@@ -171,6 +171,39 @@ def test_skip_with_the_marker_succeeds_from_the_phone(client):
     assert phone_post(client, f"/demos/{FIRST}/skip", headers=MARKED).status_code == 204
 
 
+# --- /api/window: PC-only, marker required, Task 10's hand-over lands here -------------------------
+
+
+def test_api_window_204_and_recorded(tmp_path):
+    calls = []
+    app = app_for(tmp_path, open_window=lambda page: calls.append(page))
+    response = app.test_client().post("/api/window", base_url=PC, headers=MARKED, json={"page": "/reels"})
+    assert response.status_code == 204
+    assert calls == ["/reels"]
+
+
+def test_api_window_400_for_a_page_not_in_pages(client):
+    assert pc_post(client, "/api/window", headers=MARKED, json={"page": "/nope"}).status_code == 400
+
+
+def test_api_window_400_for_a_missing_page(client):
+    assert pc_post(client, "/api/window", headers=MARKED, json={}).status_code == 400
+
+
+def test_api_window_400_for_a_non_json_body(client):
+    response = pc_post(client, "/api/window", headers=MARKED, data=b"not json")
+    assert response.status_code == 400
+
+
+def test_api_window_403_without_the_marker(client):
+    assert pc_post(client, "/api/window", json={"page": "/status"}).status_code == 403
+
+
+def test_api_window_403_from_a_non_loopback_client(client):
+    response = phone_post(client, "/api/window", headers=MARKED, json={"page": "/status"})
+    assert response.status_code == 403
+
+
 # --- no CORS, ever -----------------------------------------------------------------------------------
 
 

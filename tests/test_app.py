@@ -7,16 +7,22 @@ from __future__ import annotations
 
 import logging
 import socket
+import threading
 from dataclasses import dataclass, field
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
 from clipper import paths, web
-from clipper.app import AlreadyRunning, App, gate_reasons, run_headless, single_instance, start_match_alerts
+from clipper.app import (
+    AlreadyRunning, App, find_running, gate_reasons, hand_over, run_headless, single_instance,
+    start_match_alerts,
+)
 from clipper.config import Config
 from clipper.index import Index
 from clipper.settings import SettingsStore
 from clipper.state import AppState, Rendering
+from clipper.web import WebContext, WebServer, create_app
 from clipper.worker import StopRequest
 
 
@@ -259,6 +265,25 @@ def test_quit_after_render_then_now_ends_up_now(world):
     assert world.state.snapshot().quitting == "now"
 
 
+# --- open_window: headless for now (Task 14 replaces it with the app window) -----------------------
+
+
+def test_open_window_opens_the_browser_when_the_page_port_is_set(world, monkeypatch):
+    opened = []
+    monkeypatch.setattr("clipper.app.webbrowser.open", lambda url: opened.append(url))
+    world.app.page_port = 8765
+    world.app.open_window("/reels")
+    assert opened == ["http://127.0.0.1:8765/reels"]
+
+
+def test_open_window_does_nothing_without_a_page_port(world, monkeypatch):
+    opened = []
+    monkeypatch.setattr("clipper.app.webbrowser.open", lambda url: opened.append(url))
+    world.app.page_port = None
+    world.app.open_window("/status")
+    assert opened == []
+
+
 # --- start_web: every port taken -------------------------------------------------------------------
 
 
@@ -294,6 +319,49 @@ def test_start_web_with_every_port_taken_turns_pages_off_and_the_next_worker_get
         index.close()
 
 
+# --- find_running / hand_over: against a real WebServer, and against nothing of ours --------------
+
+
+def test_hand_over_finds_the_running_copy_and_the_page_arrives(tmp_path):
+    calls = []
+    ctx = WebContext(index_path=tmp_path / "clipper.sqlite", gate_reasons=lambda: (),
+                     open_window=lambda page: calls.append(page))
+    server = WebServer(create_app(ctx), 0, host="127.0.0.1", tries=1)
+    server.start()
+    try:
+        assert hand_over("/reels", [server.port]) is True
+        assert calls == ["/reels"]
+        assert find_running([server.port]) == server.port
+    finally:
+        server.stop()
+
+
+def test_hand_over_skips_a_foreign_server_that_answers_health_without_our_app_field():
+    class ForeignHealth(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            body = b'{"ok": true}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            pass
+
+    foreign = HTTPServer(("127.0.0.1", 0), ForeignHealth)
+    threading.Thread(target=foreign.serve_forever, daemon=True).start()
+    try:
+        assert hand_over("/reels", [foreign.server_address[1]]) is False
+    finally:
+        foreign.shutdown()
+        foreign.server_close()
+
+
+def test_hand_over_with_nothing_listening_returns_false():
+    assert hand_over("/reels", [_free_port()]) is False
+
+
 # --- run_headless --------------------------------------------------------------------------------
 
 
@@ -301,3 +369,21 @@ def test_run_headless_returns_0_with_a_message_when_the_lock_is_already_held(cap
     with single_instance(paths.lock_file()):
         assert run_headless() == 0
     assert "already running" in capsys.readouterr().err
+
+
+def test_run_headless_hands_over_to_the_running_copy_and_passes_the_page(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr("clipper.app.hand_over", lambda page, ports: calls.append(page) or True)
+    with single_instance(paths.lock_file()):
+        assert run_headless("/reels") == 0
+    assert calls == ["/reels"]
+    assert "already running" in capsys.readouterr().err
+
+
+def test_run_headless_reports_when_the_running_copys_pages_do_not_answer(monkeypatch, capsys):
+    monkeypatch.setattr("clipper.app.hand_over", lambda page, ports: False)
+    with single_instance(paths.lock_file()):
+        assert run_headless() == 0
+    err = capsys.readouterr().err
+    assert "already running" in err
+    assert "do not answer" in err

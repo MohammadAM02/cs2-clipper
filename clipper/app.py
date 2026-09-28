@@ -32,17 +32,20 @@ SOFTWARE.
 """
 from __future__ import annotations
 
+import json
 import logging
 import msvcrt
 import sys
 import threading
 import time
-from collections.abc import Callable, Iterator
+import urllib.request
+import webbrowser
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 
-from clipper import applog, checks, csdm_db, move_in, paths, protect, web
+from clipper import applog, checks, csdm_db, move_in, paths, protect, settings, web
 from clipper.alerts import MatchAlerts
 from clipper.config import Config
 from clipper.csdm_cli import CsdmCli
@@ -61,6 +64,41 @@ from clipper.unpack import unpack
 from clipper.worker import Services, StopRequest, Worker
 
 log = logging.getLogger(__name__)
+
+PAGES = ("/status", "/demos", "/reels", "/settings")
+
+
+def find_running(ports: Iterable[int], *, timeout: float = 1.0) -> int | None:
+    """The first port among `ports` whose `/health` answers ``{"ok": true, "app": "cs2-clipper"}``
+    (spec: How the app runs, Starting -- Aegis's `/health` check). Anything else -- nothing
+    listening, another app, a bad answer -- is skipped."""
+    for port in ports:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=timeout) as response:
+                body = json.loads(response.read())
+        except (OSError, ValueError):
+            continue
+        if isinstance(body, dict) and body.get("ok") is True and body.get("app") == "cs2-clipper":
+            return port
+    return None
+
+
+def hand_over(page: str | None, ports: Iterable[int]) -> bool:
+    """Finds the running copy among `ports` and asks it to show `page` (or Status). True once it
+    answers 204; False when none of `ports` is a running copy, or it refuses."""
+    port = find_running(ports)
+    if port is None:
+        return False
+    body = json.dumps({"page": page or "/status"}).encode("utf-8")
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/api/window", data=body, method="POST",
+        headers={"Content-Type": "application/json", web.MARKER_HEADER: "1"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=1.0) as response:
+            return response.status == 204
+    except OSError:   # urllib.error.HTTPError (a 4xx/5xx "refusal") is one too
+        return False
 
 
 class AlreadyRunning(Exception):
@@ -174,6 +212,7 @@ class App:
         ctx = web.WebContext(
             index_path=self._index_path,
             gate_reasons=lambda: gate_reasons(self.settings.current().config, self._probe),
+            open_window=self.open_window,
         )
         try:
             self._web = web.WebServer(web.create_app(ctx), self.settings.current().config.page_port,
@@ -196,6 +235,13 @@ class App:
     def close(self) -> None:
         if self._web is not None:
             self._web.stop()
+
+    def open_window(self, page: str) -> None:
+        """Headless for now: opens `page` in the default browser (nothing when the web server has no
+        port). A second start (`hand_over`) and, once there is one, the tray reach this through
+        `/api/window`. Task 14 replaces it with the app window."""
+        if self.page_port is not None:
+            webbrowser.open(f"http://127.0.0.1:{self.page_port}{page}")
 
     # --- the worker thread -----------------------------------------------------------------------
 
@@ -271,18 +317,19 @@ class App:
         return self.stop.mode
 
 
-def run_headless() -> int:
+def run_headless(open_page: str | None = None) -> int:
     """`clipper run` / `clipper run --headless`: the worker and the web server, no tray or window
-    (spec: The terminal; How the app runs, Starting)."""
+    (spec: The terminal; How the app runs, Starting). A second start (`AlreadyRunning`) hands over to
+    the running copy instead, asking it to show `open_page` (Status when None)."""
     try:
         with single_instance(paths.lock_file()):
             applog.setup(paths.logs_dir())
             move_in.on_start()
-            settings = SettingsStore(paths.settings_file())
-            for warning in settings.current().warnings:
+            store = SettingsStore(paths.settings_file())
+            for warning in store.current().warnings:
                 log.warning(warning)
 
-            app = App(settings, index_path=paths.index_file())
+            app = App(store, index_path=paths.index_file())
             app.start_web()
             app.start_worker()
 
@@ -300,5 +347,10 @@ def run_headless() -> int:
             app.close()
             return 0
     except AlreadyRunning as exc:
-        print(exc, file=sys.stderr)
+        page_port = settings.load(paths.settings_file()).config.page_port
+        ports = range(page_port, page_port + web.PORTS_TO_TRY)
+        if hand_over(open_page, ports):
+            print("CS2 Clipper is already running; showing it", file=sys.stderr)
+        else:
+            print(f"{exc}, but its pages do not answer", file=sys.stderr)
         return 0

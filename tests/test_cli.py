@@ -90,18 +90,35 @@ def test_status_says_the_clips_folder_is_not_set_instead_of_crashing(monkeypatch
 
 def test_no_subcommand_runs_the_app(monkeypatch):
     calls = []
-    monkeypatch.setattr("clipper.cli.app.run_headless", lambda: calls.append(True) or 0)
+    monkeypatch.setattr("clipper.cli.app.run_headless", lambda open_page=None: calls.append(open_page) or 0)
     assert main([]) == 0
-    assert calls == [True]
+    assert calls == [None]
 
 
 def test_run_headless_runs_the_app(monkeypatch):
     calls = []
-    monkeypatch.setattr("clipper.cli.app.run_headless", lambda: calls.append(True) or 0)
+    monkeypatch.setattr("clipper.cli.app.run_headless", lambda open_page=None: calls.append(open_page) or 0)
     assert main(["run", "--headless"]) == 0
-    assert calls == [True]
+    assert calls == [None]
 
 
 def test_install_is_no_longer_a_command():
     with pytest.raises(SystemExit):
         main(["install"])
+
+
+# --- --open: top-level, and on the run subcommand ---------------------------------------------------
+
+
+def test_open_reels_with_no_subcommand_reaches_run_headless_as_reels(monkeypatch):
+    calls = []
+    monkeypatch.setattr("clipper.cli.app.run_headless", lambda open_page=None: calls.append(open_page) or 0)
+    assert main(["--open", "reels"]) == 0
+    assert calls == ["/reels"]
+
+
+def test_run_open_reels_reaches_run_headless_as_reels(monkeypatch):
+    calls = []
+    monkeypatch.setattr("clipper.cli.app.run_headless", lambda open_page=None: calls.append(open_page) or 0)
+    assert main(["run", "--open", "reels"]) == 0
+    assert calls == ["/reels"]

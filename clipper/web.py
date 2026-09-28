@@ -59,6 +59,8 @@ _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _MATCH_ID_PATTERN = r"1-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 # Flask endpoint names (not paths) reachable from another device (spec: Reach from other devices).
 _PHONE_ENDPOINTS = frozenset({"demos_page", "demos_json", "demos_action", "app_css", "app_js"})
+# Kept in step with app.PAGES by value; app.py can't be imported here without a cycle (it imports web.py).
+_WINDOW_PAGES = ("/status", "/demos", "/reels", "/settings")
 
 
 class _MatchIdConverter(BaseConverter):
@@ -113,6 +115,7 @@ class WebContext:
     gate_reasons: Callable[[], tuple[str, ...]]
     own_addresses: Callable[[], set[str]] = own_addresses
     clock: Callable[[], datetime] = utc_now
+    open_window: Callable[[str], None] = lambda page: None
 
 
 def _client_address() -> str:
@@ -187,6 +190,17 @@ def create_app(ctx: WebContext) -> Flask:
     @app.get("/app.js")
     def app_js():
         return Response((PAGES_DIR / "app.js").read_bytes(), mimetype="text/javascript")
+
+    @app.post("/api/window")
+    def api_window():
+        """PC-only (not a phone endpoint), marker required (the write guard above). A second start
+        (Task 10's `hand_over`) uses this to ask the running copy to show a page."""
+        body = request.get_json(silent=True)
+        page = body.get("page") if isinstance(body, dict) else None
+        if page not in _WINDOW_PAGES:
+            return Response(status=400)
+        ctx.open_window(page)
+        return Response(status=204)
 
     return app
 

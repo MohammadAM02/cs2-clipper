@@ -50,6 +50,13 @@ def test_recent_returns_the_newest_limit_lines_oldest_first(tmp_path):
     assert [line.rsplit(": ", 1)[-1] for line in lines] == ["line 2", "line 3", "line 4"]
 
 
+def test_recent_with_zero_or_negative_limit_returns_nothing(tmp_path):
+    applog.setup(tmp_path)
+    logging.getLogger("clipper.test").info("hello")
+    assert applog.recent(0) == []
+    assert applog.recent(-1) == []
+
+
 def test_the_ring_keeps_only_lines_kept(tmp_path):
     applog.setup(tmp_path)
     log = logging.getLogger("clipper.test")

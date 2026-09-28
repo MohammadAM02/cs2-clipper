@@ -84,7 +84,10 @@ def setup(logs_dir: Path) -> list[logging.Handler]:
 
 
 def recent(limit: int = 200) -> list[str]:
-    """The newest `limit` formatted lines from the ring, oldest first."""
+    """The newest `limit` formatted lines from the ring, oldest first. `limit <= 0` gives []
+    (a plain `items[-limit:]` would misread `-0` as "no limit" and return everything)."""
+    if limit <= 0:
+        return []
     with _lock:
         items = list(_buffer)
     return items[-limit:]

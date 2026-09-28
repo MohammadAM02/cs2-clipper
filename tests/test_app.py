@@ -265,6 +265,72 @@ def test_quit_after_render_then_now_ends_up_now(world):
     assert world.state.snapshot().quitting == "now"
 
 
+# --- pause / resume: a short-lived Index plus the shared state (Task 11) ---------------------------
+
+
+def test_pause_marks_the_index_and_the_state(world):
+    world.app.pause()
+    assert world.index.paused_by() == "you"
+    assert world.state.snapshot().paused_by == "you"
+
+
+def test_resume_clears_the_index_and_the_state(world):
+    world.index.pause("you")
+    world.state.set_paused_by("you")
+
+    world.app.resume()
+
+    assert world.index.paused_by() is None
+    assert world.state.snapshot().paused_by is None
+
+
+# --- checks: cached for 15 s (Task 11) ---------------------------------------------------------------
+
+
+def test_checks_is_cached_and_recomputed_after_15_seconds(world, monkeypatch):
+    calls = []
+
+    def fake_run_checks(cfg, *, alerts_status, releases):
+        calls.append(releases)
+        return []
+
+    monkeypatch.setattr("clipper.app.checks.run_checks", fake_run_checks)
+
+    world.app.checks()
+    world.app.checks()
+    assert len(calls) == 1
+    assert calls[0] is world.app.releases
+
+    world.clock.advance(15.0)
+    world.app.checks()
+    assert len(calls) == 2
+
+
+def test_checks_reads_the_alerts_status_flag_from_the_index(world, monkeypatch):
+    world.index.set_flag("alerts_status", "on")
+    seen = []
+    monkeypatch.setattr(
+        "clipper.app.checks.run_checks",
+        lambda cfg, *, alerts_status, releases: seen.append(alerts_status) or [],
+    )
+
+    world.app.checks()
+
+    assert seen == ["on"]
+
+
+# --- releases: a daemon thread that calls refresh_if_due at start (Task 11) -------------------------
+
+
+def test_start_releases_calls_refresh_if_due_promptly(world):
+    called = threading.Event()
+    world.app.releases.refresh_if_due = called.set
+
+    world.app.start_releases()
+
+    assert called.wait(timeout=2.0)
+
+
 # --- open_window: headless for now (Task 14 replaces it with the app window) -----------------------
 
 

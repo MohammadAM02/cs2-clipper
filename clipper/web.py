@@ -42,18 +42,23 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import psutil
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Response, jsonify, redirect, request
 from waitress.server import create_server
 from werkzeug.routing import BaseConverter
 
+from clipper import applog
 from clipper.alerts import LINK_LIFETIME, map_label, utc_now
+from clipper.checks import Check
 from clipper.index import Index
+from clipper.state import Snapshot, summary
 
 MARKER_HEADER = "X-CS2-Clipper"
 PAGES_DIR = Path(__file__).with_name("pages")
 PORTS_TO_TRY = 10
 KEEP_DECIDED = timedelta(hours=24)
 IN_PIPELINE = ("spotted", "unpacked", "analyzed", "scored", "rendering", "joined")
+NOT_LISTED = ("done", "skipped")               # Status's Demos list leaves these out (spec: Pages, Status)
+PERSPECTIVES = ("player", "enemy")
 
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _MATCH_ID_PATTERN = r"1-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
@@ -106,6 +111,28 @@ def page_rows(index: Index, now: datetime, waiting_for: tuple[str, ...]) -> list
     return rows
 
 
+def status_demos(index: Index) -> list[dict]:
+    """Status's Demos list: every Demo not done or skipped, newest first, with the latest Render Job
+    per Perspective (none before rendering has been queued)."""
+    rows = [row for row in index.all_demos() if row["state"] not in NOT_LISTED]
+    rows.reverse()
+    demos = []
+    for row in rows:
+        match = index.match(row["match_checksum"]) if row["match_checksum"] else None
+        jobs = []
+        for perspective in PERSPECTIVES:
+            job = index.latest_render(row["id"], perspective)
+            if job is not None:
+                jobs.append({"perspective": perspective, "attempt": job["attempt"], "state": job["state"],
+                            "failure": job["failure"]})
+        demos.append({
+            "id": row["id"], "file_name": row["file_name"], "state": row["state"],
+            "map": map_label(match["map"]) if match is not None else None,
+            "error": row["last_error"], "retry": row["state"] == "failed", "jobs": jobs,
+        })
+    return demos
+
+
 @dataclass
 class WebContext:
     """What the pages need from the app. Later tasks add fields here, each with a default, for the
@@ -116,6 +143,12 @@ class WebContext:
     own_addresses: Callable[[], set[str]] = own_addresses
     clock: Callable[[], datetime] = utc_now
     open_window: Callable[[str], None] = lambda page: None
+    snapshot: Callable[[], Snapshot] = Snapshot
+    warnings: Callable[[], tuple[str, ...]] = tuple
+    checks: Callable[[], list[Check]] = list
+    quit: Callable[[str | None], str] = lambda mode: "now"
+    resume: Callable[[], None] = lambda: None
+    log_lines: Callable[[int], list[str]] = applog.recent
 
 
 def _client_address() -> str:
@@ -155,6 +188,72 @@ def create_app(ctx: WebContext) -> Flask:
     @app.get("/health")
     def health():
         return _no_store(jsonify(ok=True, app="cs2-clipper"))
+
+    @app.get("/")
+    def root():
+        return redirect("/status")
+
+    @app.get("/status")
+    def status_page():
+        return _no_store(Response((PAGES_DIR / "status.html").read_bytes(), mimetype="text/html"))
+
+    @app.get("/api/status")
+    def api_status():
+        snapshot = ctx.snapshot()
+        rendering = None
+        if snapshot.rendering is not None:
+            rendering = {"map": map_label(snapshot.rendering.map_name),
+                        "perspective": snapshot.rendering.perspective, "started_at": snapshot.rendering.started_at}
+        index = Index(ctx.index_path)
+        try:
+            demos = status_demos(index)
+        finally:
+            index.close()
+        body = {
+            "summary": summary(snapshot),
+            "rendering": rendering,
+            "paused_by": snapshot.paused_by,
+            "quitting": snapshot.quitting,
+            "problems": list(snapshot.problems),
+            "warnings": list(ctx.warnings()),
+            "pages_off": snapshot.pages_off,
+            "checks": [{"name": c.name, "ok": c.ok, "detail": c.detail, "hint": c.hint} for c in ctx.checks()],
+            "demos": demos,
+        }
+        return _no_store(jsonify(body))
+
+    @app.get("/api/log")
+    def api_log():
+        return _no_store(jsonify(lines=ctx.log_lines(200)))
+
+    @app.post("/api/demos/<int:demo_id>/retry")
+    def api_demo_retry(demo_id: int):
+        index = Index(ctx.index_path)
+        try:
+            demo = index.demo(demo_id)
+            if demo is None:
+                return Response(status=404)
+            if demo["state"] != "failed":
+                response = jsonify(error=f"demo {demo_id} has not failed")
+                response.status_code = 409
+                return _no_store(response)
+            state = index.retry(demo_id)
+        finally:
+            index.close()
+        return _no_store(jsonify(state=state))
+
+    @app.post("/api/resume")
+    def api_resume():
+        ctx.resume()
+        return Response(status=204)
+
+    @app.post("/api/quit")
+    def api_quit():
+        body = request.get_json(silent=True)
+        mode = body.get("mode") if isinstance(body, dict) else None
+        if mode is not None and mode not in ("now", "after_render"):
+            return Response(status=400)
+        return _no_store(jsonify(result=ctx.quit(mode)))
 
     @app.get("/demos")
     def demos_page():

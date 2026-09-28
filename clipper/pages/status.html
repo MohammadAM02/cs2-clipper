@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Status</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<script src="/app.js"></script>
+<script>renderNav("/status");</script>
+<main>
+  <p class="brand"><span>CS2</span>clipper</p>
+  <h1>Status</h1>
+  <p class="sum" id="now">Loading…</p>
+  <div id="notice"></div>
+  <p>
+    <button class="skip" id="resume" hidden>Resume</button>
+    <button class="skip" id="quit">Quit</button>
+  </p>
+  <p id="quit-choice" hidden>
+    <button class="skip" id="quit-now">Quit now (the render is redone later)</button>
+    <button class="skip" id="quit-after">Quit when this render finishes</button>
+  </p>
+
+  <h2>Checks</h2>
+  <ul id="checks"></ul>
+
+  <h2>Demos</h2>
+  <div id="demos"><p class="sum">Nothing in progress.</p></div>
+
+  <h2>Log</h2>
+  <pre id="log"></pre>
+</main>
+<script>
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+let quitRequested = false;
+
+function markOf(ok) { return ok === true ? "✓" : ok === false ? "✗" : "–"; }
+function classOf(ok) { return ok === true ? "good" : ok === false ? "bad" : "muted"; }
+
+function renderCheck(c) {
+  const hint = c.ok !== true && c.hint ? `<small>${esc(c.hint)}</small>` : "";
+  return `<li><span class="${classOf(c.ok)}">${markOf(c.ok)}</span> <b>${esc(c.name)}</b> ${esc(c.detail)}${hint}</li>`;
+}
+
+function renderJob(j) {
+  return `${esc(j.perspective)}: ${esc(j.state)} (attempt ${j.attempt})`;
+}
+
+function renderDemo(d) {
+  const jobs = d.jobs.map(renderJob).join(", ");
+  const error = d.error ? `<small class="bad">${esc(d.error)}</small>` : "";
+  const retry = d.retry ? `<button class="skip" data-retry="${d.id}">Retry</button>` : "";
+  return `<div class="row"><b>#${d.id} ${esc(d.file_name)}</b>
+    <span>${esc(d.state)}${d.map ? " · " + esc(d.map) : ""}</span>
+    ${jobs ? `<div>${esc(jobs)}</div>` : ""}${error}${retry}</div>`;
+}
+
+function renderStatus(data) {
+  let now = esc(data.summary);
+  if (data.rendering) {
+    const minutes = Math.max(0, Math.round(Date.now() / 60000 - data.rendering.started_at / 60));
+    now += ` <small>for ${minutes} min</small>`;
+  }
+  document.getElementById("now").innerHTML = now;
+  document.getElementById("resume").hidden = data.paused_by === null;
+
+  const notices = [...data.problems, ...data.warnings];
+  if (data.pages_off) notices.push(data.pages_off);
+  document.getElementById("notice").innerHTML = notices.length
+    ? `<ul>${notices.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "";
+
+  document.getElementById("checks").innerHTML = data.checks.map(renderCheck).join("");
+  document.getElementById("demos").innerHTML = data.demos.length
+    ? data.demos.map(renderDemo).join("") : '<p class="sum">Nothing in progress.</p>';
+}
+
+function stopPolling() {
+  clearInterval(statusTimer);
+  clearInterval(logTimer);
+  document.getElementById("now").textContent = "Quitting…";
+  document.getElementById("quit-choice").hidden = true;
+  document.getElementById("quit").hidden = true;
+  document.getElementById("resume").hidden = true;
+}
+
+async function loadStatus() {
+  try {
+    const response = await api("api/status");
+    if (!response.ok) throw new Error("bad response");
+    renderStatus(await response.json());
+  } catch (e) {
+    if (quitRequested) stopPolling();
+  }
+}
+
+async function loadLog() {
+  try {
+    const response = await api("api/log");
+    if (!response.ok) throw new Error("bad response");
+    const data = await response.json();
+    const pre = document.getElementById("log");
+    const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
+    pre.textContent = data.lines.join("\n");
+    if (atBottom) pre.scrollTop = pre.scrollHeight;
+  } catch (e) {
+    if (quitRequested) stopPolling();
+  }
+}
+
+async function sendQuit(mode) {
+  const response = await api("api/quit", {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({mode}),
+  });
+  const data = await response.json();
+  if (data.result === "ask") {
+    document.getElementById("quit-choice").hidden = false;
+  } else {
+    quitRequested = true;
+    document.getElementById("quit-choice").hidden = true;
+  }
+}
+
+document.getElementById("resume").addEventListener("click", async () => {
+  await api("api/resume", {method: "POST"});
+  loadStatus();
+});
+document.getElementById("quit").addEventListener("click", () => sendQuit(null));
+document.getElementById("quit-now").addEventListener("click", () => sendQuit("now"));
+document.getElementById("quit-after").addEventListener("click", () => sendQuit("after_render"));
+document.getElementById("demos").addEventListener("click", async e => {
+  const button = e.target.closest("button[data-retry]");
+  if (!button) return;
+  button.disabled = true;
+  await api(`api/demos/${button.dataset.retry}/retry`, {method: "POST"});
+  loadStatus();
+});
+
+loadStatus();
+loadLog();
+const statusTimer = setInterval(loadStatus, 2000);
+const logTimer = setInterval(loadLog, 5000);
+</script>
+</body>
+</html>

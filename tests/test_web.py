@@ -12,8 +12,10 @@ from pathlib import Path
 
 import pytest
 
+from clipper.checks import Check
 from clipper.index import Index
-from clipper.model import FaceitStats
+from clipper.model import FaceitStats, MatchInfo
+from clipper.state import Rendering, Snapshot
 from clipper.web import MARKER_HEADER, WebContext, WebServer, create_app
 
 NOW = datetime(2026, 9, 25, 20, 0, tzinfo=timezone.utc)
@@ -113,7 +115,7 @@ def test_a_grabbed_demo_says_what_rendering_waits_for(client, index):
 
 
 def test_nothing_else_is_served(client):
-    for path in ("/", "/demos/../clipper.sqlite", "/demos.json/x"):
+    for path in ("/demos/../clipper.sqlite", "/demos.json/x"):
         assert pc_get(client, path).status_code == 404
     assert pc_post(client, "/demos/not-a-match/skip", headers=MARKED).status_code == 404
     assert pc_post(client, f"/demos/{FIRST}/delete", headers=MARKED).status_code == 404
@@ -275,3 +277,169 @@ def test_webserver_stop_frees_the_port(tmp_path):
         probe.bind(("127.0.0.1", port))   # raises OSError if the port is still held
     finally:
         probe.close()
+
+
+# --- Status page (Task 11) ------------------------------------------------------------------------
+
+MATCH_CHECKSUM = "aea4e59ccfc6c962"
+
+
+def _add_demo(index, name="1-status.dem.zst", sha="c" * 64):
+    return index.add_demo(name, sha, Path("E:/cs2clips/demos") / name)
+
+
+def test_root_redirects_to_status(client):
+    response = pc_get(client, "/")
+    assert response.status_code == 302
+    assert response.headers["Location"].endswith("/status")
+
+
+def test_status_page_is_served(client):
+    response = pc_get(client, "/status")
+    assert response.status_code == 200
+    assert response.content_type == "text/html; charset=utf-8"
+
+
+def test_api_status_shape_and_values(tmp_path, index):
+    demo_id = _add_demo(index)
+    index.save_match(MatchInfo(checksum=MATCH_CHECKSUM, map_name="de_mirage", played_at=NOW,
+                               team_score=13, opponent_score=5))
+    index.advance(demo_id, "rendering", match_checksum=MATCH_CHECKSUM)
+    job_id = index.queue_render(demo_id, "player", attempt=1)
+    index.start_render(job_id, Path("E:/out"), Path("E:/log.txt"))
+
+    snapshot = Snapshot(problems=(), paused_by=None, rendering=Rendering("de_mirage", "player", 1790000000.0),
+                        quitting=None, pages_off=None)
+    checks = [Check("HLAE", True, "2.192.6 (latest)"), Check("Postgres", False, "not running", "start it")]
+    app = app_for(tmp_path, snapshot=lambda: snapshot, warnings=lambda: ("settings.json: top_n bad",),
+                 checks=lambda: checks)
+    data = pc_get(app.test_client(), "/api/status").get_json()
+
+    assert data["summary"] == "Rendering Mirage (player view)"
+    assert data["rendering"] == {"map": "Mirage", "perspective": "player", "started_at": 1790000000.0}
+    assert (data["paused_by"], data["quitting"], data["pages_off"]) == (None, None, None)
+    assert data["problems"] == []
+    assert data["warnings"] == ["settings.json: top_n bad"]
+    assert data["checks"] == [
+        {"name": "HLAE", "ok": True, "detail": "2.192.6 (latest)", "hint": ""},
+        {"name": "Postgres", "ok": False, "detail": "not running", "hint": "start it"},
+    ]
+    demo = next(d for d in data["demos"] if d["id"] == demo_id)
+    assert demo == {
+        "id": demo_id, "file_name": "1-status.dem.zst", "state": "rendering", "map": "Mirage",
+        "error": None, "retry": False,
+        "jobs": [{"perspective": "player", "attempt": 1, "state": "running", "failure": None}],
+    }
+
+
+def test_api_status_demos_are_filtered_to_unfinished_and_ordered_newest_first(tmp_path, index):
+    done = _add_demo(index, name="1-done.dem.zst", sha="d" * 64)
+    index.advance(done, "done")
+    skipped = _add_demo(index, name="1-skipped.dem.zst", sha="e" * 64)
+    index.advance(skipped, "skipped")
+    older = _add_demo(index, name="1-older.dem.zst", sha="f" * 64)
+    newer = _add_demo(index, name="1-newer.dem.zst", sha="a1" * 32)
+
+    data = pc_get(app_for(tmp_path).test_client(), "/api/status").get_json()
+
+    assert [d["id"] for d in data["demos"]] == [newer, older]
+
+
+def test_api_status_a_failed_demo_shows_its_error_and_can_retry_and_has_no_jobs_before_rendering(tmp_path, index):
+    demo_id = _add_demo(index)
+    index.fail(demo_id, "boom: something broke")
+
+    data = pc_get(app_for(tmp_path).test_client(), "/api/status").get_json()
+
+    demo = next(d for d in data["demos"] if d["id"] == demo_id)
+    assert (demo["state"], demo["error"], demo["retry"], demo["map"], demo["jobs"]) == (
+        "failed", "boom: something broke", True, None, [])
+
+
+def test_api_status_refuses_a_phone(client):
+    assert phone_get(client, "/api/status").status_code == 403
+
+
+def test_api_log_returns_the_lines_asking_for_200(tmp_path):
+    app = app_for(tmp_path, log_lines=lambda n: [f"limit={n}", "a line"])
+    response = pc_get(app.test_client(), "/api/log")
+    assert response.status_code == 200
+    assert response.get_json() == {"lines": ["limit=200", "a line"]}
+
+
+def test_api_log_refuses_a_phone(client):
+    assert phone_get(client, "/api/log").status_code == 403
+
+
+def test_retry_replies_200_with_the_new_state(tmp_path, index):
+    demo_id = _add_demo(index)
+    index.fail(demo_id, "boom")
+    response = pc_post(app_for(tmp_path).test_client(), f"/api/demos/{demo_id}/retry", headers=MARKED)
+    assert response.status_code == 200
+    assert response.get_json() == {"state": "spotted"}
+    assert index.demo(demo_id)["state"] == "spotted"
+
+
+def test_retry_on_a_demo_that_has_not_failed_is_409(tmp_path, index):
+    demo_id = _add_demo(index)
+    response = pc_post(app_for(tmp_path).test_client(), f"/api/demos/{demo_id}/retry", headers=MARKED)
+    assert response.status_code == 409
+    assert "error" in response.get_json()
+
+
+def test_retry_on_an_unknown_demo_is_404(tmp_path):
+    response = pc_post(app_for(tmp_path).test_client(), "/api/demos/999/retry", headers=MARKED)
+    assert response.status_code == 404
+
+
+def test_retry_refuses_a_phone_and_needs_the_marker(tmp_path, index):
+    demo_id = _add_demo(index)
+    index.fail(demo_id, "boom")
+    app = app_for(tmp_path)
+    assert pc_post(app.test_client(), f"/api/demos/{demo_id}/retry").status_code == 403
+    assert phone_post(app.test_client(), f"/api/demos/{demo_id}/retry", headers=MARKED).status_code == 403
+
+
+def test_resume_calls_the_context_and_replies_204(tmp_path):
+    calls = []
+    app = app_for(tmp_path, resume=lambda: calls.append(True))
+    response = pc_post(app.test_client(), "/api/resume", headers=MARKED)
+    assert response.status_code == 204
+    assert calls == [True]
+
+
+def test_resume_refuses_a_phone_and_needs_the_marker(client):
+    assert pc_post(client, "/api/resume").status_code == 403
+    assert phone_post(client, "/api/resume", headers=MARKED).status_code == 403
+
+
+def test_quit_passes_the_mode_through_and_returns_the_result(tmp_path):
+    calls = []
+    app = app_for(tmp_path, quit=lambda mode: calls.append(mode) or "ask")
+    response = pc_post(app.test_client(), "/api/quit", headers=MARKED, json={})
+    assert response.status_code == 200
+    assert response.get_json() == {"result": "ask"}
+    assert calls == [None]
+
+    pc_post(app.test_client(), "/api/quit", headers=MARKED, json={"mode": "now"})
+    assert calls == [None, "now"]
+
+    pc_post(app.test_client(), "/api/quit", headers=MARKED, json={"mode": "after_render"})
+    assert calls == [None, "now", "after_render"]
+
+
+def test_quit_with_a_bad_mode_is_400_and_does_not_call_the_context(tmp_path):
+    calls = []
+    app = app_for(tmp_path, quit=lambda mode: calls.append(mode) or "now")
+    response = pc_post(app.test_client(), "/api/quit", headers=MARKED, json={"mode": "later"})
+    assert response.status_code == 400
+    assert calls == []
+
+
+def test_quit_refuses_a_phone_and_needs_the_marker(client):
+    assert pc_post(client, "/api/quit", json={}).status_code == 403
+    assert phone_post(client, "/api/quit", headers=MARKED, json={}).status_code == 403
+
+
+def test_status_and_new_routes_answer_403_on_a_foreign_host(client):
+    assert client.get("/status", base_url=PC, headers={"Host": "evil.example:8765"}).status_code == 403

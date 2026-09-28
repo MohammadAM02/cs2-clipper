@@ -66,6 +66,8 @@ from clipper.worker import Services, StopRequest, Worker
 log = logging.getLogger(__name__)
 
 PAGES = ("/status", "/demos", "/reels", "/settings")
+CHECKS_CACHE_SECONDS = 15.0            # the Status page polls every 2 s; some checks are not free
+RELEASES_INTERVAL_SECONDS = 10 * 60.0  # HlaeReleases.refresh_if_due only asks GitHub when it is due
 
 
 def find_running(ports: Iterable[int], *, timeout: float = 1.0) -> int | None:
@@ -190,6 +192,7 @@ class App:
         self.settings = settings
         self.state = state if state is not None else AppState()
         self.stop = stop if stop is not None else StopRequest()
+        self.releases = checks.HlaeReleases()
         self.page_port: int | None = None
         self._index_path = index_path
         self._problems = problems
@@ -203,6 +206,9 @@ class App:
         self._worker_cfg: Config | None = None
         self._problems_cfg: Config | None = None
         self._problems_checked_at: float | None = None
+        self._releases_thread: threading.Thread | None = None
+        self._checks_cache: list[checks.Check] | None = None
+        self._checks_at: float | None = None
 
     # --- the web server --------------------------------------------------------------------------
 
@@ -213,6 +219,11 @@ class App:
             index_path=self._index_path,
             gate_reasons=lambda: gate_reasons(self.settings.current().config, self._probe),
             open_window=self.open_window,
+            snapshot=self.state.snapshot,
+            warnings=lambda: self.settings.current().warnings,
+            checks=self.checks,
+            quit=self.quit,
+            resume=self.resume,
         )
         try:
             self._web = web.WebServer(web.create_app(ctx), self.settings.current().config.page_port,
@@ -242,6 +253,25 @@ class App:
         `/api/window`. Task 14 replaces it with the app window."""
         if self.page_port is not None:
             webbrowser.open(f"http://127.0.0.1:{self.page_port}{page}")
+
+    # --- pause / resume (the tray, Task 14; the Status page's Resume, `/api/resume`) ---------------
+
+    def pause(self) -> None:
+        """Recorded as paused "by you", so Status can say that rather than "after 3 failed renders"."""
+        index = Index(self._index_path)
+        try:
+            index.pause("you")
+        finally:
+            index.close()
+        self.state.set_paused_by("you")
+
+    def resume(self) -> None:
+        index = Index(self._index_path)
+        try:
+            index.resume()
+        finally:
+            index.close()
+        self.state.set_paused_by(None)
 
     # --- the worker thread -----------------------------------------------------------------------
 
@@ -316,6 +346,35 @@ class App:
         log.info("quit requested: %s", self.stop.mode)
         return self.stop.mode
 
+    # --- Status's checks ---------------------------------------------------------------------------
+
+    def checks(self) -> list[checks.Check]:
+        """`checks.run_checks`, cached for `CHECKS_CACHE_SECONDS` -- the Status page polls every 2 s,
+        and some checks (a `pg_ctl status`, file-version reads) are not free. Never calls
+        `self.releases.refresh_if_due` itself: that thread is the release check's only writer."""
+        now = self._clock()
+        if self._checks_at is None or now - self._checks_at >= CHECKS_CACHE_SECONDS:
+            cfg = self.settings.current().config
+            index = Index(self._index_path)
+            try:
+                alerts_status = index.get_flag("alerts_status")
+            finally:
+                index.close()
+            self._checks_cache = checks.run_checks(cfg, alerts_status=alerts_status, releases=self.releases)
+            self._checks_at = now
+        return self._checks_cache
+
+    # --- the HLAE release check ----------------------------------------------------------------------
+
+    def start_releases(self) -> None:
+        self._releases_thread = threading.Thread(target=self._run_releases, name="releases", daemon=True)
+        self._releases_thread.start()
+
+    def _run_releases(self) -> None:
+        while not self.stop.stopping():
+            self.releases.refresh_if_due()
+            self.stop.wait(RELEASES_INTERVAL_SECONDS)
+
 
 def run_headless(open_page: str | None = None) -> int:
     """`clipper run` / `clipper run --headless`: the worker and the web server, no tray or window
@@ -332,6 +391,7 @@ def run_headless(open_page: str | None = None) -> int:
             app = App(store, index_path=paths.index_file())
             app.start_web()
             app.start_worker()
+            app.start_releases()
 
             quitting = False
             while True:

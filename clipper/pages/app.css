@@ -41,3 +41,21 @@ td small{display:block;color:var(--muted);font-size:12px}
   padding:7px 11px;border-radius:6px}
 .nav a:hover{background:var(--panel2);color:var(--ink)}
 .nav a.on{color:var(--ink);background:var(--panel2)}
+
+/* Status page (spec: Pages -> Status) */
+h2{font:600 11px/1 Consolas,monospace;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+  margin:22px 0 8px}
+#notice ul{margin:0 0 16px;padding:0;list-style:none}
+#notice li{background:#33290f;color:var(--warn);border:1px solid #6b5220;border-radius:6px;
+  padding:8px 11px;margin-bottom:6px}
+#checks{list-style:none;margin:0;padding:0;border-radius:8px;overflow:hidden}
+#checks li{background:var(--panel);border-top:1px solid var(--line);padding:8px 10px}
+#checks li:first-child{border-top:0}
+#checks li small{display:block;color:var(--muted);font-size:12px}
+.row{background:var(--panel);border-top:1px solid var(--line);padding:10px 11px}
+.row:first-child{border-top:1px solid var(--line);border-radius:8px 8px 0 0}
+.row:last-child{border-radius:0 0 8px 8px}
+.row small{display:block;color:var(--muted);font-size:12px}
+#log{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px;height:240px;
+  overflow-y:auto;font:12px/1.5 Consolas,monospace;white-space:pre-wrap;color:var(--ink)}
+#quit-choice{display:flex;gap:8px}

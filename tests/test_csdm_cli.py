@@ -77,3 +77,40 @@ def test_a_timeout_kills_and_reaps_the_process_then_raises(cli, tmp_path, monkey
         leftover = _find_by_cmdline_fragment(str(dem))
         if leftover is not None:
             leftover.kill()
+
+
+def test_a_non_timeout_exception_during_communicate_kills_the_process_and_reraises(cli, tmp_path, monkeypatch):
+    """Task 5 fix 2: subprocess.run also killed the child on ANY exception from communicate(), not
+    only a timeout. CsdmCli.analyze must mirror that instead of leaving the process running.
+
+    `guarded` keeps a strong reference to the Popen object alive for the life of the test. Without
+    it, the moment pytest.raises clears the exception traceback, CPython's refcounting GC collects
+    analyze()'s frame (and so the Popen and its pipes) right away, which independently kills the
+    child by racing its own startup print against our pipe getting closed — a red herring that has
+    nothing to do with the kill-on-any-exception behaviour this test is actually pinning down.
+    """
+    monkeypatch.setenv("FAKE_CSDM_MODE", "hang")
+    monkeypatch.setenv("FAKE_CSDM_STOPFILE", str(tmp_path / "never-touched"))
+    guarded: list[subprocess.Popen] = []
+    real_init = subprocess.Popen.__init__
+
+    def spy_init(self, *args, **kwargs):
+        real_init(self, *args, **kwargs)
+        guarded.append(self)
+
+    def boom(self, timeout=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(subprocess.Popen, "__init__", spy_init)
+    monkeypatch.setattr(subprocess.Popen, "communicate", boom)
+    with pytest.raises(RuntimeError, match="boom"):
+        cli.analyze(tmp_path / "match.dem", tmp_path / "logs" / "analyze.log")
+    pid = guarded[0].pid
+    try:
+        deadline = time.monotonic() + 5.0
+        while psutil.pid_exists(pid) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert not psutil.pid_exists(pid), "the process was not killed after a non-timeout exception"
+    finally:
+        if psutil.pid_exists(pid):
+            psutil.Process(pid).kill()

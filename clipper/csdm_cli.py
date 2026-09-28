@@ -31,20 +31,26 @@ class CsdmCli:
     def analyze(self, dem: Path, log_path: Path) -> str:
         """Run `csdm analyze <dem> --source faceit` and keep its output in log_path. The exit code
         is not trusted: the caller checks that the match reached CS:DM's database. Runs inside the
-        app's kill-on-close job object like every csdm call (spec: Closing and quitting)."""
+        app's kill-on-close job object like every csdm call (spec: Closing and quitting).
+
+        Mirrors subprocess.run's own cleanup exactly: a Popen context manager, and the process
+        killed not only on a timeout but on any other exception communicate() raises."""
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        proc = subprocess.Popen(
+        with subprocess.Popen(
             self.command("analyze", str(dem), "--source", "faceit"),
             env=self.env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding="utf-8", errors="replace", creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        winjob.guard(proc)
-        try:
-            stdout, stderr = proc.communicate(timeout=ANALYZE_TIMEOUT_SECONDS)
-        except subprocess.TimeoutExpired as exc:
-            proc.kill()
-            exc.stdout, exc.stderr = proc.communicate()   # reap it and collect what it had written
-            raise
+        ) as proc:
+            winjob.guard(proc)
+            try:
+                stdout, stderr = proc.communicate(timeout=ANALYZE_TIMEOUT_SECONDS)
+            except subprocess.TimeoutExpired as exc:
+                proc.kill()
+                exc.stdout, exc.stderr = proc.communicate()   # reap it and collect what it had written
+                raise
+            except Exception:  # noqa: BLE001 - mirrors subprocess.run: kill on any failure, not only a timeout
+                proc.kill()
+                raise
         output = stdout + stderr
         log_path.write_text(output, encoding="utf-8")
         return output

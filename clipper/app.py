@@ -62,13 +62,14 @@ from clipper.render import render
 from clipper.settings import SettingsStore
 from clipper.state import AppState
 from clipper.unpack import unpack
+from clipper.web import PAGES  # noqa: F401 - its one home is web.py; cli.py and the tests read it as app.PAGES
 from clipper.worker import Services, StopRequest, Worker
 
 log = logging.getLogger(__name__)
 
-PAGES = ("/status", "/demos", "/reels", "/settings")
 CHECKS_CACHE_SECONDS = 15.0            # the Status page polls every 2 s; some checks are not free
 RELEASES_INTERVAL_SECONDS = 10 * 60.0  # HlaeReleases.refresh_if_due only asks GitHub when it is due
+WORKER_ERROR_WAIT_SECONDS = 30.0       # how long the worker thread waits after a pass that raised
 
 
 def find_running(ports: Iterable[int], *, timeout: float = 1.0) -> int | None:
@@ -285,10 +286,18 @@ class App:
         self._worker_thread.start()
 
     def run_worker(self) -> None:
+        """The thread ends only when asked to stop. A pass that raises -- the start-up problems check
+        included -- is logged and published as a problem, and the next pass comes
+        `WORKER_ERROR_WAIT_SECONDS` later: a fixed wait, since the settings may be what failed."""
         index = Index(self._index_path)
         try:
             while not self.stop.stopping():
-                delay = self.step(index)
+                try:
+                    delay = self.step(index)
+                except Exception as exc:  # noqa: BLE001 - the thread must outlive anything a pass throws
+                    log.exception("the worker hit an error")
+                    self.state.set_problems((f"The worker hit an error: {exc}",))
+                    delay = WORKER_ERROR_WAIT_SECONDS
                 self.stop.wait(delay)
         finally:
             index.close()
@@ -303,7 +312,9 @@ class App:
     def step(self, index: Index) -> float:
         """One pass: start-up problems first (cheap, checked every pass; the expensive parts -- e.g.
         Postgres -- only every `recheck_seconds`), then a rebuild when settings changed, then a tick.
-        Never raises: a tick that does is logged and the next pass still runs."""
+        A rebuild that fails is logged and published as a problem, and tried again at the next recheck
+        (which replaces the problem with the real start-up problems); a tick that raises is logged and
+        the next pass still runs. Anything else it raises is `run_worker`'s to catch."""
         cfg = self.settings.current().config
         now = self._clock()
         needs_check = (
@@ -322,13 +333,19 @@ class App:
             return cfg.poll_seconds
 
         if self._worker is None or cfg != self._worker_cfg:
-            for folder in (cfg.demos_dir, cfg.renders_dir, cfg.library_dir):
-                folder.mkdir(parents=True, exist_ok=True)
-            if self._worker is not None:
-                log.info("settings changed; rebuilding the worker")
-            page_url = f"http://127.0.0.1:{self.page_port}/demos" if self.page_port else None
-            self._worker = self._build(cfg, index, state=self.state, stop=self.stop,
-                                       page_url=page_url, pages_off=self.state.snapshot().pages_off)
+            try:
+                for folder in (cfg.demos_dir, cfg.renders_dir, cfg.library_dir):
+                    folder.mkdir(parents=True, exist_ok=True)
+                if self._worker is not None:
+                    log.info("settings changed; rebuilding the worker")
+                page_url = f"http://127.0.0.1:{self.page_port}/demos" if self.page_port else None
+                worker = self._build(cfg, index, state=self.state, stop=self.stop,
+                                     page_url=page_url, pages_off=self.state.snapshot().pages_off)
+            except Exception as exc:  # noqa: BLE001 - a failed start is a problem to show; the thread goes on
+                log.exception("could not start the worker")
+                self.state.set_problems((f"Couldn't start the worker: {exc}",))
+                return cfg.poll_seconds
+            self._worker = worker
             self._worker_cfg = cfg
 
         try:

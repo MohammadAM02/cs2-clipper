@@ -15,7 +15,7 @@ import pytest
 
 from clipper import paths, web
 from clipper.app import (
-    AlreadyRunning, App, find_running, gate_reasons, hand_over, run_headless, single_instance,
+    PAGES, AlreadyRunning, App, find_running, gate_reasons, hand_over, run_headless, single_instance,
     start_match_alerts,
 )
 from clipper.config import Config
@@ -101,12 +101,15 @@ class FakeWorker:
 
 @dataclass
 class FakeBuild:
-    calls: list = field(default_factory=list)      # (cfg, page_url, pages_off)
+    calls: list = field(default_factory=list)      # (cfg, page_url, pages_off), one per attempt
     workers: list = field(default_factory=list)
+    errors: list = field(default_factory=list)     # one is raised per attempt while any are left
 
     def __call__(self, cfg, index, *, state, stop, page_url, pages_off):
-        worker = FakeWorker()
         self.calls.append((cfg, page_url, pages_off))
+        if self.errors:
+            raise self.errors.pop(0)
+        worker = FakeWorker()
         self.workers.append(worker)
         return worker
 
@@ -216,6 +219,28 @@ def test_a_tick_that_raises_is_logged_and_the_next_pass_still_ticks(world, caplo
     assert worker.ticks == 3   # 1 ok, 1 raised (still counted as attempted), 1 ok again
 
 
+def test_a_build_that_raises_publishes_a_problem_and_is_tried_again_after_the_recheck(world, caplog):
+    world.build.errors.append(RuntimeError("csdm.exe is gone"))
+
+    with caplog.at_level(logging.ERROR, logger="clipper.app"):
+        delay = world.app.step(world.index)              # must not raise
+
+    assert delay == world.store.current().config.poll_seconds
+    assert "could not start the worker" in caplog.text
+    assert world.state.snapshot().problems == ("Couldn't start the worker: csdm.exe is gone",)
+    assert len(world.build.calls) == 1                   # it did try ...
+    assert world.build.workers == []                     # ... and there is no worker
+
+    world.app.step(world.index)                          # the published problem holds later passes off
+    assert len(world.build.calls) == 1
+
+    world.clock.advance(61.0)                            # the recheck replaces it and tries again
+    world.app.step(world.index)
+    assert len(world.build.calls) == 2
+    assert world.build.workers[0].ticks == 1
+    assert world.state.snapshot().problems == ()
+
+
 def test_the_demos_renders_and_library_folders_are_created(world):
     world.app.step(world.index)
     cfg = world.store.current().config
@@ -241,6 +266,31 @@ def test_run_worker_ends_when_quit_is_called_and_closes_its_index(world, monkeyp
     world.app.quit("now")
     assert world.app.wait(timeout=5.0) is True
     assert closed == [True]
+
+
+def test_the_worker_thread_outlives_a_pass_that_raises(world, tmp_path, monkeypatch, caplog):
+    monkeypatch.setattr("clipper.app.WORKER_ERROR_WAIT_SECONDS", 0.01)
+    published = []                     # the problems on show just before each start-up check
+    second_check = threading.Event()
+
+    def problems(cfg):
+        published.append(world.state.snapshot().problems)
+        if len(published) == 1:
+            raise RuntimeError("pg_ctl vanished")      # the start-up check itself raises, once
+        second_check.set()
+        return []
+
+    app = App(world.store, index_path=tmp_path / "clipper.sqlite", state=world.state, stop=world.stop,
+              problems=problems, build=world.build, recheck_seconds=60.0, clock=world.clock)
+
+    with caplog.at_level(logging.ERROR, logger="clipper.app"):
+        app.start_worker()
+        assert second_check.wait(timeout=5.0)            # a later pass ran, on the same thread
+        app.quit("now")
+        assert app.wait(timeout=5.0) is True             # and it ended only because it was asked to
+
+    assert published[1] == ("The worker hit an error: pg_ctl vanished",)
+    assert "the worker hit an error" in caplog.text
 
 
 # --- quit --------------------------------------------------------------------------------------------
@@ -348,6 +398,10 @@ def test_open_window_does_nothing_without_a_page_port(world, monkeypatch):
     world.app.page_port = None
     world.app.open_window("/status")
     assert opened == []
+
+
+def test_pages_has_one_home():
+    assert PAGES is web.PAGES      # what `/api/window` accepts and what cli.py's --open offers are one tuple
 
 
 # --- start_web: every port taken -------------------------------------------------------------------

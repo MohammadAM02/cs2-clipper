@@ -57,6 +57,7 @@ from clipper.state import Snapshot, summary
 
 MARKER_HEADER = "X-CS2-Clipper"
 PAGES_DIR = Path(__file__).with_name("pages")
+PAGES = ("/status", "/demos", "/reels", "/settings")   # what `/api/window` may ask the window to show
 PORTS_TO_TRY = 10
 KEEP_DECIDED = timedelta(hours=24)
 IN_PIPELINE = ("spotted", "unpacked", "analyzed", "scored", "rendering", "joined")
@@ -68,8 +69,6 @@ _MATCH_ID_PATTERN = r"1-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 _CHECKSUM_PATTERN = r"[0-9a-f]{16}"
 # Flask endpoint names (not paths) reachable from another device (spec: Reach from other devices).
 _PHONE_ENDPOINTS = frozenset({"demos_page", "demos_json", "demos_action", "app_css", "app_js"})
-# Kept in step with app.PAGES by value; app.py can't be imported here without a cycle (it imports web.py).
-_WINDOW_PAGES = ("/status", "/demos", "/reels", "/settings")
 
 
 class _MatchIdConverter(BaseConverter):
@@ -404,7 +403,7 @@ def create_app(ctx: WebContext) -> Flask:
         (Task 10's `hand_over`) uses this to ask the running copy to show a page."""
         body = request.get_json(silent=True)
         page = body.get("page") if isinstance(body, dict) else None
-        if page not in _WINDOW_PAGES:
+        if page not in PAGES:
             return Response(status=400)
         ctx.open_window(page)
         return Response(status=204)

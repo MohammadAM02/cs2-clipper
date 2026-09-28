@@ -1,16 +1,22 @@
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
 from clipper.config import Config
+from clipper.csdm_cli import CsdmCli
 from clipper.gate import GUI_REASON, GateStatus
 from clipper.index import Index
 from clipper.model import ClipFile, MatchInfo
-from clipper.render import RenderResult
-from clipper.worker import Services, Worker
+from clipper.render import RenderResult, render as run_render
+from clipper.state import AppState
+from clipper.worker import QUIT_ABORT, Services, StopRequest, Worker
+from tests.fakes import FakeProbe
 from tests.fixtures import DEMO_NAME, MATCH_CHECKSUM, MATCH_FACTS
 
+FAKE_CSDM = Path(__file__).with_name("fake_csdm.py")
 ROUND_START = {facts.round: facts.round_start_tick for facts in MATCH_FACTS}
 MATCH = MatchInfo(checksum=MATCH_CHECKSUM, map_name="de_inferno",
                   played_at=datetime(2026, 9, 22, 9, 39, 14, tzinfo=timezone.utc),
@@ -80,6 +86,8 @@ class World:
     gate: FakeGate
     render: FakeRender
     notices: list
+    state: AppState
+    stop: StopRequest
 
     def add_demo(self) -> int:
         name = f"{DEMO_NAME}.dem.zst"
@@ -99,6 +107,7 @@ def world(tmp_path):
                  index_path=tmp_path / "clipper.sqlite")
     index = Index(cfg.index_path)
     facts, gate, render, notices = FakeFacts(), FakeGate(), FakeRender(), []
+    state, stop = AppState(), StopRequest()
     services = Services(
         intake=FakeIntake(),
         unpack=lambda archive, out_dir: out_dir / archive.name.removesuffix(".zst"),
@@ -110,7 +119,8 @@ def world(tmp_path):
         notify=lambda title, body: notices.append((title, body)),
         sleep=lambda seconds: None,
     )
-    yield World(cfg, index, services, Worker(cfg, index, services), facts, gate, render, notices)
+    worker = Worker(cfg, index, services, state=state, stop=stop)
+    yield World(cfg, index, services, worker, facts, gate, render, notices, state, stop)
     index.close()
 
 
@@ -224,3 +234,186 @@ def test_match_alerts_run_every_tick_and_never_stop_the_pipeline(world):
     world.ticks(8)
     assert world.services.alerts.ticks == 8
     assert world.index.demo(demo_id)["state"] == "done"
+
+
+class _CountingAlerts:
+    def __init__(self):
+        self.ticks = 0
+
+    def tick(self):
+        self.ticks += 1
+
+
+# --- StopRequest -------------------------------------------------------------------------------
+
+
+def test_stop_request_upgrades_after_render_to_now_but_never_downgrades():
+    stop = StopRequest()
+    assert stop.mode is None
+    stop.request("after_render")
+    assert stop.mode == "after_render"
+    stop.request("now")
+    assert stop.mode == "now"
+    stop.request("after_render")   # must not downgrade a "now" that is already in effect
+    assert stop.mode == "now"
+
+
+def test_stop_request_stopping_and_abort_render_reflect_the_mode():
+    stop = StopRequest()
+    assert not stop.stopping()
+    assert not stop.abort_render()
+    stop.request("after_render")
+    assert stop.stopping()
+    assert not stop.abort_render()
+    stop.request("now")
+    assert stop.stopping()
+    assert stop.abort_render()
+
+
+def test_stop_request_wait_returns_true_on_a_request_and_false_on_timeout():
+    stop = StopRequest()
+    assert stop.wait(0.05) is False
+    stop.request("now")
+    assert stop.wait(1.0) is True
+
+
+# --- state: what the worker publishes each tick -------------------------------------------------
+
+
+def test_state_reports_rendering_during_a_render_then_clears_it_after_the_tick(world):
+    seen = {}
+
+    def render_and_snapshot(request, should_abort):
+        seen["rendering"] = world.state.snapshot().rendering
+        clips = tuple(
+            ClipFile(sequence=n, start_tick=ROUND_START[r] + 1000, end_tick=ROUND_START[r] + 1256,
+                     path=request.output_dir / f"sequence-{n}.mp4", duration_s=4.0)
+            for n, r in enumerate(request.rounds, start=1)
+        )
+        return RenderResult(ok=True, clips=clips)
+
+    world.services.render = render_and_snapshot
+    world.add_demo()
+    world.ticks(5)   # spotted -> unpacked -> analyzed -> scored -> rendering (queues) -> the player render
+    rendering = seen["rendering"]
+    assert rendering is not None
+    assert (rendering.map_name, rendering.perspective) == ("de_inferno", "player")
+    snap = world.state.snapshot()
+    assert snap.rendering is None   # cleared by the end of the tick that started it
+    assert snap.waiting == ()
+
+
+def test_state_reports_waiting_with_the_gates_reasons(world):
+    world.gate.reasons = ("FACEIT AC is running",)
+    world.add_demo()
+    world.ticks(5)   # reaches the render step, but the Gate keeps it waiting
+    snap = world.state.snapshot()
+    assert snap.waiting == ("FACEIT AC is running",)
+    assert snap.rendering is None
+
+
+def test_state_publishes_paused_by(world):
+    world.index.pause("you")
+    world.add_demo()
+    world.ticks(1)
+    assert world.state.snapshot().paused_by == "you"
+    world.index.resume()
+    world.ticks(1)
+    assert world.state.snapshot().paused_by is None
+
+
+# --- stopping ------------------------------------------------------------------------------------
+
+
+def test_a_stop_during_the_heads_up_skips_the_render_and_ends_early(world):
+    calls = []
+
+    def render_spy(request, should_abort):
+        calls.append(request)
+        return RenderResult(ok=True, clips=())
+
+    world.services.render = render_spy
+    sleep_calls = []
+
+    def sleep_then_quit_now(seconds):
+        sleep_calls.append(seconds)
+        world.stop.request("now")
+
+    world.services.sleep = sleep_then_quit_now
+    demo_id = world.add_demo()
+    world.ticks(5)
+    assert calls == []
+    assert len(sleep_calls) == 1   # the heads-up loop bailed right after the stop arrived
+    assert world.index.latest_render(demo_id, "player")["state"] == "queued"
+
+
+def test_quit_after_render_finishes_it_then_takes_no_further_step(world):
+    calls = []
+
+    def render_then_request_stop(request, should_abort):
+        calls.append(request)
+        world.stop.request("after_render")
+        clips = tuple(
+            ClipFile(sequence=n, start_tick=ROUND_START[r] + 1000, end_tick=ROUND_START[r] + 1256,
+                     path=request.output_dir / f"sequence-{n}.mp4", duration_s=4.0)
+            for n, r in enumerate(request.rounds, start=1)
+        )
+        return RenderResult(ok=True, clips=clips)
+
+    world.services.render = render_then_request_stop
+    alerts = _CountingAlerts()
+    world.services.alerts = alerts
+    demo_id = world.add_demo()
+    world.ticks(5)
+    assert world.index.latest_render(demo_id, "player")["state"] == "done"
+    assert world.index.demo(demo_id)["state"] == "rendering"   # the enemy Perspective was not started
+    assert len(calls) == 1
+    assert alerts.ticks == 4   # ticks 1-4 ran alerts; tick 5's alerts step was skipped once stopping
+    world.ticks(3)   # nothing more should ever happen
+    assert len(calls) == 1
+    assert world.index.demo(demo_id)["state"] == "rendering"
+    assert alerts.ticks == 4
+
+
+class _QuitsOnFirstAsk(FakeProbe):
+    """Like FakeProbe, with its hooked CS2 already running, but the first hooked_cs2_running() check
+    requests a "now" stop -- simulating Quit now arriving from the tray or the Status page while
+    render.render's watch loop is asking about the game, exactly where a real click would land."""
+
+    def __init__(self, stopfile: Path, stop: StopRequest):
+        super().__init__(stopfile, cs2=True)
+        self._stop = stop
+        self._asked = False
+
+    def hooked_cs2_running(self):
+        if not self._asked:
+            self._asked = True
+            self._stop.request("now")
+        return super().hooked_cs2_running()
+
+
+def test_quit_now_during_a_render_aborts_it_like_a_faceit_ac_abort(world, tmp_path, monkeypatch):
+    stopfile = tmp_path / "game-died"
+    monkeypatch.setenv("FAKE_CSDM_MODE", "hang")
+    monkeypatch.setenv("FAKE_CSDM_STOPFILE", str(stopfile))
+    csdm = CsdmCli(prefix=(sys.executable, str(FAKE_CSDM)), home=tmp_path / "home", pg_bin=tmp_path / "pgbin")
+    probe = _QuitsOnFirstAsk(stopfile, world.stop)
+
+    def real_render(request, should_abort):
+        return run_render(
+            request, csdm=csdm, probe=probe, should_abort=should_abort,
+            stall_seconds=5.0, launch_timeout_seconds=5.0, duration_of=lambda path: 4.0,
+            poll_seconds=0.05, exit_grace_seconds=0.0, abort_sweep_seconds=0.0,
+        )
+
+    world.services.render = real_render
+    alerts = _CountingAlerts()
+    world.services.alerts = alerts
+    demo_id = world.add_demo()
+    world.ticks(5)
+    job = world.index.latest_render(demo_id, "player")
+    assert (job["state"], job["failure"]) == ("aborted", QUIT_ABORT)
+    assert world.index.demo(demo_id)["state"] == "rendering"
+    assert world.index.latest_render(demo_id, "enemy")["state"] == "queued"   # not started
+    assert probe.kills >= 1
+    assert alerts.ticks == 4   # this tick's alerts step was skipped once the abort set stop

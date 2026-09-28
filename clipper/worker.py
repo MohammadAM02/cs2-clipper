@@ -7,6 +7,7 @@ Every step can run again safely, so a crash or a reboot resumes where it stopped
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from clipper.join import JoinError, assign_clips
 from clipper.model import MatchInfo, RoundFacts
 from clipper.render import RenderRequest, RenderResult
 from clipper.scoring import score_match, select
+from clipper.state import AppState, Rendering
 
 log = logging.getLogger(__name__)
 
@@ -28,6 +30,7 @@ PERSPECTIVES = ("player", "enemy")
 MAX_STEP_ATTEMPTS = 3
 MAX_RENDER_ATTEMPTS = 3
 PAUSE_AFTER_FAILURES = 3
+QUIT_ABORT = "aborted: the app was quit"
 
 
 class Skip(Exception):
@@ -58,6 +61,41 @@ class AlertsStep(Protocol):
     def tick(self) -> None: ...
 
 
+class StopRequest:
+    """How the app asks the worker to stop. "after_render": a running render finishes, then no new
+    step. "now": a running render is aborted the way a FACEIT AC abort stops it. Thread-safe: the
+    app's threads (tray, web server) request; the worker thread only reads."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._mode: str | None = None
+        self._event = threading.Event()
+
+    def request(self, mode: str) -> None:
+        """`mode` is "now" or "after_render". "now" wins: a later "after_render" never downgrades
+        it, a later "now" upgrades an "after_render" already in effect."""
+        with self._lock:
+            if self._mode != "now":
+                self._mode = mode
+        self._event.set()
+
+    @property
+    def mode(self) -> str | None:
+        with self._lock:
+            return self._mode
+
+    def stopping(self) -> bool:
+        return self.mode is not None
+
+    def abort_render(self) -> bool:
+        return self.mode == "now"
+
+    def wait(self, timeout: float) -> bool:
+        """Sleep up to `timeout` seconds, waking early on a request. True if a request was or
+        becomes in effect; False if `timeout` elapsed with none."""
+        return self._event.wait(timeout)
+
+
 @dataclass
 class Services:
     """Everything the worker talks to. Tests swap in fakes."""
@@ -84,28 +122,49 @@ def _fresh_dir(path: Path) -> Path:
 
 
 class Worker:
-    def __init__(self, cfg: Config, index: Index, services: Services):
+    def __init__(self, cfg: Config, index: Index, services: Services, *,
+                 state: AppState | None = None, stop: StopRequest | None = None):
         self.cfg = cfg
         self.index = index
         self.services = services
+        self.state = state if state is not None else AppState()
+        self.stop = stop if stop is not None else StopRequest()
         self._told_about_gui = False
+        self._waiting_reasons: tuple[str, ...] = ()
 
     # --- the loop --------------------------------------------------------------------------------
 
     def tick(self) -> None:
-        """Take any new Demos, move every unfinished Demo on by at most one step, then run match alerts."""
-        for path in self.services.intake.ready():
-            try:
-                self.services.intake.take(path, self.index)
-            except OSError:
-                log.exception("could not take %s; will try again", path.name)
-        for demo in self.index.demos_in(ACTIVE_STATES):
-            self._advance(demo)
-        if self.services.alerts is not None:
-            try:
-                self.services.alerts.tick()
-            except Exception:  # noqa: BLE001 - match alerts must never stop the pipeline
-                log.exception("match alerts failed")
+        """Take any new Demos, move every unfinished Demo on by at most one step, then run match
+        alerts. Once a stop is requested, no new step starts (a running one, a render included,
+        finishes on its own terms); publishes the "what it's doing" summary throughout, and always
+        ends idle or waiting, never stuck saying "rendering"."""
+        self.state.set_paused_by(self.index.paused_by())
+        self._waiting_reasons = ()
+        try:
+            for path in self.services.intake.ready():
+                if self.stop.stopping():
+                    return
+                try:
+                    self.services.intake.take(path, self.index)
+                except OSError:
+                    log.exception("could not take %s; will try again", path.name)
+            for demo in self.index.demos_in(ACTIVE_STATES):
+                if self.stop.stopping():
+                    return
+                self._advance(demo)
+            if self.stop.stopping():
+                return
+            if self.services.alerts is not None:
+                try:
+                    self.services.alerts.tick()
+                except Exception:  # noqa: BLE001 - match alerts must never stop the pipeline
+                    log.exception("match alerts failed")
+        finally:
+            if self._waiting_reasons:
+                self.state.set_waiting(self._waiting_reasons)
+            else:
+                self.state.set_idle()
 
     def _advance(self, demo) -> None:
         steps = {
@@ -191,6 +250,8 @@ class Worker:
         self.index.advance(demo["id"], "joined")
 
     def _try_render(self, demo, job) -> None:
+        if self.stop.stopping():
+            return
         if self.index.paused_by() is not None:
             return
         if not self._gate_is_clear():
@@ -209,6 +270,7 @@ class Worker:
         )
         log_path = self._log_path(demo, f"render-{job['perspective']}-{job['attempt']}")
         self.index.start_render(job["id"], output_dir, log_path)
+        self.state.set_rendering(Rendering(match["map"], job["perspective"], time.time()))
         request = RenderRequest(
             demo_path=Path(demo["dem_path"]),
             perspective=job["perspective"],
@@ -223,12 +285,15 @@ class Worker:
             height=self.cfg.video_size[1],
         )
         try:
-            result = self.services.render(request, self.services.gate.faceit_running)
+            result = self.services.render(
+                request, lambda: self.services.gate.faceit_running() or self.stop.abort_render()
+            )
         except Exception as exc:  # noqa: BLE001 - a crashed render is a failed attempt
             log.exception("render crashed")
             result = RenderResult(ok=False, failure=f"render crashed: {exc}")
         if result.aborted:
-            self.index.finish_render(job["id"], "aborted", result.failure)
+            failure = QUIT_ABORT if self.stop.abort_render() else result.failure
+            self.index.finish_render(job["id"], "aborted", failure)
             return
         if result.ok:
             try:
@@ -250,7 +315,8 @@ class Worker:
             self.index.pause("failures")
             self.services.notify(
                 "Rendering paused",
-                f"{failures} renders failed in a row. Check HLAE/CS2 compatibility, then run: clipper resume",
+                f"{failures} renders failed in a row. Check HLAE/CS2 compatibility,"
+                f" then resume rendering from the tray or the Status page.",
             )
 
     def _gate_is_clear(self) -> bool:
@@ -259,16 +325,24 @@ class Worker:
         if gui_open and not self._told_about_gui:
             self.services.notify("Close CS Demo Manager", "Rendering is waiting for CS Demo Manager to close.")
         self._told_about_gui = gui_open
+        if not status.ok:
+            self._waiting_reasons = status.reasons
         return status.ok
 
     def _gate_stays_clear(self, seconds: float) -> bool:
-        """Wait out the heads-up, giving up if the Gate closes meanwhile."""
+        """Wait out the heads-up, giving way as soon as the Gate closes or a stop is requested."""
         waited = 0.0
         while waited < seconds:
+            if self.stop.stopping():
+                return False
             step = min(1.0, seconds - waited)
             self.services.sleep(step)
             waited += step
-            if not self.services.gate.check().ok:
+            if self.stop.stopping():
+                return False
+            status = self.services.gate.check()
+            if not status.ok:
+                self._waiting_reasons = status.reasons
                 return False
         return True
 

@@ -9,40 +9,10 @@ import pytest
 from clipper.csdm_cli import CsdmCli
 from clipper.media import MediaError
 from clipper.render import NEVER_LAUNCHED, RenderRequest, render
+from tests.fakes import FakeProbe
 
 FAKE_CSDM = Path(__file__).with_name("fake_csdm.py")
 SUBJECT = "76561198192858303"
-
-
-class FakeProbe:
-    """A hooked CS2 that 'dies' — touching the stop file the fake csdm waits for — when killed."""
-
-    def __init__(self, stopfile: Path, cs2: bool = False, ffmpeg: bool = False):
-        self.stopfile, self.cs2, self.ffmpeg = stopfile, cs2, ffmpeg
-        self.kills = 0
-
-    def names(self):
-        return set()
-
-    def running(self, name):
-        return name == "ffmpeg.exe" and self.ffmpeg
-
-    def service_running(self, name):
-        return False
-
-    def hooked_cs2_running(self):
-        return self.cs2
-
-    def kill_hooked_cs2(self):
-        self.kills += 1
-        self.cs2 = False
-        self.stopfile.touch()
-
-    def children_named(self, pid, name):
-        return set()
-
-    def kill_processes(self, processes):
-        pass
 
 
 @pytest.fixture

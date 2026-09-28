@@ -21,7 +21,7 @@ An Allstar.gg-style place to watch the Clips the pipeline makes, from the phone,
   and the user signs in.
 - **Language: Python** for the orchestrator and exporter. The page is plain HTML/CSS/JS with no build
   step.
-- **Approach A: static library.**
+- **Approach A: static library** (gives way to the app's web server; see the last update below).
   - The orchestrator's SQLite index (`data/clipper.sqlite`) is the single source of truth. The
     library never reads CS:DM's database.
   - An exporter writes `library.json` (atomically), thumbnails and the page files into the shared
@@ -34,6 +34,11 @@ An Allstar.gg-style place to watch the Clips the pipeline makes, from the phone,
   The user dropped this spec's old "nothing of ours listens on the network" rule to allow it.
   Whether the library reuses that server instead of `tailscale serve` is decided when this design
   resumes.
+- **Update 2026-09-29: the app has one web server.** The app shell (`.scratch/app-shell/spec.md`)
+  serves the Demos to grab page, and its own Status, Reels and Settings pages, from that one server;
+  only Demos to grab is reachable from other devices. "Approach A: static library" and the old
+  "nothing of ours listens on the network" rule give way to it. The library itself is still to
+  design.
 - **Build order: orchestrator first**, then the library on top of its real output.
 - **One card plays one video.** The orchestrator joins each Highlight's Clips into one Reel per
   Perspective (`.scratch/orchestrator/spec.md`, Joining), so a card plays one file and downloads

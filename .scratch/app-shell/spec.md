@@ -1,6 +1,6 @@
 # Spec: App shell — a desktop app around the pipeline
 
-Status: design approved 2026-09-27 (four sections, in chat); this write-up awaits review.
+Status: built on branch app-shell (2026-09-28); the hand checks under To confirm are the user's.
 The first of three pieces that turn the pipeline into an installable desktop app: **(1) this app
 shell**, (2) the release pipeline (installer, GitHub Releases, auto-update) and (3) the fresh-PC
 setup wizard. Each piece gets its own spec. Built on master after match alerts (merged 2026-09-27).

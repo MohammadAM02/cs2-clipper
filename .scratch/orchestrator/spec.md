@@ -233,6 +233,12 @@ Today's phase-1 files at the root of `E:\cs2clips` move into `E:\cs2clips\_phase
 
 ## Running it
 
+`clipper install`, `clipper.toml` and the in-repo index (`data/clipper.sqlite`, above) give way to
+the app shell (`.scratch/app-shell/spec.md`): `uv run clipper` opens the app, its settings live in
+`%LOCALAPPDATA%\CS2Clipper\settings.json` (the index, the lock file and the logs move there too), and
+starting at sign-in comes with piece 2's installer. The two bullets below on `clipper install` and
+`clipper.toml` are the original design.
+
 - `uv sync` installs the package and its dependencies (and drops the unused packages in `.venv`).
 - `clipper install` registers a Task Scheduler task: at sign-in, `pythonw -m clipper run`, only while
   the user is signed in (CS2 needs the desktop), restart on failure every minute up to 3 times, no

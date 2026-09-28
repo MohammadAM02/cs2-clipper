@@ -25,7 +25,7 @@ downloaded, and put them in front of the user at the right moment.
 | Which matches | Finished FACEIT matches in which the subject has a round with **3+ Frags** (a 3K, 4K or Ace), and whose Demo FACEIT lists. Clutches play no part (dropped by the user 2026-09-25) |
 | Notification | **Detailed**: which maps had which Highlights, with **Show matches** and **Not now** buttons |
 | Show matches | Opens the **Demos to grab** page |
-| Page reach | Served by the worker to the PC, the LAN and Tailscale; **no password** |
+| Page reach | Served by the app's web server (`.scratch/app-shell/spec.md`) to the PC, the LAN and Tailscale; **no password**. The app's reach rules apply: a short list of phone routes, PC-only for everything else, and the header `X-CS2-Clipper: 1` on Skip and Undo |
 | Page on the PC | **Open** (the FACEIT matchroom, in a new tab) and **Skip** for each match |
 | Page elsewhere | **View and Skip only**, with a note to grab Demos at the PC: Watch Demo downloads to whichever device it is pressed on |
 | Page look | A **table**, **newest first**, with the subject's stat line: **Rating 2.0 · K–D · ADR** |
@@ -33,7 +33,7 @@ downloaded, and put them in front of the user at the right moment.
 | Ignored matches | **One reminder** about 3 days before the Demo link expires, then dropped |
 | First run | The first summary also covers the past 30 days' qualifying matches that are still downloadable and whose Demo is not already in the index |
 | Acquisition | Stays manual (ADR-0002): the user presses Watch Demo, and intake takes it from there |
-| Credentials | `FACEIT_API_KEY` and `FACEIT_NICKNAME` from the repo's `.env`, read the way `scripts/faceit_probe.py` reads them; the key is never logged |
+| Credentials | The FACEIT nickname and API key come from Settings, not the repo's `.env`; the key is stored encrypted, decrypted only when calling FACEIT, and never logged |
 
 ## Flow
 
@@ -80,8 +80,10 @@ downloaded, and put them in front of the user at the right moment.
 - **Live.** The page refreshes its list from the worker every few seconds, so a Demo landing in
   Downloads flips its row to ✓ without a reload.
 - **Look.** faceitperf's dark, HLTV-style look, in plain HTML/CSS/JS with no build step.
-- **Surface.** The server answers only the page, its list, and Skip / Undo. It serves no files, so
-  the orchestrator's "only `library\` is ever shared" still holds.
+- **Surface.** Other devices reach only the page, its list, Skip / Undo, and the stylesheet and script
+  the page loads: the app's phone routes (`.scratch/app-shell/spec.md`, Reach from other devices).
+  Every other route is PC-only, and Skip and Undo carry the header `X-CS2-Clipper: 1`. No files are
+  served to other devices, so the orchestrator's "only `library\` is ever shared" still holds.
 
 ## Rating 2.0
 
@@ -121,7 +123,7 @@ the last check.
 
 ## Settings
 
-New `clipper.toml` settings, all optional:
+New settings, all optional (in `settings.json`, changed on the Settings page):
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
@@ -137,25 +139,27 @@ New `clipper.toml` settings, all optional:
 - `clipper/alerts.py`: the decisions as plain functions over plain data and a clock — does a match
   qualify, has the user stopped playing, what to announce, which Reminders are due, and the
   notification text.
-- `clipper/page.py`: the page server (standard-library `http.server`, a thread in the worker) and the
-  page's HTML, CSS and JS.
+- `clipper/web.py` and `clipper/pages/` (`demos.html`, `app.css`, `app.js`): the page and its routes,
+  on the app's web server (`.scratch/app-shell/spec.md`). They took over `clipper/page.py`, which
+  served the page from a thread in the worker.
 - Changes: `worker.py` (an alerts step in `tick`), `notify.py` (toast buttons), `index.py` (the
-  table), `intake.py` (grabbed on take), `config.py` (the settings and `.env`), `cli.py` (`status`
-  shows whether alerts are on, why not, and the page's address).
+  table), `intake.py` (grabbed on take), `config.py` and `settings.py` (the settings, the FACEIT
+  nickname and key included), `cli.py` (`status` shows whether alerts are on, why not, and the
+  page's address).
 
 ## When something goes wrong
 
 | Case | What happens |
 | --- | --- |
 | FACEIT key missing or rejected | Alerts switch off; `clipper status` says why; no notifications about it |
-| `FACEIT_NICKNAME` belongs to another player | The FACEIT account's SteamID must equal `subject_steamid`; otherwise alerts stay off and `clipper status` names the mismatch |
+| The FACEIT nickname in Settings belongs to another player | The FACEIT account's SteamID must equal `subject_steamid`; otherwise alerts stay off and `clipper status` names the mismatch |
 | FACEIT down, slow or rate-limited | Retried at the next check; unannounced matches stay queued for the next summary |
 | Stats or Demo not ready after 30 minutes | The summary goes out with what is ready; the rest join the next summary, and the Reminder still catches them |
 | Worker off while the user played | The start-up check catches up on everything since the last check |
 | Demo downloaded without an alert | Intake matches it by file name; it counts as grabbed, so no Reminder |
 | A notification cannot be shown | Logged, as today; the page still lists everything |
 | `page_port` taken | The next free port; notifications link to it |
-| The Windows firewall blocks other devices | The page still works on the PC; `clipper status` shows its address. Windows asks once whether to allow the worker on the network — allow private networks |
+| The Windows firewall blocks other devices | The page still works on the PC; `clipper status` shows its address. Windows asks once whether to allow the app on the network — allow private networks |
 
 ## Testing
 

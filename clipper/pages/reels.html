@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reels</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<script src="/app.js"></script>
+<script>renderNav("/reels");</script>
+<main>
+  <p class="brand"><span>CS2</span>clipper</p>
+  <h1>Reels</h1>
+  <div id="matches"><p class="sum">Loading…</p></div>
+</main>
+<script>
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const esc = s => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+let data = [];
+
+function dateLabel(iso) {
+  const d = new Date(iso);
+  return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+function highlightRow(h) {
+  const reasons = h.reasons.join(", ");
+  return `<div class="hl">
+    <b>Round ${h.round} · ${esc(h.type)}</b>${reasons ? ` <span class="muted">${esc(reasons)}</span>` : ""}
+    <button class="skip" data-reel="${h.player}" ${h.player === null ? "disabled" : ""}>Player</button>
+    <button class="skip" data-reel="${h.enemy}" ${h.enemy === null ? "disabled" : ""}>Enemy</button>
+  </div>`;
+}
+
+function resultClass(result) {
+  return result === "win" ? "good" : result === "loss" ? "bad" : "";
+}
+
+function matchBlock(m) {
+  const rows = m.highlights.map(highlightRow).join("");
+  const score = `<span class="num ${resultClass(m.result)}">${esc(m.score)} ${esc(m.result)}</span>`;
+  return `<section class="match" data-checksum="${esc(m.checksum)}">
+    <h2 class="match-title">${esc(m.map)} · ${dateLabel(m.played_at)} · ${score}</h2>
+    ${rows}
+    <button class="skip" data-open="${esc(m.checksum)}">Open folder</button>
+  </section>`;
+}
+
+function render() {
+  const main = document.getElementById("matches");
+  main.innerHTML = data.length ? data.map(matchBlock).join("")
+    : '<p class="sum">No Reels yet. Finished Demos show up here.</p>';
+}
+
+async function load() {
+  try {
+    const response = await api("api/reels");
+    if (response.ok) { data = await response.json(); render(); }
+  } catch (e) {
+    document.getElementById("matches").textContent = "Can't reach clipper right now. Is it running?";
+  }
+}
+
+function showReel(button) {
+  let video = document.getElementById("player-video");
+  if (!video) {
+    video = document.createElement("video");
+    video.id = "player-video";
+    video.controls = true;
+    video.autoplay = true;
+  }
+  video.src = `/reels/${button.dataset.reel}.mp4`;
+  button.closest(".match").insertAdjacentElement("afterend", video);
+}
+
+document.addEventListener("click", async e => {
+  const openButton = e.target.closest("button[data-open]");
+  if (openButton) {
+    openButton.disabled = true;
+    await api(`api/reels/${openButton.dataset.open}/open-folder`, {method: "POST"});
+    openButton.disabled = false;
+    return;
+  }
+  const reelButton = e.target.closest("button[data-reel]");
+  if (reelButton && !reelButton.disabled) showReel(reelButton);
+});
+
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>

@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import re
 import socket
+import sqlite3
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -42,7 +43,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import psutil
-from flask import Flask, Response, jsonify, redirect, request
+from flask import Flask, Response, jsonify, redirect, request, send_file
 from waitress.server import create_server
 from werkzeug.routing import BaseConverter
 
@@ -62,6 +63,7 @@ PERSPECTIVES = ("player", "enemy")
 
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _MATCH_ID_PATTERN = r"1-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+_CHECKSUM_PATTERN = r"[0-9a-f]{16}"
 # Flask endpoint names (not paths) reachable from another device (spec: Reach from other devices).
 _PHONE_ENDPOINTS = frozenset({"demos_page", "demos_json", "demos_action", "app_css", "app_js"})
 # Kept in step with app.PAGES by value; app.py can't be imported here without a cycle (it imports web.py).
@@ -73,6 +75,13 @@ class _MatchIdConverter(BaseConverter):
     404 regardless of method, the way today's regex-matched `page.py` never routes it anywhere."""
 
     regex = _MATCH_ID_PATTERN
+
+
+class _ChecksumConverter(BaseConverter):
+    """Only a real match checksum (16 lowercase hex digits) is a route at all; anything else is a
+    plain 404 (spec: Pages, Reels)."""
+
+    regex = _CHECKSUM_PATTERN
 
 
 def own_addresses() -> set[str]:
@@ -133,6 +142,20 @@ def status_demos(index: Index) -> list[dict]:
     return demos
 
 
+def reels_row(index: Index, match: sqlite3.Row) -> dict:
+    """One entry of `/api/reels`: `match`'s Reels, in round order (spec: Pages, Reels)."""
+    highlights = [
+        {"round": h["round"], "type": h["type"], "reasons": json.loads(h["reasons"]),
+         "player": h["player_reel_id"], "enemy": h["enemy_reel_id"]}
+        for h in index.match_reels(match["checksum"])
+    ]
+    return {
+        "checksum": match["checksum"], "map": map_label(match["map"]), "played_at": match["played_at"],
+        "score": f"{match['team_score']}–{match['opponent_score']}", "result": match["result"],
+        "highlights": highlights,
+    }
+
+
 @dataclass
 class WebContext:
     """What the pages need from the app. Later tasks add fields here, each with a default, for the
@@ -149,6 +172,7 @@ class WebContext:
     quit: Callable[[str | None], str] = lambda mode: "now"
     resume: Callable[[], None] = lambda: None
     log_lines: Callable[[int], list[str]] = applog.recent
+    open_folder: Callable[[Path], None] = lambda folder: None
 
 
 def _client_address() -> str:
@@ -174,6 +198,7 @@ def _no_store(response: Response) -> Response:
 def create_app(ctx: WebContext) -> Flask:
     app = Flask(__name__)
     app.url_map.converters["match_id"] = _MatchIdConverter
+    app.url_map.converters["checksum"] = _ChecksumConverter
 
     @app.before_request
     def _guard():
@@ -254,6 +279,49 @@ def create_app(ctx: WebContext) -> Flask:
         if mode is not None and mode not in ("now", "after_render"):
             return Response(status=400)
         return _no_store(jsonify(result=ctx.quit(mode)))
+
+    @app.get("/reels")
+    def reels_page():
+        return _no_store(Response((PAGES_DIR / "reels.html").read_bytes(), mimetype="text/html"))
+
+    @app.get("/api/reels")
+    def api_reels():
+        index = Index(ctx.index_path)
+        try:
+            body = [reels_row(index, match) for match in index.reel_matches()]
+        finally:
+            index.close()
+        return _no_store(jsonify(body))
+
+    @app.get("/reels/<int:reel_id>.mp4")
+    def reel_video(reel_id: int):
+        index = Index(ctx.index_path)
+        try:
+            row = index.reel(reel_id)
+        finally:
+            index.close()
+        if row is None or not Path(row["path"]).is_file():
+            return Response(status=404)
+        return send_file(Path(row["path"]), mimetype="video/mp4", conditional=True)
+
+    @app.post("/api/reels/<checksum:checksum>/open-folder")
+    def api_open_folder(checksum: str):
+        """The folder passed to `ctx.open_folder` always comes from the index, never from the
+        request body (spec: Pages, Reels)."""
+        index = Index(ctx.index_path)
+        try:
+            reel_id = next(
+                (h["player_reel_id"] or h["enemy_reel_id"] for h in index.match_reels(checksum)
+                 if h["player_reel_id"] or h["enemy_reel_id"]),
+                None,
+            )
+            row = index.reel(reel_id) if reel_id is not None else None
+        finally:
+            index.close()
+        if row is None:
+            return Response(status=404)
+        ctx.open_folder(Path(row["path"]).parent)
+        return Response(status=204)
 
     @app.get("/demos")
     def demos_page():

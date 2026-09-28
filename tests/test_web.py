@@ -14,7 +14,7 @@ import pytest
 
 from clipper.checks import Check
 from clipper.index import Index
-from clipper.model import FaceitStats, MatchInfo
+from clipper.model import FaceitStats, Highlight, MatchInfo
 from clipper.state import Rendering, Snapshot
 from clipper.web import MARKER_HEADER, WebContext, WebServer, create_app
 
@@ -443,3 +443,131 @@ def test_quit_refuses_a_phone_and_needs_the_marker(client):
 
 def test_status_and_new_routes_answer_403_on_a_foreign_host(client):
     assert client.get("/status", base_url=PC, headers={"Host": "evil.example:8765"}).status_code == 403
+
+
+# --- Reels page (Task 12) -------------------------------------------------------------------------
+
+REEL_MATCH = MatchInfo(checksum="c0ffee00c0ffee00", map_name="de_mirage",
+                       played_at=datetime(2026, 9, 27, 18, 0, tzinfo=timezone.utc),
+                       team_score=13, opponent_score=5)
+
+
+def _reels_index(index) -> int:
+    """A done Demo for REEL_MATCH with one selected Highlight (round 8, 4K). Returns its highlight id;
+    the caller adds the Reel(s) it needs."""
+    index.save_match(REEL_MATCH)
+    demo_id = _add_demo(index, name="1-reel.dem.zst", sha="b" * 64)
+    index.advance(demo_id, "done", match_checksum=REEL_MATCH.checksum)
+    hl = Highlight(round=8, type="4K", score=40, reasons=("4k",), frag_ticks=(100,),
+                   round_start_tick=0, round_end_tick=5000)
+    index.save_highlights(REEL_MATCH.checksum, [hl], {8})
+    return index.selected_highlights(REEL_MATCH.checksum)[0]["id"]
+
+
+def test_reels_page_is_served(client):
+    response = pc_get(client, "/reels")
+    assert response.status_code == 200
+    assert response.content_type == "text/html; charset=utf-8"
+
+
+def test_api_reels_shape(tmp_path, index):
+    highlight_id = _reels_index(index)
+    video_path = tmp_path / "r8-player.mp4"
+    video_path.write_bytes(b"0123456789")
+    index.save_reel(highlight_id, "player", video_path, 12.5)
+
+    data = pc_get(app_for(tmp_path).test_client(), "/api/reels").get_json()
+
+    assert len(data) == 1
+    match = data[0]
+    assert (match["checksum"], match["map"], match["score"], match["result"]) == (
+        REEL_MATCH.checksum, "Mirage", "13–5", "win")
+    assert match["played_at"] == REEL_MATCH.played_at.isoformat()
+    assert len(match["highlights"]) == 1
+    h = match["highlights"][0]
+    assert (h["round"], h["type"], h["reasons"], h["enemy"]) == (8, "4K", ["4k"], None)
+    assert isinstance(h["player"], int)
+
+
+def test_api_reels_refuses_a_phone(client):
+    assert phone_get(client, "/api/reels").status_code == 403
+
+
+def test_reels_page_refuses_a_phone(client):
+    assert phone_get(client, "/reels").status_code == 403
+
+
+def test_reel_video_is_served_whole_and_in_part(tmp_path, index):
+    highlight_id = _reels_index(index)
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_bytes(bytes(range(200)))
+    index.save_reel(highlight_id, "player", video_path, 12.5)
+    reel_id = index.match_reels(REEL_MATCH.checksum)[0]["player_reel_id"]
+    client = app_for(tmp_path).test_client()
+
+    whole = pc_get(client, f"/reels/{reel_id}.mp4")
+    assert whole.status_code == 200
+    assert whole.data == bytes(range(200))
+
+    part = pc_get(client, f"/reels/{reel_id}.mp4", headers={"Range": "bytes=0-99"})
+    assert part.status_code == 206
+    assert part.data == bytes(range(100))
+
+
+def test_reel_video_404_for_an_unknown_reel(client):
+    assert pc_get(client, "/reels/999999.mp4").status_code == 404
+
+
+def test_reel_video_404_when_its_file_is_gone(tmp_path, index):
+    highlight_id = _reels_index(index)
+    index.save_reel(highlight_id, "player", tmp_path / "gone.mp4", 12.5)   # never written to disk
+    reel_id = index.match_reels(REEL_MATCH.checksum)[0]["player_reel_id"]
+
+    response = pc_get(app_for(tmp_path).test_client(), f"/reels/{reel_id}.mp4")
+
+    assert response.status_code == 404
+
+
+def test_reel_video_refuses_a_phone(tmp_path, index):
+    highlight_id = _reels_index(index)
+    video_path = tmp_path / "clip.mp4"
+    video_path.write_bytes(b"x")
+    index.save_reel(highlight_id, "player", video_path, 1.0)
+    reel_id = index.match_reels(REEL_MATCH.checksum)[0]["player_reel_id"]
+
+    response = phone_get(app_for(tmp_path).test_client(), f"/reels/{reel_id}.mp4")
+
+    assert response.status_code == 403
+
+
+def test_open_folder_passes_the_folder_from_the_index_and_ignores_the_request_body(tmp_path, index):
+    highlight_id = _reels_index(index)
+    video_path = tmp_path / "videos" / "clip.mp4"
+    video_path.parent.mkdir()
+    video_path.write_bytes(b"x")
+    index.save_reel(highlight_id, "player", video_path, 1.0)
+    calls = []
+    app = app_for(tmp_path, open_folder=lambda folder: calls.append(folder))
+
+    response = pc_post(app.test_client(), f"/api/reels/{REEL_MATCH.checksum}/open-folder", headers=MARKED,
+                       json={"folder": "C:/evil"})
+
+    assert response.status_code == 204
+    assert calls == [video_path.parent]
+
+
+def test_open_folder_404_when_the_match_has_no_reels(tmp_path):
+    response = pc_post(app_for(tmp_path).test_client(), f"/api/reels/{'a' * 16}/open-folder", headers=MARKED)
+    assert response.status_code == 404
+
+
+def test_open_folder_404_for_a_malformed_checksum(tmp_path):
+    response = pc_post(app_for(tmp_path).test_client(), "/api/reels/not-hex/open-folder", headers=MARKED)
+    assert response.status_code == 404
+
+
+def test_open_folder_refuses_a_phone_and_needs_the_marker(tmp_path):
+    checksum = "a" * 16
+    app = app_for(tmp_path)
+    assert pc_post(app.test_client(), f"/api/reels/{checksum}/open-folder").status_code == 403
+    assert phone_post(app.test_client(), f"/api/reels/{checksum}/open-folder", headers=MARKED).status_code == 403

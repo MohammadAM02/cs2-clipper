@@ -311,6 +311,34 @@ class Index:
         )
         return row[0]
 
+    def reel_matches(self) -> list[sqlite3.Row]:
+        """Every match with a done Demo and at least one Reel, newest played first (spec: Pages,
+        Reels)."""
+        return self._all(
+            "SELECT DISTINCT m.checksum, m.map, m.played_at, m.team_score, m.opponent_score, m.result"
+            " FROM matches m JOIN demos d ON d.match_checksum = m.checksum AND d.state = 'done'"
+            " WHERE EXISTS (SELECT 1 FROM highlights h JOIN reels r ON r.highlight_id = h.id"
+            " WHERE h.match_checksum = m.checksum)"
+            " ORDER BY m.played_at DESC"
+        )
+
+    def match_reels(self, checksum: str) -> list[sqlite3.Row]:
+        """That match's selected Highlights that have a Reel, in round order, with each
+        Perspective's Reel id (NULL when that Perspective has none)."""
+        return self._all(
+            "SELECT h.id AS highlight_id, h.round, h.type, h.reasons,"
+            " pr.id AS player_reel_id, er.id AS enemy_reel_id"
+            " FROM highlights h"
+            " LEFT JOIN reels pr ON pr.highlight_id = h.id AND pr.perspective = 'player'"
+            " LEFT JOIN reels er ON er.highlight_id = h.id AND er.perspective = 'enemy'"
+            " WHERE h.match_checksum = ? AND h.selected = 1 AND (pr.id IS NOT NULL OR er.id IS NOT NULL)"
+            " ORDER BY h.round",
+            (checksum,),
+        )
+
+    def reel(self, reel_id: int) -> sqlite3.Row | None:
+        return self._one("SELECT * FROM reels WHERE id = ?", (reel_id,))
+
     # --- FACEIT matches (match alerts) ---------------------------------------------------------------
 
     def save_faceit_match(self, match_id: str, finished_at: datetime, state: str,

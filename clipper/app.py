@@ -35,6 +35,7 @@ from __future__ import annotations
 import json
 import logging
 import msvcrt
+import os
 import sys
 import threading
 import time
@@ -224,6 +225,7 @@ class App:
             checks=self.checks,
             quit=self.quit,
             resume=self.resume,
+            open_folder=os.startfile,
         )
         try:
             self._web = web.WebServer(web.create_app(ctx), self.settings.current().config.page_port,

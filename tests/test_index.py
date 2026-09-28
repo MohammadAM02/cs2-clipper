@@ -139,6 +139,68 @@ def test_one_reel_per_highlight_and_perspective(index):
     assert index.reel_count(MATCH.checksum) == 2
 
 
+# --- reel_matches / match_reels / reel: the Reels page (Task 12) -----------------------------------
+
+
+def test_reel_matches_lists_only_done_demos_with_a_reel_newest_played_first(index):
+    older = MatchInfo(checksum="a" * 16, map_name="de_inferno",
+                      played_at=datetime(2026, 9, 20, tzinfo=timezone.utc), team_score=13, opponent_score=5)
+    newer = MatchInfo(checksum="b" * 16, map_name="de_mirage",
+                      played_at=datetime(2026, 9, 25, tzinfo=timezone.utc), team_score=10, opponent_score=13)
+    no_reel = MatchInfo(checksum="c" * 16, map_name="de_nuke",
+                        played_at=datetime(2026, 9, 26, tzinfo=timezone.utc), team_score=13, opponent_score=0)
+    not_done = MatchInfo(checksum="d" * 16, map_name="de_ancient",
+                         played_at=datetime(2026, 9, 27, tzinfo=timezone.utc), team_score=13, opponent_score=1)
+    for m in (older, newer, no_reel, not_done):
+        index.save_match(m)
+    for m, state in ((older, "done"), (newer, "done"), (no_reel, "done"), (not_done, "rendering")):
+        demo_id = add(index, name=f"1-{m.checksum}.dem.zst", sha=m.checksum + "0" * 48)
+        index.advance(demo_id, state, match_checksum=m.checksum)
+    for m in (older, newer, not_done):
+        index.save_highlights(m.checksum, [highlight(1, 40, 1000)], {1})
+        highlight_id = index.selected_highlights(m.checksum)[0]["id"]
+        index.save_reel(highlight_id, "player", Path(f"E:/{m.checksum}-player.mp4"), 10.0)
+    # no_reel: a done Demo, but never scored/rendered -- no Highlights, so no Reel either
+
+    rows = index.reel_matches()
+
+    assert [r["checksum"] for r in rows] == [newer.checksum, older.checksum]
+    row = rows[1]
+    assert (row["map"], row["team_score"], row["opponent_score"], row["result"]) == ("de_inferno", 13, 5, "win")
+
+
+def test_match_reels_pairs_perspectives_leaves_missing_ones_null_and_drops_reel_less_highlights(index):
+    index.save_match(MATCH)
+    index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031), highlight(3, 40, 15259),
+                                           highlight(20, 10, 90000)], {3, 12, 20})
+    ids = {row["round"]: row["id"] for row in index.selected_highlights(MATCH.checksum)}
+    index.save_reel(ids[12], "player", Path("E:/r12-player.mp4"), 15.6)
+    index.save_reel(ids[12], "enemy", Path("E:/r12-enemy.mp4"), 15.6)
+    index.save_reel(ids[3], "player", Path("E:/r3-player.mp4"), 8.0)
+    # round 3 has no enemy Reel; round 20 (selected) has no Reel at all
+
+    rows = index.match_reels(MATCH.checksum)
+
+    assert [r["round"] for r in rows] == [3, 12]
+    assert (rows[0]["player_reel_id"] is not None, rows[0]["enemy_reel_id"]) == (True, None)
+    assert (rows[1]["player_reel_id"] is not None, rows[1]["enemy_reel_id"] is not None) == (True, True)
+    assert json.loads(rows[0]["reasons"]) == ["3k"]
+
+
+def test_reel_by_id_and_none_for_an_unknown_one(index):
+    index.save_match(MATCH)
+    index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031)], {12})
+    highlight_id = index.selected_highlights(MATCH.checksum)[0]["id"]
+    index.save_reel(highlight_id, "player", Path("E:/r12-player.mp4"), 15.6)
+    reel_id = index.match_reels(MATCH.checksum)[0]["player_reel_id"]
+
+    row = index.reel(reel_id)
+
+    assert (row["highlight_id"], row["perspective"], row["path"], row["duration_s"]) == (
+        highlight_id, "player", str(Path("E:/r12-player.mp4")), 15.6)
+    assert index.reel(reel_id + 999) is None
+
+
 def test_matches_and_flags_round_trip(index):
     index.save_match(MATCH)
     row = index.match(MATCH.checksum)

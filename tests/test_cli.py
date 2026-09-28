@@ -2,8 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from clipper.cli import (
-    AlreadyRunning, cmd_resume, cmd_retry, cmd_run, format_status, main, single_instance, start_match_alerts)
+from clipper.cli import cmd_resume, cmd_retry, format_status, main
 from clipper.config import Config
 from clipper.gate import GateStatus
 from clipper.index import Index
@@ -62,59 +61,6 @@ def test_retry_sends_a_failed_demo_back(index, tmp_path):
     assert cmd_retry(index, "nope") == 1
 
 
-def test_only_one_instance_can_hold_the_lock(tmp_path):
-    lock = tmp_path / "clipper.lock"
-    with single_instance(lock):
-        with pytest.raises(AlreadyRunning):
-            with single_instance(lock):
-                pass
-    with single_instance(lock):   # released again
-        pass
-
-
-def test_a_failed_start_is_reported_and_stops(tmp_path, monkeypatch):
-    # Build a Config with folders under tmp_path, and settings that clear the missing-settings check
-    cfg = Config(downloads_dir=tmp_path / "downloads", data_root=tmp_path / "clips",
-                 index_path=tmp_path / "clipper.sqlite", subject_steamid="76561198000000001")
-
-    # Monkeypatch applog.setup to a no-op (these tests must never touch the real root logger)
-    monkeypatch.setattr("clipper.cli.applog.setup", lambda logs_dir: [])
-
-    # Monkeypatch postgres.ensure_running to raise RuntimeError
-    monkeypatch.setattr("clipper.cli.postgres.ensure_running",
-                       lambda pg_bin, pg_data: (_ for _ in ()).throw(RuntimeError("pg_ctl start failed")))
-
-    # Monkeypatch notify to record (title, body)
-    notifications = []
-    monkeypatch.setattr("clipper.cli.notify", lambda title, body: notifications.append((title, body)))
-
-    # cmd_run should return 1
-    assert cmd_run(cfg) == 1
-
-    # Exactly one notification should be recorded
-    assert len(notifications) == 1
-    title, body = notifications[0]
-    assert title == "clipper could not start"
-    assert "pg_ctl start failed" in body
-
-
-def test_a_missing_steamid_or_clips_folder_fails_the_start_and_names_what_to_set(tmp_path, monkeypatch):
-    monkeypatch.setattr("clipper.cli.applog.setup", lambda logs_dir: [])
-    notifications = []
-    monkeypatch.setattr("clipper.cli.notify", lambda title, body: notifications.append((title, body)))
-
-    cfg = Config(downloads_dir=tmp_path / "downloads", index_path=tmp_path / "clipper.sqlite")
-
-    assert cmd_run(cfg) == 1
-
-    assert len(notifications) == 1
-    title, body = notifications[0]
-    assert title == "clipper could not start"
-    assert "your SteamID" in body
-    assert "your clips folder" in body
-    assert "Settings" in body
-
-
 def test_status_shows_match_alerts_and_the_page(index):
     index.set_flag("alerts_status", "on")
     index.set_flag("page_port", "8765")
@@ -139,18 +85,23 @@ def test_status_says_the_clips_folder_is_not_set_instead_of_crashing(monkeypatch
     assert "Gate: waiting: the clips folder is not set" in out
 
 
-def test_match_alerts_stay_off_without_the_setting_or_the_key(index, tmp_path):
-    folders = {"downloads_dir": tmp_path, "data_root": tmp_path / "clips", "index_path": tmp_path / "clipper.sqlite"}
-    assert start_match_alerts(Config(**folders, match_alerts=False), index, probe=None, gate=None) is None
-    assert index.get_flag("alerts_status") == "off: switched off in Settings"
-    assert start_match_alerts(Config(**folders), index, probe=None, gate=None) is None
-    assert index.get_flag("alerts_status") == "off: set your FACEIT nickname and API key in Settings"
+# --- run delegates to app.run_headless ------------------------------------------------------------
 
 
-def test_match_alerts_stay_off_when_the_page_cannot_start(index, tmp_path, monkeypatch):
-    folders = {"downloads_dir": tmp_path, "data_root": tmp_path / "clips", "index_path": tmp_path / "clipper.sqlite",
-              "faceit_nickname": "someone", "faceit_api_key_protected": "a-protected-blob"}
-    monkeypatch.setattr("clipper.cli.PageServer",
-                        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("no free port in 8765–8774")))
-    assert start_match_alerts(Config(**folders), index, probe=None, gate=None) is None
-    assert index.get_flag("alerts_status") == "off: the Demos to grab page could not start: no free port in 8765–8774"
+def test_no_subcommand_runs_the_app(monkeypatch):
+    calls = []
+    monkeypatch.setattr("clipper.cli.app.run_headless", lambda: calls.append(True) or 0)
+    assert main([]) == 0
+    assert calls == [True]
+
+
+def test_run_headless_runs_the_app(monkeypatch):
+    calls = []
+    monkeypatch.setattr("clipper.cli.app.run_headless", lambda: calls.append(True) or 0)
+    assert main(["run", "--headless"]) == 0
+    assert calls == [True]
+
+
+def test_install_is_no_longer_a_command():
+    with pytest.raises(SystemExit):
+        main(["install"])

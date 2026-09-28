@@ -148,6 +148,33 @@ def test_matches_and_flags_round_trip(index):
     assert index.get_flag("paused") == "1"
 
 
+def test_pause_records_who_and_resume_clears_it(index):
+    assert index.paused_by() is None
+    index.pause("you")
+    assert index.paused_by() == "you"
+    assert index.get_flag("paused") == "1"
+    index.set_flag("consecutive_failures", "2")
+    index.resume()
+    assert index.paused_by() is None
+    assert index.get_flag("paused") == "0"
+    assert index.get_flag("consecutive_failures") == "0"
+
+
+def test_pause_after_failures(index):
+    index.pause("failures")
+    assert index.paused_by() == "failures"
+
+
+def test_paused_by_falls_back_to_failures_for_an_index_paused_by_an_older_version(index):
+    index.set_flag("paused", "1")   # an older version paused without recording who
+    assert index.paused_by() == "failures"
+
+
+def test_paused_by_is_none_when_not_paused(index):
+    index.set_flag("paused", "0")
+    assert index.paused_by() is None
+
+
 NOW = datetime(2026, 9, 25, 20, 0, tzinfo=timezone.utc)
 FIRST = "1-00000000-0000-0000-0000-000000000001"
 SECOND = "1-00000000-0000-0000-0000-000000000002"

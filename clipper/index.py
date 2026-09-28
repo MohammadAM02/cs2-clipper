@@ -403,3 +403,21 @@ class Index:
             " ON CONFLICT (key) DO UPDATE SET value = excluded.value",
             (key, value),
         )
+
+    def pause(self, by: str) -> None:
+        """`by` is "you" (the tray, the Status page) or "failures" (the worker, after repeated
+        failed renders)."""
+        self.set_flag("paused", "1")
+        self.set_flag("paused_by", by)
+
+    def resume(self) -> None:
+        self.set_flag("paused", "0")
+        self.set_flag("consecutive_failures", "0")
+        self.set_flag("paused_by", "")
+
+    def paused_by(self) -> str | None:
+        """None unless paused; "failures" when paused but paused_by is missing or empty (an index
+        paused by an older version)."""
+        if self.get_flag("paused") != "1":
+            return None
+        return self.get_flag("paused_by") or "failures"

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pytest
 
 from clipper.cli import (
-    AlreadyRunning, cmd_retry, cmd_run, format_status, main, single_instance, start_match_alerts)
+    AlreadyRunning, cmd_resume, cmd_retry, cmd_run, format_status, main, single_instance, start_match_alerts)
 from clipper.config import Config
 from clipper.gate import GateStatus
 from clipper.index import Index
@@ -25,11 +25,32 @@ def test_status_of_an_empty_index(index):
 def test_status_shows_why_the_gate_waits_and_why_a_demo_failed(index, tmp_path):
     demo_id = index.add_demo("1-a.dem.zst", "a" * 64, tmp_path / "1-a.dem.zst")
     index.fail(demo_id, "unpacked: disk full")
-    index.set_flag("paused", "1")
+    index.pause("failures")
     lines = format_status(index, GateStatus(ok=False, reasons=("CS2 is running", "FACEIT AC is running"))).splitlines()
     assert lines[0] == "Gate: waiting: CS2 is running; FACEIT AC is running"
-    assert lines[1].startswith("Rendering: PAUSED")
+    assert lines[1] == ("Rendering: PAUSED after repeated failures. Check HLAE/CS2, then resume from the tray, "
+                        "the Status page or: clipper resume")
     assert lines[2] == f"#{demo_id:<3} failed    1-a.dem.zst  - unpacked: disk full"
+
+
+def test_status_says_who_paused_when_you_did(index):
+    index.pause("you")
+    lines = format_status(index, GateStatus(ok=True)).splitlines()
+    assert lines[1] == "Rendering: PAUSED by you. Resume from the tray, the Status page or: clipper resume"
+
+
+def test_status_falls_back_to_after_failures_for_an_index_paused_by_an_older_version(index):
+    index.set_flag("paused", "1")   # no paused_by: an older version paused it
+    lines = format_status(index, GateStatus(ok=True)).splitlines()
+    assert lines[1] == ("Rendering: PAUSED after repeated failures. Check HLAE/CS2, then resume from the tray, "
+                        "the Status page or: clipper resume")
+
+
+def test_resume_clears_the_pause_and_prints(index, capsys):
+    index.pause("failures")
+    assert cmd_resume(index) == 0
+    assert index.paused_by() is None
+    assert "resumed" in capsys.readouterr().out
 
 
 def test_retry_sends_a_failed_demo_back(index, tmp_path):
@@ -56,8 +77,8 @@ def test_a_failed_start_is_reported_and_stops(tmp_path, monkeypatch):
     cfg = Config(downloads_dir=tmp_path / "downloads", data_root=tmp_path / "clips",
                  index_path=tmp_path / "clipper.sqlite", subject_steamid="76561198000000001")
 
-    # Monkeypatch _setup_logging to a no-op
-    monkeypatch.setattr("clipper.cli._setup_logging", lambda logs_dir: None)
+    # Monkeypatch applog.setup to a no-op (these tests must never touch the real root logger)
+    monkeypatch.setattr("clipper.cli.applog.setup", lambda logs_dir: [])
 
     # Monkeypatch postgres.ensure_running to raise RuntimeError
     monkeypatch.setattr("clipper.cli.postgres.ensure_running",
@@ -78,7 +99,7 @@ def test_a_failed_start_is_reported_and_stops(tmp_path, monkeypatch):
 
 
 def test_a_missing_steamid_or_clips_folder_fails_the_start_and_names_what_to_set(tmp_path, monkeypatch):
-    monkeypatch.setattr("clipper.cli._setup_logging", lambda logs_dir: None)
+    monkeypatch.setattr("clipper.cli.applog.setup", lambda logs_dir: [])
     notifications = []
     monkeypatch.setattr("clipper.cli.notify", lambda title, body: notifications.append((title, body)))
 

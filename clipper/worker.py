@@ -191,7 +191,7 @@ class Worker:
         self.index.advance(demo["id"], "joined")
 
     def _try_render(self, demo, job) -> None:
-        if self.index.get_flag("paused") == "1":
+        if self.index.paused_by() is not None:
             return
         if not self._gate_is_clear():
             return
@@ -247,7 +247,7 @@ class Worker:
         failures = int(self.index.get_flag("consecutive_failures", "0")) + 1
         self.index.set_flag("consecutive_failures", str(failures))
         if failures >= PAUSE_AFTER_FAILURES:
-            self.index.set_flag("paused", "1")
+            self.index.pause("failures")
             self.services.notify(
                 "Rendering paused",
                 f"{failures} renders failed in a row. Check HLAE/CS2 compatibility, then run: clipper resume",

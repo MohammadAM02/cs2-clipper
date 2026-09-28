@@ -161,6 +161,7 @@ def test_three_failed_renders_fail_the_demo_and_pause_rendering(world):
     assert demo["state"] == "failed"
     assert demo["last_error"] == "player render failed 3 times: csdm reported: Game error"
     assert world.index.get_flag("paused") == "1"
+    assert world.index.paused_by() == "failures"
     assert "Rendering paused" in world.titles()
 
 
@@ -175,7 +176,7 @@ def test_an_aborted_render_is_tried_again_without_counting(world):
 
 
 def test_paused_rendering_waits_for_resume(world):
-    world.index.set_flag("paused", "1")
+    world.index.pause("you")
     demo_id = world.add_demo()
     world.ticks(8)
     assert world.index.demo(demo_id)["state"] == "rendering"

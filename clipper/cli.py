@@ -12,10 +12,9 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from functools import partial
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from clipper import csdm_db, move_in, paths, postgres, protect, settings
+from clipper import applog, csdm_db, move_in, paths, postgres, protect, settings
 from clipper.alerts import MatchAlerts
 from clipper.config import REPO_ROOT, Config
 from clipper.install import install, uninstall
@@ -70,8 +69,14 @@ def format_status(index: Index, gate: GateStatus, host: str | None = None) -> st
             waiting = len(index.faceit_matches_in(("ready", "announced")))
             alerts += f" · {waiting} to grab · http://{host or socket.gethostname()}:{port}/demos"
         lines.append(f"Match alerts: {alerts}")
-    if index.get_flag("paused") == "1":
-        lines.append("Rendering: PAUSED after repeated failures. Check HLAE/CS2, then run: clipper resume")
+    paused_by = index.paused_by()
+    if paused_by == "you":
+        lines.append("Rendering: PAUSED by you. Resume from the tray, the Status page or: clipper resume")
+    elif paused_by is not None:
+        lines.append(
+            "Rendering: PAUSED after repeated failures. Check HLAE/CS2, then resume from the tray, "
+            "the Status page or: clipper resume"
+        )
     demos = index.all_demos()
     if not demos:
         lines.append("No Demos yet. Download one from a FACEIT matchroom.")
@@ -106,8 +111,7 @@ def cmd_retry(index: Index, key: str) -> int:
 
 
 def cmd_resume(index: Index) -> int:
-    index.set_flag("paused", "0")
-    index.set_flag("consecutive_failures", "0")
+    index.resume()
     print("rendering resumed")
     return 0
 
@@ -177,22 +181,11 @@ def build_worker(cfg: Config, index: Index) -> Worker:
     return Worker(cfg, index, services)
 
 
-def _setup_logging(logs_dir: Path) -> None:
-    logs_dir.mkdir(parents=True, exist_ok=True)
-    handlers: list[logging.Handler] = [
-        RotatingFileHandler(logs_dir / "clipper.log", maxBytes=5_000_000, backupCount=3, encoding="utf-8")
-    ]
-    if sys.stderr is not None:                        # pythonw has no console
-        handlers.append(logging.StreamHandler())
-    logging.basicConfig(level=logging.INFO, handlers=handlers,
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-
-
 def cmd_run(cfg: Config) -> int:
     try:
         with single_instance(paths.lock_file()):
             try:
-                _setup_logging(cfg.logs_dir)
+                applog.setup(cfg.logs_dir)
                 missing = [name for name, value in (("your SteamID", cfg.subject_steamid),
                                                     ("your clips folder", cfg.data_root)) if not value]
                 if missing:

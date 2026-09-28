@@ -7,6 +7,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from clipper import winjob
+
 ANALYZE_TIMEOUT_SECONDS = 1800   # analysis never launches CS2, so stopping it orphans nothing
 
 
@@ -28,13 +30,21 @@ class CsdmCli:
 
     def analyze(self, dem: Path, log_path: Path) -> str:
         """Run `csdm analyze <dem> --source faceit` and keep its output in log_path. The exit code
-        is not trusted: the caller checks that the match reached CS:DM's database."""
+        is not trusted: the caller checks that the match reached CS:DM's database. Runs inside the
+        app's kill-on-close job object like every csdm call (spec: Closing and quitting)."""
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             self.command("analyze", str(dem), "--source", "faceit"),
-            env=self.env(), capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=ANALYZE_TIMEOUT_SECONDS, creationflags=subprocess.CREATE_NO_WINDOW,
+            env=self.env(), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace", creationflags=subprocess.CREATE_NO_WINDOW,
         )
-        output = proc.stdout + proc.stderr
+        winjob.guard(proc)
+        try:
+            stdout, stderr = proc.communicate(timeout=ANALYZE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired as exc:
+            proc.kill()
+            exc.stdout, exc.stderr = proc.communicate()   # reap it and collect what it had written
+            raise
+        output = stdout + stderr
         log_path.write_text(output, encoding="utf-8")
         return output

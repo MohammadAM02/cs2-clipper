@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from clipper import winjob
 from clipper.csdm_cli import CsdmCli
 from clipper.media import MediaError
 from clipper.model import ClipFile
@@ -115,6 +116,7 @@ def render(
             csdm.command(*video_args(req)), env=csdm.env(), stdout=log_file,
             stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW,
         )
+        winjob.guard(proc)
         intervention, aborted = _watch(proc, probe, should_abort, stall_seconds,
                                        launch_timeout_seconds, poll_seconds, exit_grace_seconds)
         if intervention is not None:

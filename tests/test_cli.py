@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from clipper import paths
 from clipper.cli import cmd_resume, cmd_retry, format_status, main
 from clipper.config import Config
 from clipper.gate import GateStatus
@@ -85,21 +86,39 @@ def test_status_says_the_clips_folder_is_not_set_instead_of_crashing(monkeypatch
     assert "Gate: waiting: the clips folder is not set" in out
 
 
-# --- run delegates to app.run_headless ------------------------------------------------------------
+# --- the app's modes: no subcommand and `run` go to app.run, --window to the window -----------------
 
 
-def test_no_subcommand_runs_the_app(monkeypatch):
+@pytest.fixture
+def run_calls(monkeypatch):
     calls = []
-    monkeypatch.setattr("clipper.cli.app.run_headless", lambda open_page=None: calls.append(open_page) or 0)
+    monkeypatch.setattr("clipper.cli.app.run", lambda **kwargs: calls.append(kwargs) or 0)
+    return calls
+
+
+def test_no_subcommand_runs_the_app_with_a_window_and_a_tray(run_calls):
     assert main([]) == 0
-    assert calls == [None]
+    assert run_calls == [{"open_page": None, "background": False, "headless": False}]
 
 
-def test_run_headless_runs_the_app(monkeypatch):
-    calls = []
-    monkeypatch.setattr("clipper.cli.app.run_headless", lambda open_page=None: calls.append(open_page) or 0)
+def test_run_is_the_same_as_no_subcommand(run_calls):
+    assert main(["run"]) == 0
+    assert run_calls == [{"open_page": None, "background": False, "headless": False}]
+
+
+def test_background_starts_in_the_tray_only(run_calls):
+    assert main(["--background"]) == 0
+    assert run_calls == [{"open_page": None, "background": True, "headless": False}]
+
+
+def test_background_is_not_dropped_by_the_run_subcommand(run_calls):
+    assert main(["--background", "run"]) == 0
+    assert run_calls == [{"open_page": None, "background": True, "headless": False}]
+
+
+def test_run_headless_runs_the_app_without_tray_or_window(run_calls):
     assert main(["run", "--headless"]) == 0
-    assert calls == [None]
+    assert run_calls == [{"open_page": None, "background": False, "headless": True}]
 
 
 def test_install_is_no_longer_a_command():
@@ -110,15 +129,34 @@ def test_install_is_no_longer_a_command():
 # --- --open: top-level, and on the run subcommand ---------------------------------------------------
 
 
-def test_open_reels_with_no_subcommand_reaches_run_headless_as_reels(monkeypatch):
-    calls = []
-    monkeypatch.setattr("clipper.cli.app.run_headless", lambda open_page=None: calls.append(open_page) or 0)
+def test_open_reels_with_no_subcommand_reaches_run_as_reels(run_calls):
     assert main(["--open", "reels"]) == 0
-    assert calls == ["/reels"]
+    assert run_calls == [{"open_page": "/reels", "background": False, "headless": False}]
 
 
-def test_run_open_reels_reaches_run_headless_as_reels(monkeypatch):
-    calls = []
-    monkeypatch.setattr("clipper.cli.app.run_headless", lambda open_page=None: calls.append(open_page) or 0)
+def test_run_open_reels_reaches_run_as_reels(run_calls):
     assert main(["run", "--open", "reels"]) == 0
-    assert calls == ["/reels"]
+    assert run_calls == [{"open_page": "/reels", "background": False, "headless": False}]
+
+
+# --- --window URL: the window process (internal) ---------------------------------------------------
+
+
+def test_window_shows_the_page_and_starts_nothing_else(monkeypatch, run_calls):
+    shown = []
+    monkeypatch.setattr("clipper.cli.window.run_window",
+                        lambda url, profile_dir: shown.append((url, profile_dir)) or 0)
+    monkeypatch.setattr("clipper.cli.move_in.on_start", lambda: pytest.fail("the window process moves nothing in"))
+
+    assert main(["--window", "http://127.0.0.1:8765/status"]) == 0
+
+    assert shown == [("http://127.0.0.1:8765/status", paths.data_dir() / "window-profile")]
+    assert run_calls == []       # no app, so no lock and no worker either
+
+
+def test_window_is_not_offered_in_help(capsys):
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    help_text = capsys.readouterr().out
+    assert "--background" in help_text
+    assert "--window" not in help_text

@@ -1,4 +1,5 @@
-"""Command line (spec: Running it): run, status, retry, resume and highlights."""
+"""Command line (spec: The terminal): the app itself (no subcommand, or `run`), and status, retry,
+resume and highlights for development. `--window` is internal: the window process."""
 
 from __future__ import annotations
 
@@ -7,7 +8,7 @@ import re
 import socket
 import sys
 
-from clipper import app, csdm_db, move_in, paths, settings
+from clipper import app, csdm_db, move_in, paths, settings, window
 from clipper.config import REPO_ROOT, Config
 from clipper.gate import Gate, GateStatus
 from clipper.index import Index
@@ -103,6 +104,9 @@ def _add_open_argument(target: argparse.ArgumentParser) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="clipper", description="Hands-off CS2 highlight clipper.")
     _add_open_argument(parser)
+    parser.add_argument("--background", action="store_true",
+                        help="start in the tray only (used at sign-in)")
+    parser.add_argument("--window", metavar="URL", help=argparse.SUPPRESS)   # internal: the window process
     commands = parser.add_subparsers(dest="command")
     run_parser = commands.add_parser("run", help="run the app")
     run_parser.add_argument("--headless", action="store_true",
@@ -116,8 +120,11 @@ def main(argv: list[str] | None = None) -> int:
         "demo", help="index id, file name, or CS:DM match checksum")
     args = parser.parse_args(argv)
 
+    if args.window:      # the window process: no lock and no move-in, it only shows a page
+        return window.run_window(args.window, paths.data_dir() / "window-profile")
     if args.command in (None, "run"):
-        return app.run_headless(f"/{args.open}" if args.open else None)
+        return app.run(open_page=f"/{args.open}" if args.open else None, background=args.background,
+                       headless=args.command == "run" and args.headless)
 
     copied = move_in.on_start()
     if copied:

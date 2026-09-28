@@ -15,7 +15,7 @@ import pytest
 
 from clipper import paths, web
 from clipper.app import (
-    PAGES, AlreadyRunning, App, find_running, gate_reasons, hand_over, run_headless, single_instance,
+    PAGES, AlreadyRunning, App, find_running, gate_reasons, hand_over, run, run_headless, single_instance,
     start_match_alerts,
 )
 from clipper.config import Config
@@ -381,23 +381,118 @@ def test_start_releases_calls_refresh_if_due_promptly(world):
     assert called.wait(timeout=2.0)
 
 
-# --- open_window: headless for now (Task 14 replaces it with the app window) -----------------------
+# --- open_window: the window process, through the launcher (Task 14) --------------------------------
+
+PC = "http://127.0.0.1:8765"
 
 
-def test_open_window_opens_the_browser_when_the_page_port_is_set(world, monkeypatch):
-    opened = []
-    monkeypatch.setattr("clipper.app.webbrowser.open", lambda url: opened.append(url))
-    world.app.page_port = 8765
-    world.app.open_window("/reels")
-    assert opened == ["http://127.0.0.1:8765/reels"]
+@dataclass
+class FakeLauncher:
+    """`WindowLauncher` without a process: records what it was asked, and shares an event log so a test
+    can see the order things closed in."""
+
+    base_url: str
+    events: list
+    opened: list = field(default_factory=list)
+
+    def open(self, page: str) -> None:
+        self.opened.append(page)
+
+    def current(self) -> dict:
+        return {"seq": len(self.opened), "page": self.opened[-1] if self.opened else "/status"}
+
+    def close(self) -> None:
+        self.events.append("launcher closed")
 
 
-def test_open_window_does_nothing_without_a_page_port(world, monkeypatch):
-    opened = []
-    monkeypatch.setattr("clipper.app.webbrowser.open", lambda url: opened.append(url))
-    world.app.page_port = None
-    world.app.open_window("/status")
-    assert opened == []
+@dataclass
+class Windowed:
+    app: App
+    launchers: list
+    servers: list
+    events: list
+
+
+@pytest.fixture
+def windowed(tmp_path, monkeypatch):
+    """An App whose web server has no socket (it "binds" the port it is asked for) and whose window
+    launcher records its calls: nothing listens, nothing opens."""
+    (tmp_path / "clips").mkdir()
+    store = SettingsStore(tmp_path / "settings.json")
+    assert store.save({"data_root": str(tmp_path / "clips")}) == {}
+    events, launchers, servers = [], [], []
+
+    class Server:
+        def __init__(self, flask_app, port, *, tries):
+            self.flask_app, self.port = flask_app, port
+            servers.append(self)
+
+        def start(self) -> None:
+            events.append("web started")
+
+        def stop(self) -> None:
+            events.append("web stopped")
+
+    def make_launcher(base_url: str) -> FakeLauncher:
+        launchers.append(FakeLauncher(base_url, events))
+        return launchers[-1]
+
+    monkeypatch.setattr(web, "WebServer", Server)
+    app = App(store, index_path=tmp_path / "clipper.sqlite", launcher=make_launcher)
+    return Windowed(app, launchers, servers, events)
+
+
+def test_start_web_prepares_the_window_for_the_url_of_the_port_it_got(windowed):
+    windowed.app.start_web()
+    assert [launcher.base_url for launcher in windowed.launchers] == ["http://127.0.0.1:8765"]
+
+
+def test_open_window_asks_the_launcher_to_show_the_page(windowed):
+    windowed.app.start_web()
+    windowed.app.open_window("/reels")
+    assert windowed.launchers[0].opened == ["/reels"]
+
+
+def test_open_window_without_a_web_server_opens_nothing_and_says_so(windowed, caplog):
+    with caplog.at_level(logging.INFO, logger="clipper.app"):
+        windowed.app.open_window("/status")
+    assert windowed.launchers == []
+    assert "no web server" in caplog.text
+
+
+def test_the_web_contexts_window_request_is_the_launchers(windowed):
+    windowed.app.start_web()
+    client = windowed.servers[0].flask_app.test_client()
+    assert client.get("/api/window", base_url=PC).get_json() == {"seq": 0, "page": "/status"}
+
+    windowed.app.open_window("/reels")
+
+    assert client.get("/api/window", base_url=PC).get_json() == {"seq": 1, "page": "/reels"}
+
+
+def test_a_page_asked_for_through_the_web_reaches_the_launcher(windowed):
+    windowed.app.start_web()
+    client = windowed.servers[0].flask_app.test_client()
+    marked = {web.MARKER_HEADER: "1"}
+
+    response = client.post("/api/window", base_url=PC, headers=marked, json={"page": "/settings"})
+
+    assert response.status_code == 204
+    assert windowed.launchers[0].opened == ["/settings"]
+
+
+def test_close_closes_the_window_and_then_stops_the_web_server(windowed):
+    windowed.app.start_web()
+    windowed.events.clear()
+
+    windowed.app.close()
+
+    assert windowed.events == ["launcher closed", "web stopped"]
+
+
+def test_close_before_any_web_server_is_harmless(windowed):
+    windowed.app.close()
+    assert windowed.events == []
 
 
 def test_pages_has_one_home():
@@ -507,3 +602,78 @@ def test_run_headless_reports_when_the_running_copys_pages_do_not_answer(monkeyp
     err = capsys.readouterr().err
     assert "already running" in err
     assert "do not answer" in err
+
+
+# --- run: what starts, what opens, and what closes (Task 14) ------------------------------------------
+
+
+@pytest.fixture
+def startup(monkeypatch):
+    """`run` with everything that would listen or show replaced by a note in `events`: the web server,
+    the worker and releases threads, the window and the tray. The lock, the settings and the App itself
+    are real, in the test's own app data folder."""
+    events = []
+    monkeypatch.setattr("clipper.app.applog.setup", lambda logs_dir: [])
+    monkeypatch.setattr(App, "start_web", lambda self: events.append("web"))
+    monkeypatch.setattr(App, "start_worker", lambda self: events.append("worker"))
+    monkeypatch.setattr(App, "start_releases", lambda self: events.append("releases"))
+    monkeypatch.setattr(App, "open_window", lambda self, page: events.append(("window", page)))
+    monkeypatch.setattr(App, "close", lambda self: events.append("close"))
+    monkeypatch.setattr("clipper.app.tray.run_tray", lambda app: events.append("tray") or True)
+    return events
+
+
+def test_run_starts_the_pages_and_the_worker_then_opens_the_status_window_then_the_tray(startup):
+    assert run() == 0
+    assert startup == ["web", "worker", "releases", ("window", "/status"), "tray", "close"]
+
+
+def test_run_opens_the_page_it_is_asked_for(startup):
+    assert run(open_page="/reels") == 0
+    assert ("window", "/reels") in startup
+    assert ("window", "/status") not in startup
+
+
+def test_run_in_the_background_shows_only_the_tray(startup):
+    assert run(background=True) == 0
+    assert startup == ["web", "worker", "releases", "tray", "close"]
+
+
+def test_run_headless_shows_neither_tray_nor_window(startup):
+    assert run(headless=True, open_page="/reels") == 0
+    assert startup == ["web", "worker", "releases", "close"]
+
+
+def test_run_headless_is_run_without_tray_or_window(startup):
+    assert run_headless("/reels") == 0
+    assert startup == ["web", "worker", "releases", "close"]
+
+
+def test_run_without_a_tray_says_so(startup, monkeypatch, caplog):
+    monkeypatch.setattr("clipper.app.tray.run_tray", lambda app: startup.append("tray") or False)
+    with caplog.at_level(logging.WARNING, logger="clipper.app"):
+        assert run() == 0
+    assert "no tray" in caplog.text
+    assert startup[-2:] == ["tray", "close"]
+
+
+def test_run_keeps_the_app_alive_until_the_worker_has_ended_whatever_the_tray_did(startup, monkeypatch):
+    waits = []
+
+    def wait(self, timeout=None):       # the worker "ends" at the third look
+        waits.append(timeout)
+        return len(waits) >= 3
+
+    monkeypatch.setattr(App, "wait", wait)
+    assert run() == 0
+    assert len(waits) == 3
+    assert startup[-1] == "close"
+
+
+def test_a_background_start_while_a_copy_runs_exits_quietly_without_showing_anything(monkeypatch, capsys):
+    handed = []
+    monkeypatch.setattr("clipper.app.hand_over", lambda page, ports: handed.append(page) or True)
+    with single_instance(paths.lock_file()):
+        assert run(background=True) == 0
+    assert handed == []                  # sign-in never opens a window
+    assert capsys.readouterr().err == ""

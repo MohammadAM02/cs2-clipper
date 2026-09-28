@@ -2,11 +2,12 @@
 (spec: How the app runs; The terminal; When something goes wrong).
 
 `single_instance`/`AlreadyRunning`, `start_match_alerts` and `build_worker` are our own code, moved
-here from `cli.py` (Tasks 1-8) rather than adapted from Aegis. The overall shape of `run_headless` --
-single instance, then move in, then settings, then the web server, then the worker, then a short-wait
-loop so Ctrl+C is noticed promptly -- is adapted from thelifeofsuleyman/cs2-clipper's `aegis/app.py`
-(`main`, `_serve`); ours adds the quit-during-a-render choice the spec asks for, which Aegis has none
-of (it exits at once).
+here from `cli.py` (Tasks 1-8) rather than adapted from Aegis. The overall shape of `run` -- single
+instance, then move in, then settings, then the web server, then the worker, then the window and the
+tray, or else a short-wait loop so Ctrl+C is noticed promptly -- is adapted from
+thelifeofsuleyman/cs2-clipper's `aegis/app.py` (`main`, `_serve`); ours adds the quit-during-a-render
+choice the spec asks for, which Aegis has none of (it exits at once), and `--background`, which shows
+only the tray.
 
 MIT License
 
@@ -40,13 +41,12 @@ import sys
 import threading
 import time
 import urllib.request
-import webbrowser
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 
-from clipper import applog, checks, csdm_db, move_in, paths, protect, settings, web
+from clipper import applog, checks, csdm_db, move_in, paths, protect, settings, tray, web
 from clipper.alerts import MatchAlerts
 from clipper.config import Config
 from clipper.csdm_cli import CsdmCli
@@ -63,6 +63,7 @@ from clipper.settings import SettingsStore
 from clipper.state import AppState
 from clipper.unpack import unpack
 from clipper.web import PAGES  # noqa: F401 - its one home is web.py; cli.py and the tests read it as app.PAGES
+from clipper.window import WindowLauncher
 from clipper.worker import Services, StopRequest, Worker
 
 log = logging.getLogger(__name__)
@@ -183,13 +184,15 @@ def gate_reasons(cfg: Config, probe: ProcessProbe) -> tuple[str, ...]:
 
 
 class App:
-    """One running copy: its settings, what it is doing (`state`), the web server and the worker
-    thread. `problems` and `build` are swappable so tests never touch real csdm/CS2/Postgres."""
+    """One running copy: its settings, what it is doing (`state`), the web server, the window and the
+    worker thread. `problems`, `build` and `launcher` (given the web server's base URL) are swappable so
+    tests never touch real csdm/CS2/Postgres or open a window."""
 
     def __init__(self, settings: SettingsStore, *, index_path: Path, state: AppState | None = None,
                  stop: StopRequest | None = None,
                  problems: Callable[[Config], list[str]] = checks.startup_problems,
                  build: Callable[..., Worker] = build_worker,
+                 launcher: Callable[[str], WindowLauncher] = WindowLauncher,
                  recheck_seconds: float = 60.0, clock: Callable[[], float] = time.monotonic):
         self.settings = settings
         self.state = state if state is not None else AppState()
@@ -199,6 +202,8 @@ class App:
         self._index_path = index_path
         self._problems = problems
         self._build = build
+        self._launcher_factory = launcher
+        self._launcher: WindowLauncher | None = None
         self._recheck_seconds = recheck_seconds
         self._clock = clock
         self._probe = SystemProbe()
@@ -221,6 +226,7 @@ class App:
             index_path=self._index_path,
             gate_reasons=lambda: gate_reasons(self.settings.current().config, self._probe),
             open_window=self.open_window,
+            window_request=self._window_request,
             snapshot=self.state.snapshot,
             warnings=lambda: self.settings.current().warnings,
             checks=self.checks,
@@ -240,6 +246,7 @@ class App:
             log.warning("the Demos to grab page could not start: %s", exc)
             return
         self.page_port = self._web.port
+        self._launcher = self._launcher_factory(f"http://127.0.0.1:{self.page_port}")
         self.state.set_pages_off(None)
         self._web.start()
         index = Index(self._index_path)
@@ -250,15 +257,24 @@ class App:
         log.info("the Demos to grab page is on port %s", self.page_port)
 
     def close(self) -> None:
+        """The window goes first, then the web server it was showing."""
+        if self._launcher is not None:
+            self._launcher.close()
         if self._web is not None:
             self._web.stop()
 
     def open_window(self, page: str) -> None:
-        """Headless for now: opens `page` in the default browser (nothing when the web server has no
-        port). A second start (`hand_over`) and, once there is one, the tray reach this through
-        `/api/window`. Task 14 replaces it with the app window."""
-        if self.page_port is not None:
-            webbrowser.open(f"http://127.0.0.1:{self.page_port}{page}")
+        """Shows `page` in the app window: starts the window process, or asks the one that is open to
+        switch to it. The tray calls this, and so does `/api/window` for a second start (`hand_over`)
+        or a notification button. With no web server there is no page to show."""
+        if self._launcher is None:
+            log.info("nothing to show %s in: there is no web server", page)
+            return
+        self._launcher.open(page)
+
+    def _window_request(self) -> dict:
+        """`/api/window`'s answer, which the page in the open window polls (see `WindowLauncher`)."""
+        return self._launcher.current() if self._launcher is not None else {"seq": 0, "page": "/status"}
 
     # --- pause / resume (the tray, Task 14; the Status page's Resume, `/api/resume`) ---------------
 
@@ -398,10 +414,28 @@ class App:
             self.stop.wait(RELEASES_INTERVAL_SECONDS)
 
 
-def run_headless(open_page: str | None = None) -> int:
-    """`clipper run` / `clipper run --headless`: the worker and the web server, no tray or window
-    (spec: The terminal; How the app runs, Starting). A second start (`AlreadyRunning`) hands over to
-    the running copy instead, asking it to show `open_page` (Status when None)."""
+def _wait_for_quit(app: App) -> None:
+    """Blocks until the worker thread has ended, looking every half second so Ctrl+C is noticed: the
+    first one asks for a quit-now, a second ends the wait at once."""
+    quitting = False
+    while True:
+        try:
+            if app.wait(timeout=0.5):
+                return
+        except KeyboardInterrupt:
+            if quitting:
+                return   # a second Ctrl+C ends it at once
+            app.quit("now")
+            print("stopping any render first, then quitting…", file=sys.stderr)
+            quitting = True
+
+
+def run(*, open_page: str | None = None, background: bool = False, headless: bool = False) -> int:
+    """`clipper` / `clipper run`: the worker and the web server, and unless `headless` the window and the
+    tray icon too (spec: The terminal; How the app runs, Starting). The window opens on `open_page`
+    (Status when None); `background`, the sign-in mode, shows the tray icon only. The tray runs on this,
+    the main, thread. A second start (`AlreadyRunning`) hands over to the running copy instead, asking
+    it to show `open_page` (Status when None), or, with `background`, just exits."""
     try:
         with single_instance(paths.lock_file()):
             applog.setup(paths.logs_dir())
@@ -411,24 +445,22 @@ def run_headless(open_page: str | None = None) -> int:
                 log.warning(warning)
 
             app = App(store, index_path=paths.index_file())
-            app.start_web()
-            app.start_worker()
-            app.start_releases()
-
-            quitting = False
-            while True:
-                try:
-                    if app.wait(timeout=0.5):
-                        break
-                except KeyboardInterrupt:
-                    if quitting:
-                        break   # a second Ctrl+C ends it at once
-                    app.quit("now")
-                    print("stopping any render first, then quitting…", file=sys.stderr)
-                    quitting = True
-            app.close()
+            try:
+                app.start_web()
+                app.start_worker()
+                app.start_releases()
+                if not headless:
+                    if not background:
+                        app.open_window(open_page or "/status")
+                    if not tray.run_tray(app):
+                        log.warning("no tray icon: the app keeps running without one")
+                _wait_for_quit(app)   # at once when the tray only returned because the app had quit
+            finally:
+                app.close()
             return 0
     except AlreadyRunning as exc:
+        if background:
+            return 0   # started at sign-in with a copy already running: there is nothing to show
         page_port = settings.load(paths.settings_file()).config.page_port
         ports = range(page_port, page_port + web.PORTS_TO_TRY)
         if hand_over(open_page, ports):
@@ -436,3 +468,8 @@ def run_headless(open_page: str | None = None) -> int:
         else:
             print(f"{exc}, but its pages do not answer", file=sys.stderr)
         return 0
+
+
+def run_headless(open_page: str | None = None) -> int:
+    """`clipper run --headless`: `run` without the window and the tray."""
+    return run(headless=True, open_page=open_page)

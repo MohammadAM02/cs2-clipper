@@ -1,6 +1,6 @@
 # Spec: App shell — a desktop app around the pipeline
 
-Status: built on branch app-shell (2026-09-28); the hand checks under To confirm are the user's.
+Status: built on branch app-shell (2026-09-29); the hand checks under To confirm are the user's.
 The first of three pieces that turn the pipeline into an installable desktop app: **(1) this app
 shell**, (2) the release pipeline (installer, GitHub Releases, auto-update) and (3) the fresh-PC
 setup wizard. Each piece gets its own spec. Built on master after match alerts (merged 2026-09-27).
@@ -51,9 +51,11 @@ window, with a tray icon. We adopt it instead of designing our own.
 - The worker thread opens its own `Index`, because an SQLite connection belongs to the thread that
   made it. Every web request opens its own, as the Demos page does today.
 - **The window process** is the same Python (or `CS2Clipper.exe`) started with `--window <url>`. It
-  shows the page in a pywebview window. If pywebview cannot load, it opens a chromeless Edge or
+  shows the page in a pywebview window on WebView2. If pywebview cannot load, or has only the old
+  Internet Explorer engine (which cannot run the pages' scripts), it opens a chromeless Edge or
   Chrome `--app` window with its own profile (Aegis's `_open_app_mode`), and failing that, the
-  default browser. The process ends when its window closes, taking WebView2 with it.
+  default browser. The process ends when its window closes, taking WebView2 with it, and it sits in
+  the app's job object, so it also ends when the main process does.
 - **One window at a time.** While it is open, "Open" brings it to the front instead of starting
   another, and a request for a page (a notification button, the tray) switches the open window to
   it. The page asks the server every two seconds whether to switch.
@@ -231,7 +233,7 @@ folder already filled on this PC.
 | Postgres won't start, CS:DM is not found, the clips folder is missing, or a required setting is unset | The app keeps running; the worker skips its ticks; Status and the tray tooltip say what is wrong; checked again every minute; work resumes once fixed |
 | The web server cannot bind port 8765 | The next free port up to 8774, as the Demos page does today; the tray, window and notifications use the port it got. None free: the app runs without pages, the tray says so, and match alerts switch off with the reason (as today) |
 | The window cannot load | A Chromium `--app` window, then the default browser (Aegis's fallback) |
-| The main process crashes or is ended | The job object closes csdm, HLAE and the hooked CS2; at the next start, the Render Job left `running` is marked interrupted and redone (exists today) |
+| The main process crashes or is ended | The job object closes csdm, HLAE, the hooked CS2 and the window; at the next start, the Render Job left `running` is marked interrupted and redone (exists today) |
 | Quit during a render | The choice under Closing and quitting |
 | A setting fails validation on Save | Nothing is saved; each bad field says why |
 | `settings.json` holds a bad value (a hand edit) | That setting uses its default; Status warns |

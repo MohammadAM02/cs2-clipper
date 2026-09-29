@@ -610,7 +610,9 @@ def test_hand_over_with_nothing_listening_returns_false():
 # --- run_headless --------------------------------------------------------------------------------
 
 
-def test_run_headless_returns_0_with_a_message_when_the_lock_is_already_held(capsys):
+def test_run_headless_returns_0_with_a_message_when_the_lock_is_already_held(monkeypatch, capsys):
+    # Never the real hand_over: on 8765-8774 it would find the user's running app and open its window.
+    monkeypatch.setattr("clipper.app.hand_over", lambda page, ports: True)
     with single_instance(paths.lock_file()):
         assert run_headless() == 0
     assert "already running" in capsys.readouterr().err

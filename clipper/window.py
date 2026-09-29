@@ -43,6 +43,8 @@ import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 
+from clipper import winjob
+
 log = logging.getLogger(__name__)
 
 TITLE = "CS2 Clipper"
@@ -63,20 +65,45 @@ def window_command(url: str) -> list[str]:
 
 class WindowApi:
     """Exposed to the page as `window.pywebview.api`. pywebview publishes every public name on it, so
-    the window itself stays private."""
+    the window itself and what is known about it stay private."""
 
     def __init__(self) -> None:
-        self._window = None       # set by `_show_in_pywebview` once the window exists
+        self._window = None                 # set by `_attach` once the window exists
+        self._state = "normal"              # "normal", "minimized" or "maximized"
+        self._before_minimized = "normal"   # what a minimized window goes back to
+
+    def _attach(self, window) -> None:
+        """Follows the window's state through its events: pywebview has no call that reads it, and
+        `restore()` on a maximized window would un-maximize it."""
+        self._window = window
+        window.events.minimized += self._on_minimized
+        window.events.maximized += self._on_maximized
+        window.events.restored += self._on_restored
+
+    def _on_minimized(self) -> None:
+        if self._state != "minimized":
+            self._before_minimized = self._state
+        self._state = "minimized"
+
+    def _on_maximized(self) -> None:
+        self._state = "maximized"
+
+    def _on_restored(self) -> None:
+        self._state = "normal"
 
     def front(self) -> None:
-        """Restores the window (it may be minimized), shows it and raises it above the other windows.
-        Switching TopMost on and off is what lifts a window over another program's; it stays an
-        ordinary window afterwards."""
+        """Shows the window and raises it above the other windows. A minimized one comes back first, at
+        the size it had: a maximized window stays maximized. Switching TopMost on and off is what lifts a
+        window over another program's; it stays an ordinary window afterwards."""
         window = self._window
         if window is None:
             return
         try:
-            window.restore()
+            if self._state == "minimized":
+                if self._before_minimized == "maximized":
+                    window.maximize()
+                else:
+                    window.restore()
             window.show()
             window.on_top = True
             window.on_top = False
@@ -85,19 +112,34 @@ class WindowApi:
 
 
 def _show_in_pywebview(url: str) -> bool:
-    """The native window. Returns when it is closed; False, with the reason logged, when pywebview
-    cannot load or cannot start (no WebView2, no pythonnet, ...)."""
+    """The native window, on the Edge WebView2 engine. Returns when it is closed; False, with the reason
+    logged, when pywebview cannot load or cannot start (no pythonnet, ...), or when all it has is the
+    old Internet Explorer engine (no WebView2), which cannot run the pages' scripts."""
     try:
         import webview
     except Exception as exc:  # noqa: BLE001 - ImportError, or a native library that fails to load
         log.warning("pywebview is not available (%s); trying a Chromium window", exc)
         return False
+    engines = []
+
+    def refuse_mshtml(renderer):
+        # pywebview 6 falls back to MSHTML even when asked for edgechromium; a False here cancels the
+        # window before it shows, and `start` returns
+        engines.append(renderer)
+        return renderer != "mshtml"
+
     try:
         api = WindowApi()
-        api._window = webview.create_window(TITLE, url, js_api=api, width=WIDTH, height=HEIGHT, min_size=MIN_SIZE)
-        webview.start()      # blocks until the window is closed
+        window = webview.create_window(TITLE, url, js_api=api, width=WIDTH, height=HEIGHT, min_size=MIN_SIZE)
+        api._attach(window)
+        window.events.initialized += refuse_mshtml
+        webview.start(gui="edgechromium")      # blocks until the window is closed
     except Exception as exc:  # noqa: BLE001 - whatever pywebview's backends raise
         log.warning("pywebview could not start the window (%s); trying a Chromium window", exc)
+        return False
+    if "mshtml" in engines:
+        log.warning("pywebview has only the old Internet Explorer engine (is WebView2 missing?); "
+                    "trying a Chromium window")
         return False
     return True
 
@@ -188,6 +230,8 @@ class WindowLauncher:
             except OSError:
                 log.exception("could not start the window")
                 self._process = None
+            else:
+                winjob.guard(self._process)      # so it ends with the app, even one ended from Task Manager
 
     def current(self) -> dict:
         """The latest request: `seq` grows with every request made to a window that was already open."""

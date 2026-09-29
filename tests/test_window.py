@@ -87,6 +87,16 @@ def test_the_first_open_starts_one_window_process_on_that_page_without_a_console
     assert launcher.current()["seq"] == 0            # starting a window is not a request to switch one
 
 
+def test_the_window_process_joins_the_job_so_it_ends_with_the_app(fakes):
+    popen = FakePopen()
+    launcher = WindowLauncher(BASE, popen)
+
+    launcher.open("/reels")
+    launcher.open("/settings")                       # a request to the live window starts nothing to guard
+
+    assert fakes.guarded == popen.started            # the one process started, put in the job once
+
+
 def test_open_while_the_window_is_alive_records_a_request_and_starts_nothing():
     popen = FakePopen()
     launcher = WindowLauncher(BASE, popen)
@@ -153,14 +163,34 @@ def test_a_window_that_cannot_start_is_logged_not_raised_and_the_next_open_tries
 # --- run_window: pywebview first, then Chromium --app, then the default browser ---------------------------
 
 
+class FakeEvent:
+    """One of pywebview's `window.events`: `+=` subscribes, `set` calls every handler with its arguments."""
+
+    def __init__(self) -> None:
+        self.handlers: list = []
+
+    def __iadd__(self, handler):
+        self.handlers.append(handler)
+        return self
+
+    def set(self, *args) -> list:
+        return [handler(*args) for handler in self.handlers]
+
+
 class FakeWindow:
-    """What pywebview's `create_window` returns: records what `WindowApi.front` does to it."""
+    """What pywebview's `create_window` returns: records what `WindowApi.front` does to it, and fires the
+    events a real window fires when its state changes."""
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.events = types.SimpleNamespace(initialized=FakeEvent(), minimized=FakeEvent(),
+                                            maximized=FakeEvent(), restored=FakeEvent())
 
     def restore(self) -> None:
         self.calls.append("restore")
+
+    def maximize(self) -> None:
+        self.calls.append("maximize")
 
     def show(self) -> None:
         self.calls.append("show")
@@ -175,13 +205,18 @@ class FakeWindow:
 
 
 class FakeWebview:
-    """The pywebview module: `create_window` and `start`, and nothing shown."""
+    """The pywebview module: `create_window` and `start`, and nothing shown. Like pywebview 6, `start`
+    fires each window's `initialized` with the engine it picked, and a handler's False cancels the window
+    before it shows."""
 
     def __init__(self) -> None:
         self.created: list[tuple[tuple, dict]] = []
         self.windows: list[FakeWindow] = []
         self.started = 0
+        self.start_kwargs: dict = {}
         self.start_error: Exception | None = None
+        self.renderer = "edgechromium"
+        self.shown = 0
 
     def create_window(self, *args, **kwargs) -> FakeWindow:
         self.created.append((args, kwargs))
@@ -190,8 +225,13 @@ class FakeWebview:
 
     def start(self, *args, **kwargs) -> None:
         self.started += 1
+        self.start_kwargs = kwargs
         if self.start_error is not None:
             raise self.start_error
+        for fake in self.windows:
+            if False in fake.events.initialized.set(self.renderer):
+                return
+        self.shown += 1
 
 
 @dataclass
@@ -221,14 +261,16 @@ class Browser:
 
 @pytest.fixture(autouse=True)
 def fakes(monkeypatch):
-    """pywebview unimportable, a Chromium at CHROMIUM whose launches are recorded, and a browser that
-    records what it is asked to open. Tests change one of them."""
-    chromium, browser = Chromium(), Browser()
+    """pywebview unimportable, a Chromium at CHROMIUM whose launches are recorded, a browser that
+    records what it is asked to open, and a job object that records the processes put in it. Tests
+    change one of them."""
+    chromium, browser, guarded = Chromium(), Browser(), []
     monkeypatch.setitem(sys.modules, "webview", None)      # `import webview` raises ImportError
     monkeypatch.setattr(window, "find_chromium", lambda: chromium.path)
     monkeypatch.setattr(window.subprocess, "Popen", chromium.popen)
     monkeypatch.setattr(window.webbrowser, "open", lambda url: browser.opened.append(url))
-    return types.SimpleNamespace(chromium=chromium, browser=browser)
+    monkeypatch.setattr("clipper.winjob.guard", guarded.append)
+    return types.SimpleNamespace(chromium=chromium, browser=browser, guarded=guarded)
 
 
 def _pywebview(monkeypatch) -> FakeWebview:
@@ -251,14 +293,53 @@ def test_pywebview_shows_the_page_in_a_window_of_the_size_the_app_uses(monkeypat
     assert fakes.chromium.launched == [] and fakes.browser.opened == []
 
 
-def test_the_pages_front_call_restores_shows_and_raises_the_window(monkeypatch):
+def test_pywebview_is_asked_for_the_edge_webview2_engine(monkeypatch):
+    webview = _pywebview(monkeypatch)
+
+    run_window(f"{BASE}/status", PROFILE)
+
+    assert webview.start_kwargs.get("gui") == "edgechromium"
+
+
+def test_a_pywebview_left_with_only_internet_explorer_falls_back_to_the_chromium_window(monkeypatch, fakes, caplog):
+    webview = _pywebview(monkeypatch)
+    webview.renderer = "mshtml"          # no WebView2: pywebview 6 picks MSHTML even when asked for edgechromium
+
+    with caplog.at_level(logging.WARNING, logger="clipper.window"):
+        assert run_window(f"{BASE}/status", PROFILE) == 0
+
+    assert webview.shown == 0            # cancelled before it showed: MSHTML can't run the pages' scripts
+    assert len(fakes.chromium.launched) == 1
+    assert fakes.browser.opened == []
+    assert "Internet Explorer" in caplog.text
+
+
+RAISE = ["show", "on_top=True", "on_top=False"]
+
+
+def _front_after(monkeypatch, *events: str) -> list[str]:
+    """What the page's `front` call does to a pywebview window whose state went through `events`."""
     webview = _pywebview(monkeypatch)
     run_window(f"{BASE}/status", PROFILE)
     (_, kwargs), = webview.created
-
+    for name in events:
+        getattr(webview.windows[0].events, name).set()
     kwargs["js_api"].front()
+    return webview.windows[0].calls
 
-    assert webview.windows[0].calls == ["restore", "show", "on_top=True", "on_top=False"]
+
+@pytest.mark.parametrize("events", [(), ("maximized",), ("minimized", "restored"), ("maximized", "restored"),
+                                    ("maximized", "minimized", "maximized")])
+def test_front_shows_and_raises_a_window_that_is_not_minimized_and_keeps_its_size(monkeypatch, events):
+    assert _front_after(monkeypatch, *events) == RAISE
+
+
+def test_front_restores_a_minimized_window_first(monkeypatch):
+    assert _front_after(monkeypatch, "minimized") == ["restore", *RAISE]
+
+
+def test_front_brings_a_window_minimized_from_maximized_back_maximized(monkeypatch):
+    assert _front_after(monkeypatch, "maximized", "minimized") == ["maximize", *RAISE]
 
 
 def _window_is_gone() -> None:
@@ -271,7 +352,7 @@ def test_front_never_raises_into_the_page_and_is_harmless_before_there_is_a_wind
     webview = _pywebview(monkeypatch)
     run_window(f"{BASE}/status", PROFILE)
     (_, kwargs), = webview.created
-    webview.windows[0].restore = _window_is_gone
+    webview.windows[0].show = _window_is_gone
     with caplog.at_level(logging.ERROR, logger="clipper.window"):
         kwargs["js_api"].front()                     # must not raise
     assert "bring the window to the front" in caplog.text

@@ -300,7 +300,7 @@ Written test-first, as before.
 1. Started with `--background`: only the tray icon, and no WebView2 processes in Task Manager.
 2. Opening and then closing the window: the WebView2 processes go away when it closes.
 3. Quit now during a render: the hooked CS2 closes, and the next start redoes the render.
-4. Ending the main process in Task Manager during a render: csdm, HLAE and the hooked CS2 close.
+4. Ending the main process in Task Manager during a render: csdm, HLAE, the hooked CS2 and the window close.
 5. A notification button opens its page (in the browser, until piece 2).
 6. Your phone reaches Demos to grab over Wi-Fi and Tailscale, and gets 403 from Status.
 7. The first start copied the repo's settings, FACEIT key, index and `home\`; the Reels page shows

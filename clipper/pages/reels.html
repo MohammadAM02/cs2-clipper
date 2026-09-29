@@ -18,6 +18,7 @@
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 const esc = s => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 let data = [];
+let shown = null;    // the /api/reels text now on screen, so a poll that finds the same thing leaves the page be
 
 function dateLabel(iso) {
   const d = new Date(iso);
@@ -53,11 +54,24 @@ function render() {
     : '<p class="sum">No Reels yet. Finished Demos show up here.</p>';
 }
 
+// A render replaces the whole list, and the <video> sits inside it: never while a Reel is playing.
+function playing() {
+  const video = document.getElementById("player-video");
+  return video !== null && !video.paused && !video.ended;
+}
+
 async function load() {
   try {
     const response = await api("api/reels");
-    if (response.ok) { data = await response.json(); render(); }
+    if (!response.ok) return;
+    const text = await response.text();
+    if (text === shown || playing()) return;      // nothing new, or a Reel is playing: the next poll looks again
+    data = JSON.parse(text);
+    shown = text;
+    render();
   } catch (e) {
+    if (playing()) return;
+    shown = null;                                  // what is on screen is no longer what the server said
     document.getElementById("matches").textContent = "Can't reach clipper right now. Is it running?";
   }
 }
@@ -71,7 +85,8 @@ function showReel(button) {
     video.autoplay = true;
   }
   video.src = `/reels/${button.dataset.reel}.mp4`;
-  button.closest(".match").insertAdjacentElement("afterend", video);
+  button.closest(".hl").insertAdjacentElement("afterend", video);    // under the row that was clicked
+  video.play().catch(() => {});      // `paused` is false from here on, even while the file loads
 }
 
 document.addEventListener("click", async e => {

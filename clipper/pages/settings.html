@@ -80,7 +80,7 @@ async function load() {
   render();
 }
 
-function valueOf(f) {
+function readField(f) {
   const el = document.getElementById(`f-${f.name}`);
   if (f.kind === "bool") return el.checked;
   if (f.kind === "int") return el.value === "" ? null : parseInt(el.value, 10);
@@ -105,7 +105,7 @@ document.getElementById("save").addEventListener("click", async () => {
       else if (keyRemoved) changes[f.name] = null;
       continue;
     }
-    changes[f.name] = valueOf(f);
+    changes[f.name] = readField(f);
   }
   const response = await api("api/settings", {
     method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify(changes),

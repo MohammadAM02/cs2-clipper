@@ -312,13 +312,13 @@ class Index:
         return row[0]
 
     def reel_matches(self) -> list[sqlite3.Row]:
-        """Every match with a done Demo and at least one Reel, newest played first (spec: Pages,
-        Reels)."""
+        """Every match with a done Demo and at least one Reel on a selected Highlight -- what
+        `match_reels` lists -- newest played first (spec: Pages, Reels)."""
         return self._all(
             "SELECT DISTINCT m.checksum, m.map, m.played_at, m.team_score, m.opponent_score, m.result"
             " FROM matches m JOIN demos d ON d.match_checksum = m.checksum AND d.state = 'done'"
             " WHERE EXISTS (SELECT 1 FROM highlights h JOIN reels r ON r.highlight_id = h.id"
-            " WHERE h.match_checksum = m.checksum)"
+            " WHERE h.match_checksum = m.checksum AND h.selected = 1)"
             " ORDER BY m.played_at DESC"
         )
 

@@ -44,12 +44,13 @@ function renderCheck(c) {
   return `<li><span class="${classOf(c.ok)}">${markOf(c.ok)}</span> <b>${esc(c.name)}</b> ${esc(c.detail)}${hint}</li>`;
 }
 
-function renderJob(j) {
-  return `${esc(j.perspective)}: ${esc(j.state)} (attempt ${j.attempt})`;
+// Plain text: renderDemo escapes the joined line once, when it goes into the page.
+function jobText(j) {
+  return `${j.perspective}: ${j.state} (attempt ${j.attempt})`;
 }
 
 function renderDemo(d) {
-  const jobs = d.jobs.map(renderJob).join(", ");
+  const jobs = d.jobs.map(jobText).join(", ");
   const error = d.error ? `<small class="bad">${esc(d.error)}</small>` : "";
   const retry = d.retry ? `<button class="skip" data-retry="${d.id}">Retry</button>` : "";
   return `<div class="row"><b>#${d.id} ${esc(d.file_name)}</b>

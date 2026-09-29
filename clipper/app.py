@@ -405,6 +405,10 @@ class App:
     # --- the HLAE release check ----------------------------------------------------------------------
 
     def start_releases(self) -> None:
+        """Starts the release check's thread, once: `HlaeReleases` has no lock, so it is safe only with a
+        single writer, and a second call starts nothing."""
+        if self._releases_thread is not None:
+            return
         self._releases_thread = threading.Thread(target=self._run_releases, name="releases", daemon=True)
         self._releases_thread.start()
 

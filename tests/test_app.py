@@ -372,13 +372,43 @@ def test_checks_reads_the_alerts_status_flag_from_the_index(world, monkeypatch):
 # --- releases: a daemon thread that calls refresh_if_due at start (Task 11) -------------------------
 
 
-def test_start_releases_calls_refresh_if_due_promptly(world):
+def _releases_threads(known=()):
+    """The live "releases" threads besides `known` ones (another test's, should one have leaked)."""
+    return [t for t in threading.enumerate() if t.name == "releases" and t not in known]
+
+
+def _end_releases(world, known) -> None:
+    """The fixture never stops the app, so a test that starts the release check ends it itself."""
+    world.app.quit("now")
+    for thread in _releases_threads(known):
+        thread.join(timeout=5.0)
+    assert _releases_threads(known) == []
+
+
+def test_start_releases_calls_refresh_if_due_promptly_and_stops_when_the_app_quits(world):
     called = threading.Event()
     world.app.releases.refresh_if_due = called.set
+    known = _releases_threads()
 
     world.app.start_releases()
 
-    assert called.wait(timeout=2.0)
+    try:
+        assert called.wait(timeout=2.0)
+    finally:
+        _end_releases(world, known)
+
+
+def test_start_releases_starts_one_thread_however_often_it_is_called(world):
+    world.app.releases.refresh_if_due = lambda: None
+    known = _releases_threads()
+
+    world.app.start_releases()
+    world.app.start_releases()          # HlaeReleases has no lock, so it may only ever have one writer
+
+    try:
+        assert len(_releases_threads(known)) == 1
+    finally:
+        _end_releases(world, known)
 
 
 # --- open_window: the window process, through the launcher (Task 14) --------------------------------

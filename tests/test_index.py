@@ -169,6 +169,22 @@ def test_reel_matches_lists_only_done_demos_with_a_reel_newest_played_first(inde
     assert (row["map"], row["team_score"], row["opponent_score"], row["result"]) == ("de_inferno", 13, 5, "win")
 
 
+def test_reel_matches_leaves_out_a_match_whose_reels_sit_only_on_deselected_highlights(index):
+    index.save_match(MATCH)
+    demo_id = add(index, name="1-deselected.dem.zst", sha="e" * 64)
+    index.advance(demo_id, "done", match_checksum=MATCH.checksum)
+    index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031)], {12})
+    highlight_id = index.selected_highlights(MATCH.checksum)[0]["id"]
+    index.save_reel(highlight_id, "player", Path("E:/r12-player.mp4"), 15.6)
+    assert [r["checksum"] for r in index.reel_matches()] == [MATCH.checksum]
+
+    # Scored again with another top_n, round 12 is no longer selected -- its Reel stays in the index.
+    index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031)], set())
+
+    assert index.reel_matches() == []                    # match_reels would show it an empty block
+    assert index.match_reels(MATCH.checksum) == []
+
+
 def test_match_reels_pairs_perspectives_leaves_missing_ones_null_and_drops_reel_less_highlights(index):
     index.save_match(MATCH)
     index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031), highlight(3, 40, 15259),

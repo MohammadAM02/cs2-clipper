@@ -1,7 +1,8 @@
-"""The Flask app: pages, JSON endpoints, and the reach and action guards (spec: Pages, Reach from
-other devices). Takes over the Demos to grab page from `page.py` (Task 9 removes it once `cli.py`
-switches over); later tasks add the Status, Reels and Settings pages to `create_app`, with new
-`WebContext` fields that default so this task's callers need no change.
+"""The Flask app: the four pages (Status, Demos to grab, Reels, Settings), their JSON endpoints, and the
+reach and action guards (spec: Pages, Reach from other devices). Every route is PC-only except the Demos
+to grab page, its list and its actions, and the stylesheet and script those load; every POST, PUT and
+DELETE, those included, must carry the marker header. What the pages need from the app comes in through
+`WebContext`, so a test builds one with only the fields it exercises.
 
 Structure adapted from thelifeofsuleyman/cs2-clipper's `aegis/web.py` (a single Flask app factory);
 `WebServer` adapts `_serve` from `aegis/app.py` (waitress on a background thread), replacing its
@@ -33,6 +34,7 @@ SOFTWARE.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import socket
 import sqlite3
@@ -54,6 +56,8 @@ from clipper.config import Config
 from clipper.index import Index
 from clipper.settings import FIELDS, Field, Loaded, json_values
 from clipper.state import Snapshot, summary
+
+log = logging.getLogger(__name__)
 
 MARKER_HEADER = "X-CS2-Clipper"
 PAGES_DIR = Path(__file__).with_name("pages")
@@ -165,8 +169,8 @@ def reels_row(index: Index, match: sqlite3.Row) -> dict:
 
 @dataclass
 class WebContext:
-    """What the pages need from the app. Later tasks add fields here, each with a default, for the
-    Status, Reels and Settings pages."""
+    """What the pages need from the app, one field per thing. `App.start_web` fills every one; each field
+    after `gate_reasons` has a harmless default, so a test names only the ones it exercises."""
 
     index_path: Path
     gate_reasons: Callable[[], tuple[str, ...]]
@@ -245,6 +249,11 @@ def create_app(ctx: WebContext) -> Flask:
             demos = status_demos(index)
         finally:
             index.close()
+        try:
+            checks = [{"name": c.name, "ok": c.ok, "detail": c.detail, "hint": c.hint} for c in ctx.checks()]
+        except Exception as exc:  # noqa: BLE001 - a check that raises must not blank the whole page
+            log.exception("could not run the checks")
+            checks = [{"name": "Checks", "ok": False, "detail": f"Couldn't run the checks: {exc}", "hint": ""}]
         body = {
             "summary": summary(snapshot),
             "rendering": rendering,
@@ -253,7 +262,7 @@ def create_app(ctx: WebContext) -> Flask:
             "problems": list(snapshot.problems),
             "warnings": list(ctx.warnings()),
             "pages_off": snapshot.pages_off,
-            "checks": [{"name": c.name, "ok": c.ok, "detail": c.detail, "hint": c.hint} for c in ctx.checks()],
+            "checks": checks,
             "demos": demos,
         }
         return _no_store(jsonify(body))
@@ -266,14 +275,14 @@ def create_app(ctx: WebContext) -> Flask:
     def api_demo_retry(demo_id: int):
         index = Index(ctx.index_path)
         try:
-            demo = index.demo(demo_id)
-            if demo is None:
+            if index.demo(demo_id) is None:
                 return Response(status=404)
-            if demo["state"] != "failed":
-                response = jsonify(error=f"demo {demo_id} has not failed")
+            try:
+                state = index.retry(demo_id)
+            except ValueError as exc:     # not failed: `retry` checks inside its own transaction, so no race
+                response = jsonify(error=str(exc))
                 response.status_code = 409
                 return _no_store(response)
-            state = index.retry(demo_id)
         finally:
             index.close()
         return _no_store(jsonify(state=state))
@@ -331,7 +340,12 @@ def create_app(ctx: WebContext) -> Flask:
             index.close()
         if row is None:
             return Response(status=404)
-        ctx.open_folder(Path(row["path"]).parent)
+        folder = Path(row["path"]).parent
+        try:
+            ctx.open_folder(folder)
+        except OSError as exc:            # the folder is gone
+            log.warning("could not open %s: %s", folder, exc)
+            return Response(status=404)
         return Response(status=204)
 
     @app.get("/settings")

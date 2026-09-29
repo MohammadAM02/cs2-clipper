@@ -5,6 +5,7 @@ guard, the no-CORS rule, and WebServer's real-socket behaviour."""
 from __future__ import annotations
 
 import json
+import logging
 import socket
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -169,6 +170,13 @@ def test_phone_routes_answer_the_phone_with_a_lan_host(client):
 def test_an_unknown_path_is_404_on_the_pc_and_403_from_the_phone(client):
     assert pc_get(client, "/nope").status_code == 404
     assert phone_get(client, "/nope").status_code == 403
+
+
+def test_the_stylesheet_lets_hidden_win_over_any_display_a_class_sets(client):
+    # `.skip` and `#quit-choice` set `display`, which beats the browser's own `[hidden]` rule: without
+    # this one, Resume and the two quit buttons would show whatever the page says.
+    css = "".join(pc_get(client, "/app.css").get_data(as_text=True).split())
+    assert "[hidden]{display:none!important}" in css
 
 
 # --- action guard: the marker header ---------------------------------------------------------------
@@ -471,8 +479,41 @@ def test_quit_refuses_a_phone_and_needs_the_marker(client):
     assert phone_post(client, "/api/quit", headers=MARKED, json={}).status_code == 403
 
 
-def test_status_and_new_routes_answer_403_on_a_foreign_host(client):
-    assert client.get("/status", base_url=PC, headers={"Host": "evil.example:8765"}).status_code == 403
+@pytest.mark.parametrize("path", ["/", "/status"])
+def test_the_home_routes_refuse_a_phone(client, path):
+    assert phone_get(client, path).status_code == 403
+
+
+def test_api_status_survives_a_check_that_raises_and_says_so_in_one_row(tmp_path, caplog):
+    def broken_checks():
+        raise OSError("the clips drive is gone")
+
+    app = app_for(tmp_path, checks=broken_checks)
+
+    with caplog.at_level(logging.ERROR, logger="clipper.web"):
+        response = pc_get(app.test_client(), "/api/status")
+
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["checks"] == [{"name": "Checks", "ok": False,
+                               "detail": "Couldn't run the checks: the clips drive is gone", "hint": ""}]
+    assert data["summary"] == "Idle"                     # the rest of the page's data is still there
+    assert "could not run the checks" in caplog.text
+
+
+def test_retry_that_loses_a_race_with_the_worker_is_409_not_500(tmp_path, index, monkeypatch):
+    demo_id = _add_demo(index)
+    index.fail(demo_id, "boom")
+
+    def raced(self, demo_id):     # the Demo stopped being failed between the route looking and retry's transaction
+        raise ValueError(f"demo {demo_id} has not failed")
+
+    monkeypatch.setattr(Index, "retry", raced)
+
+    response = pc_post(app_for(tmp_path).test_client(), f"/api/demos/{demo_id}/retry", headers=MARKED)
+
+    assert response.status_code == 409
+    assert response.get_json() == {"error": f"demo {demo_id} has not failed"}
 
 
 # --- Reels page (Task 12) -------------------------------------------------------------------------
@@ -586,6 +627,20 @@ def test_open_folder_passes_the_folder_from_the_index_and_ignores_the_request_bo
     assert calls == [video_path.parent]
 
 
+def test_open_folder_404_when_the_folder_cannot_be_opened(tmp_path, index):
+    highlight_id = _reels_index(index)
+    index.save_reel(highlight_id, "player", tmp_path / "videos" / "clip.mp4", 1.0)   # its folder is gone
+
+    def gone(folder):
+        raise FileNotFoundError(folder)
+
+    app = app_for(tmp_path, open_folder=gone)
+
+    response = pc_post(app.test_client(), f"/api/reels/{REEL_MATCH.checksum}/open-folder", headers=MARKED)
+
+    assert response.status_code == 404
+
+
 def test_open_folder_404_when_the_match_has_no_reels(tmp_path):
     response = pc_post(app_for(tmp_path).test_client(), f"/api/reels/{'a' * 16}/open-folder", headers=MARKED)
     assert response.status_code == 404
@@ -614,6 +669,10 @@ def _settings_app(tmp_path, **overrides):
     overrides.setdefault("save_settings", store.save)
     overrides.setdefault("port_in_use", lambda: 8765)
     return app_for(tmp_path, **overrides), store
+
+
+def _stored_blob(tmp_path) -> str:
+    return json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))[STORED_KEY]
 
 
 def test_settings_page_is_served(client):
@@ -726,3 +785,65 @@ def test_put_settings_refuses_a_phone_and_needs_the_marker(tmp_path):
 
     assert pc_put(client, "/api/settings", json={"top_n": 9}).status_code == 403
     assert phone_put(client, "/api/settings", headers=MARKED, json={"top_n": 9}).status_code == 403
+
+
+def test_put_a_bad_key_is_400_and_neither_the_typed_value_nor_the_stored_blob_comes_back(tmp_path):
+    app, store = _settings_app(tmp_path)
+    assert store.save({KEY_FIELD: "the-original-key"}) == {}
+    blob = _stored_blob(tmp_path)
+
+    response = pc_put(app.test_client(), "/api/settings", headers=MARKED,
+                      json={KEY_FIELD: "a typed key with spaces"})
+
+    assert response.status_code == 400
+    assert set(response.get_json()["errors"]) == {KEY_FIELD}
+    text = response.get_data(as_text=True)
+    assert "a typed key with spaces" not in text
+    assert "the-original-key" not in text
+    assert blob not in text
+    assert _stored_blob(tmp_path) == blob                # and the stored key is untouched
+
+
+def test_put_a_blank_key_keeps_the_stored_one(tmp_path):
+    app, store = _settings_app(tmp_path)
+    assert store.save({KEY_FIELD: "the-original-key"}) == {}
+    blob = _stored_blob(tmp_path)
+    client = app.test_client()
+
+    response = pc_put(client, "/api/settings", headers=MARKED, json={KEY_FIELD: "", "top_n": 9})
+
+    assert response.status_code == 200
+    assert pc_get(client, "/api/settings").get_json()["faceit_key_set"] is True
+    assert _stored_blob(tmp_path) == blob
+
+
+def test_put_bad_fields_leave_an_existing_settings_file_byte_for_byte_unchanged(tmp_path):
+    app, store = _settings_app(tmp_path)
+    assert store.save({"top_n": 9, "faceit_nickname": "someone"}) == {}
+    path = tmp_path / "settings.json"
+    before = path.read_bytes()
+
+    response = pc_put(app.test_client(), "/api/settings", headers=MARKED,
+                      json={"top_n": 999, "aspect_ratio": "21:9", "faceit_nickname": "changed"})
+
+    assert response.status_code == 400
+    assert set(response.get_json()["errors"]) == {"top_n", "aspect_ratio"}   # the good field is not saved either
+    assert path.read_bytes() == before
+
+
+# --- every route Tasks 10-14 added is PC-only: a foreign Host is refused on all of them -------------
+
+PC_ONLY_ROUTES = [
+    ("GET", "/"), ("GET", "/status"), ("GET", "/api/status"), ("GET", "/api/log"),
+    ("POST", "/api/demos/1/retry"), ("POST", "/api/resume"), ("POST", "/api/quit"),
+    ("GET", "/reels"), ("GET", "/api/reels"), ("GET", "/reels/1.mp4"),
+    ("POST", f"/api/reels/{'a' * 16}/open-folder"),
+    ("GET", "/settings"), ("GET", "/api/settings"), ("PUT", "/api/settings"),
+    ("GET", "/api/window"), ("POST", "/api/window"),
+]
+
+
+@pytest.mark.parametrize(("method", "path"), PC_ONLY_ROUTES)
+def test_a_pc_only_route_refuses_a_foreign_host(client, method, path):
+    headers = {"Host": "evil.example:8765", **MARKED}     # marked, so only the Host can be what refuses
+    assert client.open(path, method=method, base_url=PC, headers=headers).status_code == 403

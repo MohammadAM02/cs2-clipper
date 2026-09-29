@@ -3,6 +3,7 @@
 :root{--bg:#0e0f11;--grid:#15171a;--panel:#191b1f;--panel2:#22252a;--line:#2c3036;--ink:#eff0f1;--muted:#8b9199;
   --orange:#ff5500;--blue:#3d8be0;--good:#41d075;--bad:#ff5d62;--warn:#f0b43a;color-scheme:dark}
 *{box-sizing:border-box}
+[hidden]{display:none !important}   /* must win over any display a class sets (.skip, #quit-choice, ...) */
 body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 "Segoe UI",system-ui,sans-serif;
   background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
   background-size:26px 26px}
@@ -43,6 +44,8 @@ td small{display:block;color:var(--muted);font-size:12px}
 .nav a.on{color:var(--ink);background:var(--panel2)}
 
 /* Status page (spec: Pages -> Status) */
+#now{font-size:24px;line-height:1.3;color:var(--ink)}
+#now small{font-size:14px;font-weight:400;color:var(--muted)}
 h2{font:600 11px/1 Consolas,monospace;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
   margin:22px 0 8px}
 #notice ul{margin:0 0 16px;padding:0;list-style:none}

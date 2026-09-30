@@ -5,7 +5,7 @@ Adapted from thelifeofsuleyman/cs2-clipper's `aegis/app.py` (`_tray_image`, `_st
 `_run_tray_browser`, `_open_folder`). What we changed: the icon runs on the main thread until the app
 has quit, not beside an in-process window; the tooltip is the one-line summary the Status page shows;
 the menu is made from the app's state (Pause or Resume, and a Quit that asks while a render runs); a
-menu action that fails is logged; and the icon is a plainer mark.
+menu action that fails is logged; and the icon is a plainer mark (clipper.icon, shared with the exe).
 
 MIT License
 
@@ -43,7 +43,6 @@ from clipper.state import Snapshot, summary
 
 if TYPE_CHECKING:
     import pystray
-    from PIL import Image
 
     from clipper.app import App
 
@@ -62,16 +61,6 @@ def tooltip(snapshot: Snapshot) -> str:
         text += f"\nPages are off: {snapshot.pages_off}"
     return text if len(text) <= TOOLTIP_LIMIT else text[:TOOLTIP_LIMIT - 1] + "…"
 
-
-def _image() -> Image.Image:
-    """A plain mark: a play triangle in the pages' orange on a dark tile."""
-    from PIL import Image, ImageDraw
-
-    image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(image)
-    draw.rounded_rectangle((2, 2, 61, 61), radius=12, fill="#191b1f")
-    draw.polygon([(24, 16), (24, 48), (50, 32)], fill="#ff5500")
-    return image
 
 
 @dataclass(frozen=True)
@@ -163,7 +152,9 @@ def run_tray(app: App) -> bool:
     try:
         import pystray
 
-        image = _image()
+        from clipper.icon import mark
+
+        image = mark(64)
     except Exception as exc:  # noqa: BLE001 - ImportError, or a native library that fails to load
         log.warning("the tray icon is not available (%s)", exc)
         return False

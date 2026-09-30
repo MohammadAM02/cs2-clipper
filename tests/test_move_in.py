@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -331,6 +332,18 @@ def test_on_start_moves_in_when_not_overridden(tmp_path, monkeypatch):
     data_dir = local_appdata / paths.APP_FOLDER
     assert (data_dir / "settings.json").exists()
     assert (data_dir / "clipper.sqlite").exists()
+
+
+def test_on_start_never_moves_in_from_the_packaged_exe(tmp_path, monkeypatch):
+    # In the exe, REPO_ROOT is the unpacked bundle, not a repo: even a repo-shaped folder is not copied.
+    repo = _full_fake_repo(tmp_path)
+    local_appdata = tmp_path / "local-appdata"
+    monkeypatch.setenv("LOCALAPPDATA", str(local_appdata))
+    monkeypatch.delenv("CLIPPER_DATA_DIR", raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    assert on_start(repo) == []
+    assert not (local_appdata / paths.APP_FOLDER / "settings.json").exists()
 
 
 def test_on_start_does_nothing_for_a_fresh_clone(tmp_path, monkeypatch):

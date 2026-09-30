@@ -160,3 +160,33 @@ def test_window_is_not_offered_in_help(capsys):
     help_text = capsys.readouterr().out
     assert "--background" in help_text
     assert "--window" not in help_text
+    assert "--bundle-check" not in help_text
+
+
+@pytest.fixture
+def events(monkeypatch):
+    """What main() sets off, in order: the DLL search path release, and the role it hands over to."""
+    seen: list[str] = []
+    monkeypatch.setattr("clipper.packaged.release_dll_directory", lambda: seen.append("release"))
+    monkeypatch.setattr("clipper.packaged.check", lambda report: seen.append(f"check {report.name}") or 0)
+    monkeypatch.setattr("clipper.cli.app.run", lambda **kwargs: seen.append("app") or 0)
+    monkeypatch.setattr("clipper.cli.window.run_window", lambda url, profile: seen.append("window") or 0)
+    monkeypatch.setattr("clipper.cli.move_in.on_start", lambda: pytest.fail("moved in"))
+    return seen
+
+
+def test_the_app_releases_the_dll_search_path_before_it_starts_anything(events):
+    # Its children (csdm, HLAE, CS2, Postgres, ffmpeg) must not inherit the exe's bundle on theirs.
+    assert main([]) == 0
+    assert events == ["release", "app"]
+
+
+def test_the_window_process_keeps_the_bundle_on_its_dll_search_path(events):
+    # pywebview loads .NET, pythonnet and WebView2 from the bundle.
+    assert main(["--window", "http://127.0.0.1:1/status"]) == 0
+    assert events == ["window"]
+
+
+def test_the_bundle_check_runs_released_like_the_app_and_starts_nothing(events, tmp_path):
+    assert main(["--bundle-check", str(tmp_path / "report.txt")]) == 0
+    assert events == ["release", "check report.txt"]

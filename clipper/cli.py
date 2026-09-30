@@ -1,5 +1,6 @@
 """Command line (spec: The terminal): the app itself (no subcommand, or `run`), and status, retry,
-resume and highlights for development. `--window` is internal: the window process."""
+resume and highlights for development. `--window` is internal: the window process. So is
+`--bundle-check`: the build's check of the packaged exe (clipper.packaged)."""
 
 from __future__ import annotations
 
@@ -7,8 +8,9 @@ import argparse
 import re
 import socket
 import sys
+from pathlib import Path
 
-from clipper import app, csdm_db, move_in, paths, settings, window
+from clipper import app, csdm_db, move_in, packaged, paths, settings, window
 from clipper.config import REPO_ROOT, Config
 from clipper.gate import Gate, GateStatus
 from clipper.index import Index
@@ -107,6 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--background", action="store_true",
                         help="start in the tray only (used at sign-in)")
     parser.add_argument("--window", metavar="URL", help=argparse.SUPPRESS)   # internal: the window process
+    parser.add_argument("--bundle-check", metavar="REPORT", help=argparse.SUPPRESS)   # internal: the build's check
     commands = parser.add_subparsers(dest="command")
     run_parser = commands.add_parser("run", help="run the app")
     run_parser.add_argument("--headless", action="store_true",
@@ -122,6 +125,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.window:      # the window process: no lock and no move-in, it only shows a page
         return window.run_window(args.window, paths.data_dir() / "window-profile")
+    packaged.release_dll_directory()     # before anything starts a process: see clipper.packaged
+    if args.bundle_check:    # the build's check of the exe: no lock and no move-in, nothing starts
+        return packaged.check(Path(args.bundle_check))
     if args.command in (None, "run"):
         return app.run(open_page=f"/{args.open}" if args.open else None, background=args.background,
                        headless=args.command == "run" and args.headless)

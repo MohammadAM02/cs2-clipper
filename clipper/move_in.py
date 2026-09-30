@@ -14,7 +14,7 @@ import sqlite3
 import tomllib
 from pathlib import Path
 
-from clipper import paths, protect
+from clipper import packaged, paths, protect
 from clipper.config import REPO_ROOT
 from clipper.settings import STORED_KEY, defaults, differs_from_default
 
@@ -61,8 +61,9 @@ def move_in(repo_root: Path, data_dir: Path) -> list[str]:
 
 def on_start(repo_root: Path = REPO_ROOT) -> list[str]:
     """The call site: [] when CLIPPER_DATA_DIR is set (tests and development never copy the real
-    .env key, index or home\\) or when nothing needs moving in; else the result of move_in()."""
-    if paths.overridden():
+    .env key, index or home\\), in the packaged exe (it has no repo to move in from), or when nothing
+    needs moving in; else the result of move_in()."""
+    if paths.overridden() or packaged.frozen():
         return []
     data_dir = paths.data_dir()
     if not needed(repo_root, data_dir):

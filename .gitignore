@@ -16,3 +16,6 @@ console.log
 node_modules/
 data/
 .claude/worktrees/
+# the packaged exe (packaging/build.ps1)
+build/
+dist/

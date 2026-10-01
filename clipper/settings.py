@@ -20,6 +20,9 @@ from clipper.config import RATIOS, SEQUENCE_EVENTS, Config
 
 KEY_FIELD = "faceit_api_key"                  # write-only: never stored or read back under this name
 STORED_KEY = "faceit_api_key_protected"       # the DPAPI blob actually stored in settings.json
+SECRET_FIELD = "faceit_client_secret"         # the OAuth client secret, write-only like the key
+STORED_SECRET = "faceit_client_secret_protected"
+SECRETS = {KEY_FIELD: STORED_KEY, SECRET_FIELD: STORED_SECRET}   # write-only name -> stored blob
 
 _APP_DATA_FIELDS = frozenset({"index_path", "csdm_home", "logs_dir"})    # live in the app data folder, not here
 _FOLDER_FIELDS = frozenset({"data_root", "downloads_dir", "csdm_app_dir", "pg_bin", "pg_data"})
@@ -41,8 +44,16 @@ FIELDS: tuple[Field, ...] = (
     Field("subject_steamid", "You", "SteamID", "steamid",
           help="Your SteamID64: 17 digits starting with 7656119."),
     Field("faceit_nickname", "You", "FACEIT nickname", "text"),
-    Field(KEY_FIELD, "You", "FACEIT API key", "secret",
+    Field("faceit_oauth_client_id", "You", "FACEIT sign-in client ID", "text",
+          help="Your FACEIT app's OAuth2 client ID. With it set, Sign in with FACEIT fills in the "
+               "nickname and SteamID."),
+    Field("faceit_redirect_uri", "You", "FACEIT redirect URI", "url",
+          help="Must match your FACEIT OAuth2 client's Redirect URI exactly. Blank uses "
+               "http://localhost:<port>/settings."),
+    Field("faceit_api_key", "You", "FACEIT API key", "secret",
           help="Stored encrypted for your Windows account. It is never shown again."),
+    Field(SECRET_FIELD, "You", "FACEIT client secret", "secret",
+          help="Your FACEIT OAuth2 client's secret, for the sign-in above. Stored encrypted."),
     Field("data_root", "Folders", "Clips folder", "folder", help="Where Demos, renders and Reels go."),
     Field("downloads_dir", "Folders", "Downloads", "folder"),
     Field("csdm_app_dir", "Folders", "CS Demo Manager", "folder"),
@@ -67,6 +78,7 @@ FIELDS: tuple[Field, ...] = (
 )
 
 _BY_NAME: dict[str, Field] = {f.name: f for f in FIELDS}
+_FIELD_OF_STORED = {stored: field for field, stored in SECRETS.items()}
 _FIELD_NAMES = frozenset(_BY_NAME)
 _STORED_NAMES = frozenset(f.name for f in fields(Config)) - _APP_DATA_FIELDS
 _STEAMID_RE = re.compile(r"^7656119\d{10}$")
@@ -100,7 +112,8 @@ def json_values(cfg: Config) -> dict[str, object]:
     """Every stored setting's effective value on `cfg`, in JSON form (paths as ``str``, ``data_root``
     as ``""`` when unset) -- without `faceit_api_key_protected` (spec: Settings; The FACEIT key: no
     response may ever carry the key or its protected blob)."""
-    return {name: _to_json(getattr(cfg, name)) for name in _STORED_NAMES if name != STORED_KEY}
+    return {name: _to_json(getattr(cfg, name)) for name in _STORED_NAMES
+            if name not in SECRETS.values()}
 
 
 # --- validate ---------------------------------------------------------------------------------------------
@@ -118,7 +131,7 @@ def validate(values: Mapping[str, object], *, check_exists: bool = True) -> dict
 
 
 def _validate_one(name: str, value: object, *, check_exists: bool) -> str | None:
-    if name == STORED_KEY:
+    if name in _FIELD_OF_STORED:
         return _validate_protected(value)
     spec = _BY_NAME.get(name)
     if spec is None:
@@ -128,6 +141,8 @@ def _validate_one(name: str, value: object, *, check_exists: bool) -> str | None
         return _validate_steamid(value)
     if kind == "text":
         return _validate_text(value)
+    if kind == "url":
+        return _validate_url(value)
     if kind == "secret":
         return _validate_secret(value)
     if kind == "folder":
@@ -162,6 +177,18 @@ def _validate_text(value: object) -> str | None:
         return "must not have leading or trailing spaces"
     if len(value) > 64:
         return "must be at most 64 characters"
+    return None
+
+
+def _validate_url(value: object) -> str | None:
+    if not isinstance(value, str):
+        return "must be text"
+    if value == "":
+        return None
+    if not value.startswith(("http://", "https://")):
+        return "must start with http:// or https://"
+    if len(value) > 300:
+        return "must be at most 300 characters"
     return None
 
 
@@ -277,7 +304,7 @@ def load(path: Path) -> Loaded:
 
 
 def _label_of(name: str) -> str:
-    return _BY_NAME[KEY_FIELD if name == STORED_KEY else name].label
+    return _BY_NAME[_FIELD_OF_STORED.get(name, name)].label
 
 
 def _to_config_kwargs(resolved: Mapping[str, object]) -> dict[str, object]:
@@ -297,18 +324,18 @@ def save(path: Path, changes: Mapping[str, object]) -> dict[str, str]:
     `changes`, are written back with only the values that differ from `defaults()` kept."""
     errors: dict[str, str] = {}
     rest: dict[str, object] = {}
-    key_given, key_value = False, None
+    given: dict[str, object] = {}
     for name, value in changes.items():
         if name not in _FIELD_NAMES:
             errors[name] = "unknown setting"
-        elif name == KEY_FIELD:
-            key_given, key_value = True, value
+        elif name in SECRETS:
+            given[name] = value
         else:
             rest[name] = value
 
     errors.update(validate(rest, check_exists=True))
-    if key_given and key_value not in ("", None):
-        errors.update(validate({KEY_FIELD: key_value}, check_exists=True))
+    errors.update(validate({name: value for name, value in given.items() if value not in ("", None)},
+                           check_exists=True))
     if errors:
         return errors
 
@@ -318,11 +345,13 @@ def save(path: Path, changes: Mapping[str, object]) -> dict[str, str]:
         name: value for name, value in merged.items()
         if name not in _STORED_NAMES or differs_from_default(name, value, defaults_[name])
     }
-    if key_given:
-        if key_value is None:
-            kept.pop(STORED_KEY, None)
-        elif key_value != "":
-            kept[STORED_KEY] = protect.protect(key_value)
+    for name, stored in SECRETS.items():
+        if name not in given:
+            continue
+        if given[name] is None:
+            kept.pop(stored, None)
+        elif given[name] != "":
+            kept[stored] = protect.protect(str(given[name]))
 
     paths.atomic_write_text(path, json.dumps(kept, indent=2, sort_keys=True))
     return {}

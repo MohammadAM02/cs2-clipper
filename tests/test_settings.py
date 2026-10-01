@@ -10,7 +10,8 @@ import pytest
 from clipper import protect
 from clipper.config import Config
 from clipper.settings import (
-    FIELDS, KEY_FIELD, STORED_KEY, Loaded, SettingsStore, defaults, json_values, load, save, validate,
+    FIELDS, KEY_FIELD, SECRETS, SECRET_FIELD, STORED_KEY, STORED_SECRET, Loaded, SettingsStore,
+    defaults, json_values, load, save, validate,
 )
 
 
@@ -61,9 +62,10 @@ def test_defaults_excludes_the_app_data_fields():
 # --- json_values(): the Settings page's GET, without the protected key (Task 13) ---------------------
 
 
-def test_json_values_matches_defaults_minus_the_protected_key():
-    assert json_values(Config()) == {k: v for k, v in defaults().items() if k != STORED_KEY}
-    assert STORED_KEY not in json_values(Config())
+def test_json_values_matches_defaults_minus_the_secret_blobs():
+    blobs = set(SECRETS.values())
+    assert json_values(Config()) == {k: v for k, v in defaults().items() if k not in blobs}
+    assert blobs.isdisjoint(json_values(Config()))
 
 
 def test_json_values_reflects_the_given_configs_effective_values(tmp_path):
@@ -197,6 +199,9 @@ def test_the_stored_protected_key_loads_as_is_and_a_corrupt_one_falls_back(tmp_p
     ("subject_steamid", "76561198192858303"),
     ("subject_steamid", ""),
     ("faceit_nickname", "someone"),
+    ("faceit_redirect_uri", ""),
+    ("faceit_redirect_uri", "http://localhost:8765/settings"),
+    ("faceit_redirect_uri", "https://baggaclipper.pages.dev/"),
     ("aspect_ratio", "4:3-stretched"),
     ("sequence_event", "rounds"),
     ("top_n", 25),
@@ -214,6 +219,8 @@ def test_valid_values_pass(name, value):
     ("subject_steamid", 76561198192858303),
     ("faceit_nickname", " someone"),
     ("faceit_nickname", "x" * 65),
+    ("faceit_redirect_uri", "localhost:8765/settings"),
+    ("faceit_redirect_uri", 5),
     ("aspect_ratio", "21:9"),
     ("sequence_event", "frags"),
     ("top_n", 0),
@@ -403,6 +410,20 @@ def test_a_bad_key_is_rejected_and_nothing_is_written(tmp_path):
     assert KEY_FIELD in errors
     assert not path.exists()
     assert "has a space" not in errors[KEY_FIELD]
+
+
+def test_the_client_secret_is_saved_protected_and_never_read_back(tmp_path):
+    path = tmp_path / "settings.json"
+
+    assert save(path, {SECRET_FIELD: "super-secret-client-secret"}) == {}
+
+    text = path.read_text(encoding="utf-8")
+    assert "super-secret-client-secret" not in text
+    raw = json.loads(text)
+    assert protect.unprotect(raw[STORED_SECRET]) == "super-secret-client-secret"
+    assert SECRET_FIELD not in json_values(load(path).config)          # write-only
+    assert save(path, {SECRET_FIELD: None}) == {}                      # and removable like the key
+    assert STORED_SECRET not in read_raw(path)
 
 
 # --- SettingsStore -------------------------------------------------------------------------------------

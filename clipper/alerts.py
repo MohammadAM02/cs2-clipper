@@ -138,6 +138,7 @@ class MatchAlerts:
         self._stopped = StoppedPlaying(stopped_playing_minutes)
         self._player_id: str | None = None
         self._off = False
+        self._first = True                             # the start-up check looks back the full 30 days
         self._check_at: datetime | None = clock()      # the start-up check
         self._recheck_at: datetime | None = None
         self._summary_by: datetime | None = None
@@ -195,7 +196,12 @@ class MatchAlerts:
         if player_id is None:
             return
         last = self._index.get_flag("faceit_checked_at")
-        since = datetime.fromisoformat(last) - LOOK_BACK_OVERLAP if last else now - LINK_LIFETIME
+        # ponytail: the first check of a run looks back the full 30 days rather than from the last
+        # check. A gap longer than LOOK_BACK_OVERLAP (the app was closed, or its key was broken for a
+        # while) would otherwise drop matches for good -- and re-scanning is safe, because a match
+        # already in the index is never announced twice.
+        since = (now - LINK_LIFETIME if self._first or not last
+                 else datetime.fromisoformat(last) - LOOK_BACK_OVERLAP)
         seen = set()
         for match_id, finished_at in self._faceit.finished_since(player_id, since):
             if self._index.faceit_match(match_id) is None:
@@ -204,6 +210,7 @@ class MatchAlerts:
         for row in self._index.faceit_matches_in(("waiting",)):
             if row["match_id"] not in seen:
                 self._evaluate(row["match_id"], _finished(row), player_id)
+        self._first = False
         self._index.set_flag("faceit_checked_at", now.isoformat(timespec="seconds"))
         self._check_at = None
         self._session = {row["match_id"] for row in self._index.faceit_matches_in(("waiting",))

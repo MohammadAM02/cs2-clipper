@@ -53,6 +53,8 @@ from clipper import applog
 from clipper.alerts import LINK_LIFETIME, map_label, utc_now
 from clipper.checks import Check
 from clipper.config import Config
+from clipper.faceit import FaceitError
+from clipper.faceit_oauth import OAuthError
 from clipper.index import Index
 from clipper.settings import FIELDS, Field, Loaded, json_values
 from clipper.state import Snapshot, summary
@@ -167,6 +169,14 @@ def reels_row(index: Index, match: sqlite3.Row) -> dict:
     }
 
 
+def _faceit_not_set_up(token: str, state: str) -> str:
+    raise OAuthError("FACEIT sign-in is not set up")
+
+
+def _faceit_lookup_not_set_up(nickname: str) -> dict:
+    raise FaceitError("FACEIT lookup is not set up")
+
+
 @dataclass
 class WebContext:
     """What the pages need from the app, one field per thing. `App.start_web` fills every one; each field
@@ -188,6 +198,9 @@ class WebContext:
     save_settings: Callable[[Mapping[str, object]], dict[str, str]] = lambda changes: {}
     port_in_use: Callable[[], int | None] = lambda: None
     window_request: Callable[[], dict] = lambda: {"seq": 0, "page": "/status"}
+    faceit_login_url: Callable[[], str] = lambda: ""
+    faceit_sign_in: Callable[[str, str], str] = _faceit_not_set_up
+    faceit_lookup: Callable[[str], dict] = _faceit_lookup_not_set_up
 
 
 def _client_address() -> str:
@@ -359,6 +372,7 @@ def create_app(ctx: WebContext) -> Flask:
             "fields": [field_dict(f) for f in FIELDS],
             "values": json_values(loaded.config),
             "faceit_key_set": bool(loaded.config.faceit_api_key_protected),
+            "faceit_login_url": ctx.faceit_login_url(),
             "warnings": list(loaded.warnings),
             "port_in_use": ctx.port_in_use(),
         }
@@ -376,6 +390,39 @@ def create_app(ctx: WebContext) -> Flask:
             return _no_store(response)
         restart_needed = ctx.load_settings().config.page_port != ctx.port_in_use()
         return _no_store(jsonify(saved=True, restart_needed=restart_needed))
+
+    @app.post("/api/faceit/session")
+    def api_faceit_session():
+        """The browser hands back the authorization code FACEIT put in the settings URL; the app
+        exchanges it for who the user is (spec: Settings, Sign in with FACEIT)."""
+        body = request.get_json(silent=True)
+        code = body.get("code") if isinstance(body, dict) else None
+        state = body.get("state") if isinstance(body, dict) else None
+        if not isinstance(code, str) or not code:
+            return Response(status=400)
+        try:
+            nickname = ctx.faceit_sign_in(code, state if isinstance(state, str) else "")
+        except OAuthError as exc:
+            response = jsonify(error=str(exc))
+            response.status_code = 400
+            return _no_store(response)
+        return _no_store(jsonify(nickname=nickname))
+
+    @app.post("/api/faceit/lookup")
+    def api_faceit_lookup():
+        """Turns a typed FACEIT nickname into the nickname and SteamID Match Alerts need, and saves
+        both: nobody knows their SteamID64, and alerts verify the nickname against it."""
+        body = request.get_json(silent=True)
+        nickname = body.get("nickname") if isinstance(body, dict) else None
+        if not isinstance(nickname, str) or not nickname.strip():
+            return Response(status=400)
+        try:
+            found = ctx.faceit_lookup(nickname)
+        except FaceitError as exc:
+            response = jsonify(error=str(exc))
+            response.status_code = 400
+            return _no_store(response)
+        return _no_store(jsonify(**found))
 
     @app.get("/demos")
     def demos_page():

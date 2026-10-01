@@ -46,11 +46,12 @@ from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 
-from clipper import applog, checks, csdm_db, move_in, paths, protect, settings, tray, web
+from clipper import applog, checks, csdm_db, faceit_oauth, move_in, paths, protect, settings, tray, web
 from clipper.alerts import MatchAlerts
 from clipper.config import Config
 from clipper.csdm_cli import CsdmCli
-from clipper.faceit import FaceitClient
+from clipper.faceit import FaceitClient, FaceitError
+from clipper.faceit_oauth import OAuthError
 from clipper.gate import Gate
 from clipper.index import Index
 from clipper.intake import Intake
@@ -236,6 +237,9 @@ class App:
             load_settings=self.settings.current,
             save_settings=self.settings.save,
             port_in_use=lambda: self.page_port,
+            faceit_login_url=self.faceit_login_url,
+            faceit_sign_in=self.faceit_sign_in,
+            faceit_lookup=self.faceit_lookup,
         )
         try:
             self._web = web.WebServer(web.create_app(ctx), self.settings.current().config.page_port,
@@ -275,6 +279,82 @@ class App:
     def _window_request(self) -> dict:
         """`/api/window`'s answer, which the page in the open window polls (see `WindowLauncher`)."""
         return self._launcher.current() if self._launcher is not None else {"seq": 0, "page": "/status"}
+
+    # --- sign in with FACEIT (Settings) ---------------------------------------------------------------
+
+    def faceit_login_url(self) -> str:
+        """Where Settings' Sign in with FACEIT button goes, or "" when sign-in is not set up. The
+        redirect comes back to `/settings` with the authorization code (spec: Settings)."""
+        cfg = self.settings.current().config
+        if not cfg.faceit_oauth_client_id or self.page_port is None:
+            return ""
+        state, verifier = f"{self.page_port}.{faceit_oauth.new_state()}", faceit_oauth.new_verifier()
+        index = Index(self._index_path)
+        try:
+            index.set_flag("faceit_oauth_state", state)
+            index.set_flag("faceit_oauth_verifier", verifier)
+        finally:
+            index.close()
+        # ponytail: one live state, so a second tab's sign-in invalidates the first (and says so);
+        # per-tab states only if that ever matters. The port rides in the state because the https
+        # relay page in the middle has no other way to know which port this app is on.
+        return faceit_oauth.authorize_url(cfg.faceit_oauth_client_id, self._faceit_redirect(cfg),
+                                          state, faceit_oauth.challenge(verifier))
+
+    def faceit_sign_in(self, code: str, state: str) -> str:
+        """The browser's FACEIT answer turned into the signed-in player: the code is exchanged for a
+        token, the token says which FACEIT player it is, and their nickname and SteamID are saved so
+        Match Alerts pick them up (the same two settings someone would otherwise type)."""
+        index = Index(self._index_path)
+        try:
+            expected = index.get_flag("faceit_oauth_state")
+            verifier = index.get_flag("faceit_oauth_verifier") or ""
+        finally:
+            index.close()
+        if not state or state != expected:
+            raise OAuthError("that sign-in did not come back from this app; try again")
+        cfg = self.settings.current().config
+        if not cfg.faceit_api_key_protected:
+            raise OAuthError("set the FACEIT API key first, then sign in")
+        if not cfg.faceit_client_secret_protected:
+            raise OAuthError("set the FACEIT client secret first, then sign in")
+        try:
+            token = faceit_oauth.access_token(code, cfg.faceit_oauth_client_id,
+                                              protect.unprotect(cfg.faceit_client_secret_protected),
+                                              self._faceit_redirect(cfg), verifier)
+            client = FaceitClient(lambda: protect.unprotect(cfg.faceit_api_key_protected))
+            player = client.player_by_id(faceit_oauth.player_id(token))
+        except protect.ProtectError:
+            raise OAuthError("a saved FACEIT secret can't be read on this Windows account") from None
+        except FaceitError as exc:
+            raise OAuthError(f"FACEIT could not answer: {exc}") from None
+        errors = self.settings.save({"faceit_nickname": player.nickname,
+                                     "subject_steamid": player.steamid})
+        if errors:
+            raise OAuthError("; ".join(errors.values()))
+        return player.nickname
+
+    def _faceit_redirect(self, cfg: Config) -> str:
+        """The redirect URI, exactly as the FACEIT OAuth2 client has it registered."""
+        return cfg.faceit_redirect_uri or f"http://localhost:{self.page_port}/settings"
+
+    def faceit_lookup(self, nickname: str) -> dict:
+        """The FACEIT player behind a nickname, saved as the two settings Match Alerts need. The app's
+        own key does the asking, so no FACEIT sign-in is needed -- this is the whole of "tell the app
+        who you are" without OAuth."""
+        cfg = self.settings.current().config
+        if not cfg.faceit_api_key_protected:
+            raise FaceitError("set the FACEIT API key first")
+        try:
+            client = FaceitClient(lambda: protect.unprotect(cfg.faceit_api_key_protected))
+            player = client.player(nickname)
+        except protect.ProtectError:
+            raise FaceitError("the saved FACEIT API key can't be read on this Windows account") from None
+        errors = self.settings.save({"faceit_nickname": player.nickname,
+                                     "subject_steamid": player.steamid})
+        if errors:
+            raise FaceitError("; ".join(errors.values()))
+        return {"nickname": player.nickname, "steamid": player.steamid}
 
     # --- pause / resume (the tray, Task 14; the Status page's Resume, `/api/resume`) ---------------
 

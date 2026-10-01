@@ -13,12 +13,13 @@
   <p class="brand"><span>CS2</span>clipper</p>
   <h1>Settings</h1>
   <div id="notice"></div>
+  <div id="faceit"></div>
   <form id="form"></form>
   <p><button class="skip" id="save" type="button">Save</button> <span id="result"></span></p>
 </main>
 <script>
 const esc = s => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
-let fields = [], values = {}, faceitKeySet = false, keyRemoved = false;
+let fields = [], values = {}, faceitKeySet = false, keyRemoved = false, loginUrl = "", signInNote = "";
 
 function inputFor(f) {
   const id = `f-${f.name}`;
@@ -49,12 +50,27 @@ function fieldRow(f) {
   const note = f.name === "data_root"
     ? '<p class="note">A new folder applies to Demos from now on; files already in the old one stay.</p>' : "";
   const help = f.help ? `<small>${esc(f.help)}</small>` : "";
+  // Nobody knows their SteamID64: the button asks FACEIT for it and fills both fields in.
+  const lookup = f.name === "faceit_nickname"
+    ? '<button type="button" class="skip" data-lookup="1">Look up my FACEIT name</button>' : "";
   return `<p class="field">
     <label for="f-${f.name}">${esc(f.label)}</label>
     ${inputFor(f)}
+    ${lookup}
     ${help}
     <span class="err" id="err-${f.name}"></span>
   </p>${note}`;
+}
+
+// Sign in with FACEIT fills in the nickname and SteamID below; without a client ID there is no button.
+function faceitBlock() {
+  if (!loginUrl) return "";
+  const signedIn = values.faceit_nickname
+    ? `<span class="muted">Signed in as <b>${esc(values.faceit_nickname)}</b>.</span>` : "";
+  const note = signInNote ? `<p class="note">${signInNote}</p>` : "";
+  return `<h2>FACEIT sign-in</h2>
+    <p class="field"><a class="skip" href="${esc(loginUrl)}">Sign in with FACEIT</a> ${signedIn}</p>
+    ${note}`;
 }
 
 function render() {
@@ -66,6 +82,7 @@ function render() {
   }
   document.getElementById("form").innerHTML = groups
     .map(g => `<h2>${esc(g.name)}</h2>${g.fields.map(fieldRow).join("")}`).join("");
+  document.getElementById("faceit").innerHTML = faceitBlock();
 }
 
 async function load() {
@@ -74,6 +91,7 @@ async function load() {
   fields = data.fields;
   values = data.values;
   faceitKeySet = data.faceit_key_set;
+  loginUrl = data.faceit_login_url || "";
   keyRemoved = false;
   document.getElementById("notice").innerHTML = data.warnings.length
     ? `<ul>${data.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : "";
@@ -88,7 +106,59 @@ function readField(f) {
   return el.value;
 }
 
-document.getElementById("form").addEventListener("click", e => {
+// FACEIT sends the user back with ?code=…&state=… (the fragment too, if a relay forwards it that
+// way); hand the code to the app, then never keep it in the address bar. Runs before load(), so the
+// state still matches what the app minted.
+async function finishSignIn() {
+  const query = new URLSearchParams(location.search);
+  const fragment = new URLSearchParams(location.hash.slice(1));
+  const code = query.get("code") || fragment.get("code");
+  const error = query.get("error") || fragment.get("error");
+  const state = query.get("state") || fragment.get("state") || "";
+  if (!code && !error) return;
+  history.replaceState(null, "", location.pathname);
+  if (error) {
+    signInNote = `FACEIT sign-in failed: ${esc(error)}`;
+    return;
+  }
+  const response = await api("api/faceit/session", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({code, state}),
+  });
+  const data = await response.json().catch(() => ({}));
+  signInNote = response.ok ? `Signed in as <b>${esc(data.nickname)}</b>.`
+    : `FACEIT sign-in failed: ${esc(data.error || "try again")}`;
+}
+
+// Asks the app to resolve the typed FACEIT name; it saves the nickname and the SteamID itself, so
+// load() afterwards is what fills the boxes in.
+async function lookupName() {
+  const err = document.getElementById("err-faceit_nickname");
+  const result = document.getElementById("result");
+  const nickname = (document.getElementById("f-faceit_nickname").value || "").trim();
+  err.textContent = "";
+  if (!nickname) {
+    err.textContent = "type your FACEIT name first";
+    return;
+  }
+  const response = await api("api/faceit/lookup", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({nickname}),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    err.textContent = data.error || "FACEIT lookup failed";
+    return;
+  }
+  await load();
+  result.textContent = `Found ${data.nickname}.`;
+}
+
+document.getElementById("form").addEventListener("click", async e => {
+  if (e.target.closest("button[data-lookup]")) {
+    await lookupName();
+    return;
+  }
   if (e.target.closest("button[data-remove-key]")) {
     keyRemoved = true;
     faceitKeySet = false;
@@ -125,7 +195,7 @@ document.getElementById("save").addEventListener("click", async () => {
   load();
 });
 
-load();
+(async () => { await finishSignIn(); await load(); })();
 </script>
 </body>
 </html>

@@ -48,6 +48,31 @@ class MatchDetails:
     matchroom_url: str
 
 
+def _player_of(data: dict, missing: str) -> Player:
+    cs2 = (data.get("games") or {}).get("cs2")
+    if not cs2:
+        raise PlayerNotFound(missing)
+    return Player(data["player_id"], data["nickname"], str(cs2["game_player_id"]))
+
+
+def _invalid_token(exc: urllib.error.HTTPError) -> bool:
+    """Whether a 400 is really a bad key: FACEIT answers an unrecognised token with
+    ``400 {"error":"invalid_token"}``, not the 401 you would expect."""
+    if exc.code != 400:
+        return False
+    try:
+        body = json.loads(exc.read())
+    except (OSError, ValueError, AttributeError):   # a body we cannot read is not a verdict
+        return False
+    return isinstance(body, dict) and str(body.get("error", "")).lower() == "invalid_token"
+
+
+def _http_error(exc: urllib.error.HTTPError) -> FaceitError:
+    if exc.code in (401, 403) or _invalid_token(exc):
+        return AuthError("the API key was not recognised by FACEIT", exc.code)
+    return FaceitError(f"HTTP {exc.code} from FACEIT", exc.code)
+
+
 def http_get_json(url: str, api_key: str, timeout: float = 20.0) -> dict:
     request = urllib.request.Request(url, headers={
         "Authorization": f"Bearer {api_key}", "Accept": "application/json", "User-Agent": "cs2-clipper"})
@@ -55,8 +80,7 @@ def http_get_json(url: str, api_key: str, timeout: float = 20.0) -> dict:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read())
     except urllib.error.HTTPError as exc:
-        kind = AuthError if exc.code in (401, 403) else FaceitError
-        raise kind(f"HTTP {exc.code} from FACEIT", exc.code) from None
+        raise _http_error(exc) from None
     except (urllib.error.URLError, OSError, ValueError) as exc:
         raise FaceitError(f"FACEIT could not be reached: {type(exc).__name__}: {exc}") from None
 
@@ -86,10 +110,17 @@ class FaceitClient:
             if exc.status == 404:
                 raise PlayerNotFound(f"FACEIT has no player called {nickname}", 404) from None
             raise
-        cs2 = (data.get("games") or {}).get("cs2")
-        if not cs2:
-            raise PlayerNotFound(f"{nickname} has no CS2 profile on FACEIT")
-        return Player(data["player_id"], data["nickname"], str(cs2["game_player_id"]))
+        return _player_of(data, f"{nickname} has no CS2 profile on FACEIT")
+
+    def player_by_id(self, player_id: str) -> Player:
+        """The player behind a FACEIT player id -- what a sign-in says the user is."""
+        try:
+            data = self._fetch(f"{DATA_API}/players/{urllib.parse.quote(player_id)}")
+        except FaceitError as exc:
+            if exc.status == 404:
+                raise PlayerNotFound(f"FACEIT has no player {player_id}", 404) from None
+            raise
+        return _player_of(data, f"FACEIT has no player {player_id}")
 
     def finished_since(self, player_id: str, since: datetime) -> list[tuple[str, datetime]]:
         """(match ID, finished at) of every CS2 match the player finished since `since`."""
@@ -99,8 +130,11 @@ class FaceitClient:
             data = self._fetch(f"{DATA_API}/players/{player_id}/history?game=cs2"
                                f"&from={int(since.timestamp())}&offset={offset}&limit={PAGE_SIZE}")
             items = data.get("items") or []
+            # FACEIT spells it "finished" (lower case), so compare case-insensitively: a change of
+            # case on their side must never silently empty every Match Alert again.
             found += [(item["match_id"], datetime.fromtimestamp(item["finished_at"], timezone.utc))
-                      for item in items if item.get("status") == "FINISHED" and item.get("finished_at")]
+                      for item in items
+                      if str(item.get("status", "")).lower() == "finished" and item.get("finished_at")]
             if len(items) < PAGE_SIZE:
                 return found
             offset += PAGE_SIZE

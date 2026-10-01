@@ -8,6 +8,8 @@ from __future__ import annotations
 import logging
 import socket
 import threading
+import types
+import urllib.parse
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -19,8 +21,10 @@ from clipper.app import (
     start_match_alerts,
 )
 from clipper.config import Config
+from clipper.faceit import FaceitError, Player
+from clipper.faceit_oauth import OAuthError
 from clipper.index import Index
-from clipper.settings import SettingsStore
+from clipper.settings import KEY_FIELD, SECRET_FIELD, SettingsStore
 from clipper.state import AppState, Rendering
 from clipper.web import WebContext, WebServer, create_app
 from clipper.worker import StopRequest
@@ -709,3 +713,115 @@ def test_a_background_start_while_a_copy_runs_exits_quietly_without_showing_anyt
         assert run(background=True) == 0
     assert handed == []                  # sign-in never opens a window
     assert capsys.readouterr().err == ""
+
+
+# --- Sign in with FACEIT (Settings) -----------------------------------------------------------------
+
+
+def _ready(tmp_path, monkeypatch, *, key="the-app-key", secret="the-client-secret",
+           steamid="76561198192858303", nickname="cheesebagga"):
+    """An App whose web server is up on a port and whose sign-in has been started (so a state and a
+    PKCE verifier exist). The FACEIT calls are faked: no secret is decrypted, no network."""
+    store = SettingsStore(tmp_path / "settings.json")
+    store.save({"faceit_oauth_client_id": "client-1",
+                **({KEY_FIELD: key} if key else {}), **({SECRET_FIELD: secret} if secret else {})})
+    app = App(store, index_path=tmp_path / "clipper.sqlite")
+    app.page_port = 8765
+    app.faceit_login_url()                                     # mints and stores the state + verifier
+    monkeypatch.setattr("clipper.app.faceit_oauth.access_token", lambda *args, **kwargs: "a-token")
+    monkeypatch.setattr("clipper.app.faceit_oauth.player_id", lambda token: "p-1")
+    monkeypatch.setattr("clipper.app.FaceitClient", lambda key_of: types.SimpleNamespace(
+        player=lambda name: Player("p-1", name.strip(), steamid),
+        player_by_id=lambda player_id: Player("p-1", nickname, steamid)))
+    index = Index(tmp_path / "clipper.sqlite")
+    try:
+        return app, store, index.get_flag("faceit_oauth_state")
+    finally:
+        index.close()
+
+
+def test_faceit_login_url_is_empty_until_there_is_a_client_id_and_a_port(tmp_path):
+    store = SettingsStore(tmp_path / "settings.json")
+    app = App(store, index_path=tmp_path / "clipper.sqlite")
+    assert app.faceit_login_url() == ""                        # no client ID and no web server yet
+    store.save({"faceit_oauth_client_id": "client-1"})
+    assert app.faceit_login_url() == ""                        # still no web server
+    app.page_port = 8765
+    url = app.faceit_login_url()
+    assert url.startswith("https://accounts.faceit.com?")
+    assert "redirect_uri=http%3A%2F%2Flocalhost%3A8765%2Fsettings" in url
+
+
+def test_faceit_login_url_uses_the_registered_redirect_when_one_is_set(tmp_path):
+    store = SettingsStore(tmp_path / "settings.json")
+    store.save({"faceit_oauth_client_id": "client-1",
+                "faceit_redirect_uri": "https://baggaclipper.example/faceit"})
+    app = App(store, index_path=tmp_path / "clipper.sqlite")
+    app.page_port = 8765
+
+    url = app.faceit_login_url()
+
+    assert "redirect_uri=https%3A%2F%2Fbaggaclipper.example%2Ffaceit" in url
+
+
+def test_the_state_carries_the_port_so_the_https_relay_can_find_this_app(tmp_path):
+    # The relay page is static and knows nothing about this machine, so the port it must send the
+    # browser back to travels in the state FACEIT echoes round the trip.
+    store = SettingsStore(tmp_path / "settings.json")
+    store.save({"faceit_oauth_client_id": "client-1",
+                "faceit_redirect_uri": "https://mohammadam02.github.io/cs2-clipper/"})
+    app = App(store, index_path=tmp_path / "clipper.sqlite")
+    app.page_port = 8765
+
+    url = app.faceit_login_url()
+    state = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(url).query))["state"]
+
+    assert state.startswith("8765.")
+    index = Index(tmp_path / "clipper.sqlite")
+    try:
+        assert index.get_flag("faceit_oauth_state") == state       # what comes back is what we minted
+    finally:
+        index.close()
+
+
+def test_faceit_sign_in_saves_the_nickname_and_steamid(tmp_path, monkeypatch):
+    app, store, state = _ready(tmp_path, monkeypatch)
+
+    assert app.faceit_sign_in("a-code", state) == "cheesebagga"
+
+    cfg = store.current().config
+    assert (cfg.faceit_nickname, cfg.subject_steamid) == ("cheesebagga", "76561198192858303")
+
+
+def test_faceit_sign_in_refuses_a_state_that_is_not_ours(tmp_path, monkeypatch):
+    app, _store, _state = _ready(tmp_path, monkeypatch)
+    with pytest.raises(OAuthError, match="did not come back"):
+        app.faceit_sign_in("a-code", "someone-elses-state")
+
+
+def test_faceit_sign_in_needs_the_app_key_first(tmp_path, monkeypatch):
+    app, _store, state = _ready(tmp_path, monkeypatch, key=None)
+    with pytest.raises(OAuthError, match="API key first"):
+        app.faceit_sign_in("a-code", state)
+
+
+def test_faceit_sign_in_needs_the_client_secret_first(tmp_path, monkeypatch):
+    app, _store, state = _ready(tmp_path, monkeypatch, secret=None)
+    with pytest.raises(OAuthError, match="client secret first"):
+        app.faceit_sign_in("a-code", state)
+
+
+def test_faceit_lookup_saves_the_nickname_and_steamid(tmp_path, monkeypatch):
+    app, store, _state = _ready(tmp_path, monkeypatch)
+
+    found = app.faceit_lookup("  cheesebagga  ")
+
+    assert found == {"nickname": "cheesebagga", "steamid": "76561198192858303"}
+    cfg = store.current().config
+    assert (cfg.faceit_nickname, cfg.subject_steamid) == ("cheesebagga", "76561198192858303")
+
+
+def test_faceit_lookup_needs_the_app_key_first(tmp_path, monkeypatch):
+    app, _store, _state = _ready(tmp_path, monkeypatch, key=None)
+    with pytest.raises(FaceitError, match="API key first"):
+        app.faceit_lookup("cheesebagga")

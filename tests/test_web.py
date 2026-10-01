@@ -15,6 +15,8 @@ import pytest
 
 from clipper import protect
 from clipper.checks import Check
+from clipper.faceit import FaceitError
+from clipper.faceit_oauth import OAuthError
 from clipper.index import Index
 from clipper.model import FaceitStats, Highlight, MatchInfo
 from clipper.settings import FIELDS, KEY_FIELD, STORED_KEY, SettingsStore
@@ -831,6 +833,99 @@ def test_put_bad_fields_leave_an_existing_settings_file_byte_for_byte_unchanged(
     assert path.read_bytes() == before
 
 
+# --- Sign in with FACEIT (Settings) -----------------------------------------------------------------
+
+FACEIT_LOGIN = "https://accounts.faceit.com?client_id=c&state=s"
+
+
+def test_api_settings_carries_the_faceit_login_url(tmp_path):
+    app, _store = _settings_app(tmp_path, faceit_login_url=lambda: FACEIT_LOGIN)
+    assert pc_get(app.test_client(), "/api/settings").get_json()["faceit_login_url"] == FACEIT_LOGIN
+
+
+def test_api_settings_says_no_sign_in_is_set_up_by_default(tmp_path):
+    app, _store = _settings_app(tmp_path)
+    assert pc_get(app.test_client(), "/api/settings").get_json()["faceit_login_url"] == ""
+
+
+def test_faceit_session_passes_the_code_and_state_through_and_returns_the_nickname(tmp_path):
+    calls = []
+    app, _store = _settings_app(
+        tmp_path, faceit_sign_in=lambda code, state: calls.append((code, state)) or "cheesebagga")
+
+    response = pc_post(app.test_client(), "/api/faceit/session", headers=MARKED,
+                       json={"code": "a-code", "state": "a-state"})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"nickname": "cheesebagga"}
+    assert calls == [("a-code", "a-state")]
+
+
+def test_faceit_session_without_a_code_is_400(tmp_path):
+    app, _store = _settings_app(tmp_path)
+    assert pc_post(app.test_client(), "/api/faceit/session", headers=MARKED, json={}).status_code == 400
+
+
+def test_faceit_session_reports_a_refused_sign_in_as_400_not_500(tmp_path):
+    def refuse(code, state):
+        raise OAuthError("that sign-in did not come back from this app; try again")
+
+    app, _store = _settings_app(tmp_path, faceit_sign_in=refuse)
+
+    response = pc_post(app.test_client(), "/api/faceit/session", headers=MARKED, json={"code": "c"})
+
+    assert response.status_code == 400
+    assert "did not come back" in response.get_json()["error"]
+
+
+def test_faceit_session_refuses_a_phone_and_needs_the_marker(tmp_path):
+    app, _store = _settings_app(tmp_path)
+    client = app.test_client()
+    assert pc_post(client, "/api/faceit/session", json={"code": "c"}).status_code == 403
+    assert phone_post(client, "/api/faceit/session", headers=MARKED, json={"code": "c"}).status_code == 403
+
+
+# --- Look up my FACEIT name (Settings) ---------------------------------------------------------------
+
+
+def test_faceit_lookup_passes_the_nickname_through_and_returns_the_player(tmp_path):
+    calls = []
+    app, _store = _settings_app(tmp_path, faceit_lookup=lambda nickname: calls.append(nickname) or
+                                {"nickname": "cheesebagga", "steamid": "76561198192858303"})
+
+    response = pc_post(app.test_client(), "/api/faceit/lookup", headers=MARKED, json={"nickname": "cheesebagga"})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"nickname": "cheesebagga", "steamid": "76561198192858303"}
+    assert calls == ["cheesebagga"]
+
+
+def test_faceit_lookup_without_a_nickname_is_400(tmp_path):
+    app, _store = _settings_app(tmp_path)
+    client = app.test_client()
+    assert pc_post(client, "/api/faceit/lookup", headers=MARKED, json={}).status_code == 400
+    assert pc_post(client, "/api/faceit/lookup", headers=MARKED, json={"nickname": "   "}).status_code == 400
+
+
+def test_faceit_lookup_reports_a_faceit_error_as_400_not_500(tmp_path):
+    def missing(nickname):
+        raise FaceitError("FACEIT has no player called nope", 404)
+
+    app, _store = _settings_app(tmp_path, faceit_lookup=missing)
+
+    response = pc_post(app.test_client(), "/api/faceit/lookup", headers=MARKED, json={"nickname": "nope"})
+
+    assert response.status_code == 400
+    assert "no player called nope" in response.get_json()["error"]
+
+
+def test_faceit_lookup_refuses_a_phone_and_needs_the_marker(tmp_path):
+    app, _store = _settings_app(tmp_path)
+    client = app.test_client()
+    assert pc_post(client, "/api/faceit/lookup", json={"nickname": "x"}).status_code == 403
+    assert phone_post(client, "/api/faceit/lookup", headers=MARKED, json={"nickname": "x"}).status_code == 403
+
+
 # --- every route Tasks 10-14 added is PC-only: a foreign Host is refused on all of them -------------
 
 PC_ONLY_ROUTES = [
@@ -839,6 +934,7 @@ PC_ONLY_ROUTES = [
     ("GET", "/reels"), ("GET", "/api/reels"), ("GET", "/reels/1.mp4"),
     ("POST", f"/api/reels/{'a' * 16}/open-folder"),
     ("GET", "/settings"), ("GET", "/api/settings"), ("PUT", "/api/settings"),
+    ("POST", "/api/faceit/session"), ("POST", "/api/faceit/lookup"),
     ("GET", "/api/window"), ("POST", "/api/window"),
 ]
 

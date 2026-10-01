@@ -1,3 +1,4 @@
+import io
 import urllib.error
 from datetime import datetime, timezone
 
@@ -55,6 +56,19 @@ def test_a_player_without_cs2_is_an_error():
         FaceitClient(lambda: "key", fetch).player("someone")
 
 
+def test_player_by_id_gives_the_ids_a_sign_in_leads_to():
+    fetch = FakeFetch({"/players/p-1": {"player_id": "p-1", "nickname": "someone",
+                                        "games": {"cs2": {"game_player_id": SUBJECT}}}})
+    assert FaceitClient(lambda: "key", fetch).player_by_id("p-1") == Player("p-1", "someone", SUBJECT)
+    assert fetch.urls == [f"{faceit.DATA_API}/players/p-1"]
+
+
+def test_player_by_id_unknown_is_player_not_found():
+    fetch = FakeFetch({"/players/nope": FaceitError("HTTP 404 from FACEIT", 404)})
+    with pytest.raises(PlayerNotFound, match="no player nope"):
+        FaceitClient(lambda: "key", fetch).player_by_id("nope")
+
+
 def test_an_unknown_nickname_is_player_not_found():
     fetch = FakeFetch({"/players": FaceitError("HTTP 404 from FACEIT", 404)})
     with pytest.raises(PlayerNotFound, match="no player called someone"):
@@ -75,11 +89,11 @@ def test_other_errors_from_the_player_lookup_stay_as_they_are():
 def test_finished_since_pages_through_the_history():
     def page(url):
         if "offset=0&" in url:
-            items = [{"match_id": "live", "status": "ONGOING", "finished_at": 0}]
-            items += [{"match_id": f"m{i}", "status": "FINISHED", "finished_at": 1_790_000_000 + i}
+            items = [{"match_id": "live", "status": "ongoing", "finished_at": 0}]
+            items += [{"match_id": f"m{i}", "status": "finished", "finished_at": 1_790_000_000 + i}
                       for i in range(99)]
         else:
-            items = [{"match_id": f"m{99 + i}", "status": "FINISHED", "finished_at": 1_790_000_099 + i}
+            items = [{"match_id": f"m{99 + i}", "status": "finished", "finished_at": 1_790_000_099 + i}
                      for i in range(2)]
         return {"items": items}
 
@@ -90,6 +104,16 @@ def test_finished_since_pages_through_the_history():
     assert found[0] == ("m0", datetime.fromtimestamp(1_790_000_000, timezone.utc))
     assert f"from={int(since.timestamp())}" in fetch.urls[0]
     assert "offset=100&" in fetch.urls[1]
+
+
+def test_a_match_is_taken_whatever_case_faceit_spells_finished_in():
+    # FACEIT currently returns "finished"; the old exact "FINISHED" match silently dropped every one.
+    for status in ("finished", "FINISHED", "Finished"):
+        fetch = FakeFetch({"/players/p-1/history": {"items": [
+            {"match_id": "m", "status": status, "finished_at": 1_790_000_000}]}})
+        found = FaceitClient(lambda: "key", fetch).finished_since(
+            "p-1", datetime(2026, 9, 1, tzinfo=timezone.utc))
+        assert [match_id for match_id, _ in found] == ["m"], status
 
 
 def test_stats_are_the_subjects_line():
@@ -182,3 +206,30 @@ def test_the_api_key_getter_is_called_fresh_for_every_request_not_cached(monkeyp
     client.details(MATCH_ID)
 
     assert calls == [0, 1]   # asked again for the second request, not reused from the first
+
+
+def test_an_unrecognised_token_is_an_auth_error_even_though_faceit_calls_it_a_400(monkeypatch):
+    body = b'{"error":"invalid_token","error_description":"Token was not recognised"}'
+
+    def urlopen(request, timeout):
+        raise urllib.error.HTTPError("u", 400, "Bad Request", None, io.BytesIO(body))
+
+    monkeypatch.setattr(faceit.urllib.request, "urlopen", urlopen)
+
+    with pytest.raises(AuthError) as caught:
+        http_get_json(f"{faceit.DATA_API}/players?nickname=x", "secret-key")
+
+    assert caught.value.status == 400
+    assert "secret-key" not in str(caught.value)
+
+
+def test_a_plain_400_stays_a_faceit_error_to_retry(monkeypatch):
+    def urlopen(request, timeout):
+        raise urllib.error.HTTPError("u", 400, "Bad Request", None, io.BytesIO(b'{"error":"bad_request"}'))
+
+    monkeypatch.setattr(faceit.urllib.request, "urlopen", urlopen)
+
+    with pytest.raises(FaceitError) as caught:
+        http_get_json(f"{faceit.DATA_API}/players?nickname=x", "secret-key")
+
+    assert not isinstance(caught.value, AuthError)

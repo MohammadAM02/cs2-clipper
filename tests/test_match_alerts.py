@@ -252,3 +252,16 @@ def test_matches_whose_link_expired_drop_out(world):
     world.tick()
     assert world.state(1) == "expired"
     assert world.notices == []
+
+
+def test_the_first_check_of_a_run_looks_back_30_days_not_from_the_last_check(world):
+    # A restart after a gap longer than LOOK_BACK_OVERLAP must not skip a match for good: the saved
+    # check time says 5 minutes ago, but the match finished three hours before that.
+    world.index.set_flag("faceit_checked_at",
+                         (START - timedelta(minutes=5)).isoformat(timespec="seconds"))
+    world.faceit.add(1, START - timedelta(hours=3), THREE_K)
+
+    world.tick()
+
+    assert world.titles() == ["1 new match has Highlights"]
+    assert world.state(1) == "announced"

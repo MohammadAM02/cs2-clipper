@@ -31,6 +31,9 @@ SEQUENCE_EVENTS = ("kills", "rounds")
 class Config:
     subject_steamid: str = ""
     faceit_nickname: str = ""
+    faceit_oauth_client_id: str = ""
+    faceit_redirect_uri: str = ""
+    faceit_client_secret_protected: str = field(default="", repr=False)
     faceit_api_key_protected: str = field(default="", repr=False)
     downloads_dir: Path = field(default_factory=downloads_dir)
     data_root: Path | None = None

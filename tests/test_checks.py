@@ -421,7 +421,7 @@ def test_run_checks_match_alerts_off_shows_the_reason(tmp_path):
 def test_startup_problems_lists_each_message_in_order(tmp_path):
     cfg = _cfg(tmp_path, subject_steamid="", data_root=None)
 
-    def failing_ensure(pg_bin, pg_data):
+    def failing_ensure(pg_bin, pg_data, port):
         raise RuntimeError("pg_ctl exploded")
 
     problems = checks.startup_problems(cfg, ensure_postgres=failing_ensure)
@@ -436,7 +436,7 @@ def test_startup_problems_lists_each_message_in_order(tmp_path):
 
 def test_startup_problems_a_set_but_missing_clips_folder_names_the_path_instead_of_unset(tmp_path):
     cfg = _cfg(tmp_path, subject_steamid="76561198192858303", data_root=tmp_path / "gone")
-    problems = checks.startup_problems(cfg, ensure_postgres=lambda a, b: None)
+    problems = checks.startup_problems(cfg, ensure_postgres=lambda a, b, port: None)
     assert f"The clips folder {cfg.data_root} is missing" in problems
     assert not any("Choose a clips folder" in p for p in problems)
 
@@ -449,7 +449,7 @@ def test_startup_problems_empty_when_all_is_well(tmp_path):
     cfg.csdm_exe.write_bytes(b"")
     (cfg.csdm_home / ".csdm").mkdir(parents=True)
     (cfg.csdm_home / ".csdm" / "settings.json").write_text("{}", encoding="utf-8")
-    problems = checks.startup_problems(cfg, ensure_postgres=lambda pg_bin, pg_data: None)
+    problems = checks.startup_problems(cfg, ensure_postgres=lambda pg_bin, pg_data, port: None)
     assert problems == []
 
 
@@ -457,8 +457,34 @@ def test_startup_problems_always_attempts_postgres_even_with_earlier_problems(tm
     cfg = _cfg(tmp_path, subject_steamid="", data_root=None)
     calls = []
 
-    def ensure(pg_bin, pg_data):
-        calls.append((pg_bin, pg_data))
+    def ensure(pg_bin, pg_data, port):
+        calls.append((pg_bin, pg_data, port))
 
     checks.startup_problems(cfg, ensure_postgres=ensure)
-    assert calls == [(cfg.pg_bin, cfg.pg_data)]
+    assert calls == [(cfg.pg_bin, cfg.pg_data, 5432)]      # no CS:DM settings: Postgres's usual port
+
+
+def test_startup_problems_starts_postgres_on_the_port_cs_demo_managers_settings_name(tmp_path):
+    cfg = _cfg(tmp_path)
+    (cfg.csdm_home / ".csdm").mkdir(parents=True)
+    (cfg.csdm_home / ".csdm" / "settings.json").write_text(
+        json.dumps({"database": {"port": 5433, "password": "hunter2"}}), encoding="utf-8")
+    ports = []
+
+    checks.startup_problems(cfg, ensure_postgres=lambda pg_bin, pg_data, port: ports.append(port))
+
+    assert ports == [5433]
+
+
+# --- hlae_behind ---------------------------------------------------------------------------------
+
+
+def test_hlae_is_behind_only_when_both_versions_are_known_and_the_release_is_newer(tmp_path):
+    cfg = _cfg(tmp_path)
+    assert checks.hlae_behind(cfg.csdm_home, "2.192.7") is False       # no HLAE at all: nothing to be behind
+
+    _install_hlae(cfg, CHANGELOG_TWO_RELEASES)                         # 2.192.6
+
+    assert checks.hlae_behind(cfg.csdm_home, "2.192.7") is True
+    assert checks.hlae_behind(cfg.csdm_home, "2.192.6") is False
+    assert checks.hlae_behind(cfg.csdm_home, None) is False            # the release check has not answered

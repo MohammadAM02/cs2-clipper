@@ -199,6 +199,10 @@ def _faceit_lookup_not_set_up(nickname: str) -> dict:
     raise FaceitError("FACEIT lookup is not set up")
 
 
+def _nothing_to_set_up() -> dict:
+    return {"running": False, "needed": False, "steps": [], "download_bytes": 0, "progress": None, "error": None}
+
+
 @dataclass
 class WebContext:
     """What the pages need from the app, one field per thing. `App.start_web` fills every one; each field
@@ -224,6 +228,8 @@ class WebContext:
     faceit_login_url: Callable[[], str] = lambda: ""
     faceit_sign_in: Callable[[str, str], str] = _faceit_not_set_up
     faceit_lookup: Callable[[str], dict] = _faceit_lookup_not_set_up
+    setup_status: Callable[[], dict] = _nothing_to_set_up        # provision.Setup.status
+    start_setup: Callable[[], str | None] = lambda: None         # why it was not started, or None
 
 
 def _client_address() -> str:
@@ -343,6 +349,20 @@ def create_app(ctx: WebContext) -> Flask:
     def api_resume():
         ctx.resume()
         return Response(status=204)
+
+    @app.get("/api/setup")
+    def api_setup():
+        return _no_store(jsonify(ctx.setup_status()))
+
+    @app.post("/api/setup")
+    def api_setup_start():
+        """202: setup goes on after the reply, and `GET /api/setup` tells how it is going."""
+        refused = ctx.start_setup()
+        if refused:
+            response = jsonify(error=refused)
+            response.status_code = 409
+            return _no_store(response)
+        return Response(status=202)
 
     @app.post("/api/quit")
     def api_quit():

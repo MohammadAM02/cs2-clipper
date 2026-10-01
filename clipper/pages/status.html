@@ -28,6 +28,19 @@
     </div>
   </section>
 
+  <section class="setup cut" id="setup" aria-labelledby="h-setup" hidden>
+    <div class="head">
+      <div style="flex-grow:1;min-width:0">
+        <h2 id="h-setup" class="h2">Set up this PC</h2>
+        <p class="lead" id="setup-lead" aria-live="polite"></p>
+      </div>
+      <button class="primary" id="setup-go">Set up</button>
+    </div>
+    <div class="steps" id="setup-steps"></div>
+    <div class="dl" id="setup-dl" hidden><span class="pbar live" aria-hidden="true"><i></i></span><span class="lbl" id="setup-mb"></span></div>
+    <div class="notice p" id="setup-error" role="alert" hidden></div>
+  </section>
+
   <section id="notice" aria-label="Needs attention" style="display:flex;flex-direction:column;gap:8px"></section>
 
   <section class="hero cut rise" id="hero" aria-label="Your latest Highlights" tabindex="0" style="animation-delay:.06s"></section>
@@ -82,6 +95,7 @@ const STAGE_LABEL = ["Spotted", "Unpacked", "Analyzed", "Scored", "Rendering", "
 const PERSPECTIVE = {player: "Player view", enemy: "Enemy view"};
 let quitRequested = false, pauseRoute = false, nickname = "", lastStatus = null, grabRows = [], prevDemos = null;
 let logFilter = "all", follow = true, logLines = [];
+let setupWasRunning = false, setupUpdates = null;
 const opened = new Set(JSON.parse(sessionStorage.getItem("opened") || "[]"));
 
 // The buttons' icons live in app.js; the page's markup names them.
@@ -271,6 +285,69 @@ function renderLog() {
   if (follow) box.scrollTop = box.scrollHeight;
 }
 
+// --- Set up: what this PC still lacks, and the run that installs it -----------------------------------------
+const megabytes = bytes => Math.round(bytes / 1048576);
+const linked = text => esc(text).replace(/https:\/\/[^\s<]*[^\s<.,;:)]/g, url => `<a href="${url}" target="_blank" rel="noopener">${url}</a>`);
+
+function setupRow(s, data) {
+  const downloading = data.progress && data.progress.done < data.progress.total;
+  const [cls, icon, text] = s.state === "ok" ? ["ico ok", ICON.check, "Ready"]
+    : s.state === "failed" ? ["ico bad", ICON.bang, "Failed"]
+    : s.state === "running" ? ["ico unk", '<span class="dot live"></span>', downloading ? "Downloading" : "Installing…"]
+    : ["ico unk", ICON.dash, data.running ? "Waiting" : s.update ? "To be updated" : "To be installed"];
+  return `<div class="ck"><span class="${cls}">${icon}</span><span style="min-width:0"><b>${esc(s.name)}</b><span class="d">${text}</span></span></div>`;
+}
+
+function renderSetup(data) {
+  if (setupWasRunning && !data.running && !data.needed && !data.error) {
+    toast(`${ICON.check}<span>Everything CS2 Clipper needs is installed.</span>`);
+    loadStatus();
+  }
+  setupWasRunning = data.running;
+  const card = document.getElementById("setup");
+  card.hidden = !data.needed && !data.running;
+  if (card.hidden) { setupUpdates = null; return; }
+
+  // A run keeps the name it began under, while the steps it has left grow fewer.
+  const pending = data.steps.filter(s => s.state !== "ok");
+  if (!data.running || setupUpdates === null) setupUpdates = pending.length > 0 && pending.every(s => s.update);
+  const does = data.download_bytes
+    ? `downloads about ${Math.max(1, megabytes(data.download_bytes))} MB and installs it`
+    : "gets it ready; nothing is downloaded";
+  document.getElementById("h-setup").textContent = setupUpdates ? "Update needed" : "Set up this PC";
+  document.getElementById("setup-lead").textContent =
+    data.running ? `${setupUpdates ? "Updating" : "Setting up"}. Leave the app open until it is done.`
+    : !data.steps.length ? "CS2 Clipper could not check what this PC has."
+    : setupUpdates ? `A newer ${pending.map(s => s.name).join(" and ")} is out. Update ${does}.`
+    : `Some of what CS2 Clipper needs is not ready on this PC yet. Set up ${does}.`;
+  const button = document.getElementById("setup-go");
+  button.disabled = data.running;
+  button.textContent = data.running ? (setupUpdates ? "Updating…" : "Setting up…")
+    : data.error ? "Try again" : setupUpdates ? "Update" : "Set up";
+
+  const steps = document.getElementById("setup-steps");
+  steps.hidden = !data.steps.length;
+  sync(steps, data.steps, s => s.id, s => setupRow(s, data));
+
+  const p = data.progress, download = document.getElementById("setup-dl");
+  download.hidden = !(data.running && p && p.done < p.total);
+  if (!download.hidden) {
+    download.querySelector("i").style.width = (p.done / p.total * 100).toFixed(1) + "%";
+    document.getElementById("setup-mb").textContent = `${megabytes(p.done)} of ${megabytes(p.total)} MB`;
+  }
+
+  const error = document.getElementById("setup-error"), said = data.running ? "" : data.error || "";
+  error.hidden = !said;
+  if (error._said !== said) { error._said = said; error.innerHTML = said ? `${ICON.info}<span>${linked(said)}</span>` : ""; }
+}
+
+async function loadSetup() {
+  try {
+    const response = await api("api/setup");
+    if (response.ok) renderSetup(await response.json());
+  } catch (e) { /* ask again */ }
+}
+
 // --- loading ------------------------------------------------------------------------------------------------
 function renderStatus(data) {
   lastStatus = data;
@@ -301,6 +378,7 @@ function renderIntro() {
 
 function stopPolling() {
   clearInterval(statusTimer); clearInterval(logTimer); clearInterval(grabTimer); clearInterval(reelsTimer);
+  clearInterval(setupTimer);
   document.getElementById("now").textContent = "Quitting…";
   document.getElementById("quit-choice").hidden = true;
   document.getElementById("quit").hidden = true;
@@ -376,6 +454,15 @@ document.getElementById("demos").addEventListener("click", async e => {
   await api(`api/demos/${button.dataset.retry}/retry`, {method: "POST"});
   loadStatus();
 });
+document.getElementById("setup-go").addEventListener("click", async e => {
+  const button = e.currentTarget;
+  button.disabled = true;
+  try {
+    const response = await api("api/setup", {method: "POST"});
+    if (response.status === 409) toast(`${ICON.info}<span>${esc((await response.json()).error)}</span>`);
+  } catch (err) { /* the next look tells how it went */ }
+  loadSetup();
+});
 document.getElementById("grab").addEventListener("click", e => {
   const link = e.target.closest("a[data-open]");
   if (!link) return;
@@ -403,8 +490,9 @@ document.getElementById("log").addEventListener("wheel", e => { if (e.deltaY < 0
   } catch (e) { /* the greeting goes without a name */ }
   renderIntro();
 })();
-loadStatus(); loadLog(); loadGrab(); loadReels();
+loadStatus(); loadLog(); loadGrab(); loadReels(); loadSetup();
 const statusTimer = setInterval(loadStatus, 2000);
+const setupTimer = setInterval(loadSetup, 2000);
 const logTimer = setInterval(loadLog, 5000);
 const grabTimer = setInterval(loadGrab, 5000);
 const reelsTimer = setInterval(loadReels, 15000);

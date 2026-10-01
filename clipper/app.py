@@ -44,7 +44,9 @@ from collections.abc import Callable, Iterable
 from functools import partial
 from pathlib import Path
 
-from clipper import applog, checks, csdm_db, faceit_oauth, move_in, paths, protect, settings, tray, web
+from clipper import (
+    applog, checks, csdm_db, faceit_oauth, move_in, paths, protect, provision, settings, tray, web,
+)
 from clipper.alerts import MatchAlerts
 from clipper.config import Config
 from clipper.csdm_cli import CsdmCli
@@ -161,20 +163,22 @@ def gate_reasons(cfg: Config, probe: ProcessProbe) -> tuple[str, ...]:
 
 
 class App:
-    """One running copy: its settings, what it is doing (`state`), the web server, the window and the
-    worker thread. `problems`, `build` and `launcher` (given the web server's base URL) are swappable so
-    tests never touch real csdm/CS2/Postgres or open a window."""
+    """One running copy: its settings, what it is doing (`state`), the web server, the window, the
+    worker thread and Setup. `problems`, `build`, `launcher` (given the web server's base URL) and
+    `setup` are swappable so tests never touch real csdm/CS2/Postgres, open a window or install anything."""
 
     def __init__(self, settings: SettingsStore, *, index_path: Path, state: AppState | None = None,
                  stop: StopRequest | None = None,
                  problems: Callable[[Config], list[str]] = checks.startup_problems,
                  build: Callable[..., Worker] = build_worker,
                  launcher: Callable[[str], WindowLauncher] = WindowLauncher,
+                 setup: Callable[..., provision.Setup] = provision.Setup,
                  recheck_seconds: float = 60.0, clock: Callable[[], float] = time.monotonic):
         self.settings = settings
         self.state = state if state is not None else AppState()
         self.stop = stop if stop is not None else StopRequest()
         self.releases = checks.HlaeReleases()
+        self.setup = setup(self._setup_context, after=self._after_setup)
         self.page_port: int | None = None
         self._index_path = index_path
         self._problems = problems
@@ -193,6 +197,9 @@ class App:
         self._releases_thread: threading.Thread | None = None
         self._checks_cache: list[checks.Check] | None = None
         self._checks_at: float | None = None
+        self._setups_ended = 0                  # counted on Setup's thread; the two below are what was last looked at
+        self._problems_setups = 0
+        self._checks_setups = 0
 
     # --- the web server --------------------------------------------------------------------------
 
@@ -217,6 +224,8 @@ class App:
             faceit_login_url=self.faceit_login_url,
             faceit_sign_in=self.faceit_sign_in,
             faceit_lookup=self.faceit_lookup,
+            setup_status=self.setup.status,
+            start_setup=self.start_setup,
         )
         try:
             self._web = web.WebServer(web.create_app(ctx), self.settings.current().config.page_port,
@@ -390,17 +399,22 @@ class App:
         (which replaces the problem with the real start-up problems); a tick that raises is logged and
         the next pass still runs. Anything else it raises is `run_worker`'s to catch."""
         cfg = self.settings.current().config
+        if self.setup.running:      # it stops and starts Postgres and replaces what a tick would run
+            return cfg.poll_seconds
         now = self._clock()
+        setups = self._setups_ended
         needs_check = (
             self._problems_checked_at is None
             or cfg != self._problems_cfg
             or now - self._problems_checked_at >= self._recheck_seconds
+            or setups != self._problems_setups
         )
         if needs_check:
             problems = self._problems(cfg)
             self.state.set_problems(problems)
             self._problems_cfg = cfg
             self._problems_checked_at = now
+            self._problems_setups = setups      # the count from before the check: a run ending during it is not missed
         else:
             problems = self.state.snapshot().problems
         if problems:
@@ -449,7 +463,9 @@ class App:
         and some checks (a `pg_ctl status`, file-version reads) are not free. Never calls
         `self.releases.refresh_if_due` itself: that thread is the release check's only writer."""
         now = self._clock()
-        if self._checks_at is None or now - self._checks_at >= CHECKS_CACHE_SECONDS:
+        setups = self._setups_ended
+        if (self._checks_at is None or now - self._checks_at >= CHECKS_CACHE_SECONDS
+                or setups != self._checks_setups):
             cfg = self.settings.current().config
             index = Index(self._index_path)
             try:
@@ -458,7 +474,26 @@ class App:
                 index.close()
             self._checks_cache = checks.run_checks(cfg, alerts_status=alerts_status, releases=self.releases)
             self._checks_at = now
+            self._checks_setups = setups
         return self._checks_cache
+
+    # --- Setup: what a fresh PC lacks ----------------------------------------------------------------
+
+    def start_setup(self) -> str | None:
+        """Starts Setup, unless it is running already. Returns why not, in words for the user, when it
+        must not start now: it replaces HLAE and FFmpeg, which a render is using."""
+        if self.state.snapshot().rendering is not None:
+            return "A Reel is rendering. Set up once it is done."
+        self.setup.start()
+        return None
+
+    def _setup_context(self) -> provision.Context:
+        return provision.Context(store=self.settings, latest_hlae=self.releases.latest)
+
+    def _after_setup(self) -> None:
+        """Called on Setup's thread when a run has ended: the worker's next pass and Status's next
+        checks look at the PC again, rather than at what they found before."""
+        self._setups_ended += 1
 
     # --- the HLAE release check ----------------------------------------------------------------------
 

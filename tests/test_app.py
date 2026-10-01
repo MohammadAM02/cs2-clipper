@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from clipper import paths, web
+from clipper import checks, paths, web
 from clipper.app import (
     PAGES, AlreadyRunning, App, find_running, gate_reasons, hand_over, run, run_headless, single_instance,
     start_match_alerts,
@@ -139,6 +139,31 @@ class FakeClock:
         self.now += seconds
 
 
+class FakeSetup:
+    """Stands in for provision.Setup: it never looks at the PC and installs nothing. A run lasts from
+    `start()` until the test calls `end()`."""
+
+    def __init__(self, context, *, after):
+        self.context, self.after = context, after
+        self.running = False
+        self.starts = 0
+
+    def start(self) -> bool:
+        if self.running:
+            return False
+        self.starts += 1
+        self.running = True
+        return True
+
+    def status(self) -> dict:
+        return {"running": self.running, "needed": True, "steps": [], "download_bytes": 0, "progress": None,
+                "error": None}
+
+    def end(self) -> None:
+        self.running = False
+        self.after()
+
+
 @dataclass
 class World:
     store: SettingsStore
@@ -149,6 +174,10 @@ class World:
     problems: FakeProblems
     build: FakeBuild
     app: App
+
+    @property
+    def setup(self) -> FakeSetup:
+        return self.app.setup
 
 
 @pytest.fixture
@@ -162,7 +191,7 @@ def world(tmp_path):
     problems = FakeProblems()
     build = FakeBuild()
     app = App(store, index_path=tmp_path / "clipper.sqlite", state=state, stop=stop,
-             problems=problems, build=build, recheck_seconds=60.0, clock=clock)
+             problems=problems, build=build, setup=FakeSetup, recheck_seconds=60.0, clock=clock)
     yield World(store, index, state, stop, clock, problems, build, app)
     index.close()
 
@@ -251,6 +280,81 @@ def test_the_demos_renders_and_library_folders_are_created(world):
     assert cfg.demos_dir.is_dir()
     assert cfg.renders_dir.is_dir()
     assert cfg.library_dir.is_dir()
+
+
+# --- Set up: the worker stands still while it runs, and looks again when it ends -------------------
+
+
+def test_the_worker_does_nothing_while_setup_runs(world):
+    assert world.app.start_setup() is None
+
+    delay = world.app.step(world.index)
+
+    assert delay == world.store.current().config.poll_seconds
+    assert (world.problems.calls, world.build.calls) == (0, [])     # no Postgres is started under setup's feet
+
+
+def test_problems_are_looked_at_again_as_soon_as_setup_ends(world):
+    world.problems.problems = ["CS Demo Manager not found"]
+    world.app.step(world.index)
+    world.app.start_setup()
+    world.problems.problems = []                 # setup installs it, and changes no setting
+    world.setup.end()
+
+    world.app.step(world.index)
+
+    assert world.problems.calls == 2             # at once, not after recheck_seconds
+    assert world.state.snapshot().problems == () and world.build.workers[0].ticks == 1
+
+
+def test_setup_ending_makes_the_worker_look_again_only_once(world):
+    world.app.start_setup()
+    world.setup.end()
+    world.app.step(world.index)
+
+    world.app.step(world.index)
+
+    assert world.problems.calls == 1
+
+
+def test_checks_are_run_again_as_soon_as_setup_ends(world, monkeypatch):
+    runs = []
+    monkeypatch.setattr("clipper.app.checks.run_checks", lambda cfg, **given: runs.append(True) or [])
+    world.app.checks()
+    world.app.start_setup()
+    world.setup.end()
+
+    world.app.checks()
+    world.app.checks()
+
+    assert len(runs) == 2                        # once more for what setup changed, then cached again
+
+
+def test_setup_is_refused_while_a_reel_renders(world):
+    world.state.set_rendering(Rendering("de_mirage", "player", 0.0))
+
+    assert world.app.start_setup() == "A Reel is rendering. Set up once it is done."
+    assert world.setup.starts == 0               # HLAE and FFmpeg are not replaced under a render
+
+    world.state.set_idle()
+    assert world.app.start_setup() is None
+    assert world.setup.starts == 1
+
+
+def test_asking_for_setup_again_while_it_runs_starts_no_second_run(world):
+    assert world.app.start_setup() is None
+
+    assert world.app.start_setup() is None
+    assert world.setup.starts == 1
+
+
+def test_setup_works_on_the_apps_own_settings_and_is_told_the_newest_hlae(world):
+    world.app.releases = checks.HlaeReleases(fetch=lambda: "2.200.0")
+    world.app.releases.refresh_if_due()
+
+    context = world.setup.context()
+
+    assert context.store is world.store and context.latest_hlae == "2.200.0"
 
 
 # --- run_worker / wait ------------------------------------------------------------------------------
@@ -472,7 +576,7 @@ def windowed(tmp_path, monkeypatch):
         return launchers[-1]
 
     monkeypatch.setattr(web, "WebServer", Server)
-    app = App(store, index_path=tmp_path / "clipper.sqlite", launcher=make_launcher)
+    app = App(store, index_path=tmp_path / "clipper.sqlite", launcher=make_launcher, setup=FakeSetup)
     return Windowed(app, launchers, servers, events)
 
 
@@ -513,6 +617,17 @@ def test_a_page_asked_for_through_the_web_reaches_the_launcher(windowed):
 
     assert response.status_code == 204
     assert windowed.launchers[0].opened == ["/settings"]
+
+
+def test_the_set_up_routes_are_answered_by_the_apps_setup(windowed):
+    windowed.app.start_web()
+    client = windowed.servers[0].flask_app.test_client()
+    assert client.get("/api/setup", base_url=PC).get_json()["running"] is False
+
+    response = client.post("/api/setup", base_url=PC, headers={web.MARKER_HEADER: "1"})
+
+    assert response.status_code == 202 and windowed.app.setup.starts == 1
+    assert client.get("/api/setup", base_url=PC).get_json()["running"] is True
 
 
 def test_close_closes_the_window_and_then_stops_the_web_server(windowed):

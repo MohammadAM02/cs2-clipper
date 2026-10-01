@@ -189,6 +189,13 @@ h1.title{margin:0;font:800 italic 58px/.98 var(--display);font-stretch:70%}
 .split{display:flex;gap:10px;animation:rise .4s cubic-bezier(.2,.9,.3,1.15) both}
 .nowcard{background:rgba(14,14,14,.82);border:1px solid var(--line);padding:22px 26px 24px;display:flex;flex-direction:column;gap:20px}
 .nowhead{display:flex;align-items:flex-end;gap:16px}
+.setup{background:rgba(14,14,14,.82);border:1px solid var(--emberline);padding:20px 24px 22px;display:flex;flex-direction:column;gap:16px;animation:rise .55s cubic-bezier(.2,.9,.3,1.15) both}
+.setup .head{display:flex;align-items:center;gap:16px}
+.setup .lead{margin:6px 0 0;font-size:14px}
+.setup .steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:4px}
+.setup .dl{display:flex;align-items:center;gap:12px}
+.setup .dl .pbar{flex-grow:1}
+.setup .notice a{margin:0;white-space:normal;word-break:break-all}
 .nowmeta{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted)}
 .nowmeta .file{font-family:var(--mono);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #now{font:800 italic 40px/1 var(--display);font-stretch:70%;margin-top:8px}

@@ -40,10 +40,14 @@ SOFTWARE.
 from __future__ import annotations
 
 import os
+import time
+from collections.abc import Callable
 from pathlib import Path
 
 ENV_VAR = "CLIPPER_DATA_DIR"
 APP_FOLDER = "CS2Clipper"
+MOVE_TRIES = 25
+MOVE_WAIT_SECONDS = 0.2
 
 
 def data_dir() -> Path:
@@ -94,4 +98,18 @@ def atomic_write_text(path: Path, text: str) -> None:
     ``os.replace()``, which is atomic on both Windows and POSIX."""
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    move_into_place(tmp, path)
+
+
+def move_into_place(src: Path, dst: Path, *, sleep: Callable[[float], None] | None = None) -> None:
+    """``os.replace``, tried again for a few seconds while Windows refuses it: a virus scanner reading
+    what was just written, or a reader that has the old file open, keeps a file (or the folder it is
+    in) from being replaced for a moment."""
+    for attempt in range(MOVE_TRIES):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if attempt == MOVE_TRIES - 1:
+                raise
+            (sleep or time.sleep)(MOVE_WAIT_SECONDS)

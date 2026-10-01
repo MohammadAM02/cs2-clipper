@@ -1,0 +1,17 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Signing you in…</title>
+<style>body{font:16px system-ui;margin:4rem auto;max-width:28rem;text-align:center;color:#333}</style>
+<body>Signing you in…</body>
+<script>
+  // FACEIT's OAuth2 client needs an https redirect URI, but the app itself listens on
+  // http://127.0.0.1:<port>. The app puts its port at the front of `state` ("<port>.<nonce>"), so all
+  // this page has to do is hand FACEIT's answer straight back to the app. Nothing is kept here.
+  const params = new URLSearchParams(location.search);
+  const port = (params.get("state") || "").split(".")[0];
+  if (/^\d+$/.test(port)) {
+    location.replace(`http://127.0.0.1:${port}/settings?${params}`);
+  } else {
+    document.body.textContent = "This page only forwards a FACEIT sign-in to the CS2Clipper app.";
+  }
+</script>

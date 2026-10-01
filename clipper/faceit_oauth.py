@@ -22,6 +22,10 @@ AUTHORIZE_URL = "https://accounts.faceit.com"
 TOKEN_URL = "https://api.faceit.com/auth/v1/oauth/token"
 USERINFO_URL = "https://api.faceit.com/auth/v1/resources/userinfo"
 SCOPE = "openid profile"
+# FACEIT refuses a plain-http redirect URI, and the app listens on http://127.0.0.1:<port>. So the
+# redirect goes to this https page (docs/index.html, served by GitHub Pages), which hands FACEIT's
+# answer straight back to the app on the port carried at the front of `state`.
+RELAY_URL = "https://mohammadam02.github.io/cs2-clipper/"
 
 
 class OAuthError(Exception):

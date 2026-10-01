@@ -335,8 +335,9 @@ class App:
         return player.nickname
 
     def _faceit_redirect(self, cfg: Config) -> str:
-        """The redirect URI, exactly as the FACEIT OAuth2 client has it registered."""
-        return cfg.faceit_redirect_uri or f"http://localhost:{self.page_port}/settings"
+        """The redirect URI, exactly as the FACEIT OAuth2 client has it registered: the one in Settings,
+        else the https relay page (never the app's own address, which is plain http)."""
+        return cfg.faceit_redirect_uri or faceit_oauth.RELAY_URL
 
     def faceit_lookup(self, nickname: str) -> dict:
         """The FACEIT player behind a nickname, saved as the two settings Match Alerts need. The app's

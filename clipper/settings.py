@@ -17,6 +17,7 @@ from pathlib import Path
 
 from clipper import paths, protect
 from clipper.config import RATIOS, SEQUENCE_EVENTS, Config
+from clipper.faceit_oauth import RELAY_URL
 
 KEY_FIELD = "faceit_api_key"                  # write-only: never stored or read back under this name
 STORED_KEY = "faceit_api_key_protected"       # the DPAPI blob actually stored in settings.json
@@ -49,7 +50,7 @@ FIELDS: tuple[Field, ...] = (
                "nickname and SteamID."),
     Field("faceit_redirect_uri", "You", "FACEIT redirect URI", "url",
           help="Must match your FACEIT OAuth2 client's Redirect URI exactly. Blank uses "
-               "http://localhost:<port>/settings."),
+               f"{RELAY_URL} (FACEIT needs https; that page hands the sign-in back to this app)."),
     Field("faceit_api_key", "You", "FACEIT API key", "secret",
           help="Stored encrypted for your Windows account. It is never shown again."),
     Field(SECRET_FIELD, "You", "FACEIT client secret", "secret",

@@ -19,14 +19,18 @@
 </main>
 <script>
 const esc = s => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
-let fields = [], values = {}, faceitKeySet = false, keyRemoved = false, loginUrl = "", signInNote = "";
+let fields = [], values = {}, secretsSet = {}, removedSecrets = new Set(), loginUrl = "", signInNote = "";
 
 function inputFor(f) {
   const id = `f-${f.name}`;
   const value = values[f.name];
   if (f.kind === "secret") {
-    const status = faceitKeySet
-      ? '<span class="muted">A key is saved.</span> <button type="button" class="skip" data-remove-key="1">Remove key</button>'
+    // Each secret has its own "is saved" and its own Remove: the API key and the client secret are
+    // saved and removed apart.
+    const noun = f.name.endsWith("_secret") ? "secret" : "key";
+    const status = secretsSet[f.name]
+      ? `<span id="saved-${f.name}"><span class="muted">A ${noun} is saved.</span>
+          <button type="button" class="skip" data-remove-secret="${f.name}">Remove ${noun}</button></span>`
       : "";
     return `<input type="password" id="${id}" autocomplete="new-password"> ${status}`;
   }
@@ -90,9 +94,9 @@ async function load() {
   const data = await response.json();
   fields = data.fields;
   values = data.values;
-  faceitKeySet = data.faceit_key_set;
+  secretsSet = data.secrets_set;
   loginUrl = data.faceit_login_url || "";
-  keyRemoved = false;
+  removedSecrets = new Set();
   document.getElementById("notice").innerHTML = data.warnings.length
     ? `<ul>${data.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : "";
   render();
@@ -130,8 +134,9 @@ async function finishSignIn() {
     : `FACEIT sign-in failed: ${esc(data.error || "try again")}`;
 }
 
-// Asks the app to resolve the typed FACEIT name; it saves the nickname and the SteamID itself, so
-// load() afterwards is what fills the boxes in.
+// Asks the app to resolve the typed FACEIT name; it saves the nickname and the SteamID itself. Only
+// those two boxes are filled in afterwards: a load() here would rebuild the form and drop whatever
+// else is typed but not saved yet.
 async function lookupName() {
   const err = document.getElementById("err-faceit_nickname");
   const result = document.getElementById("result");
@@ -150,7 +155,12 @@ async function lookupName() {
     err.textContent = data.error || "FACEIT lookup failed";
     return;
   }
-  await load();
+  values.faceit_nickname = data.nickname;
+  values.subject_steamid = data.steamid;
+  document.getElementById("f-faceit_nickname").value = data.nickname;
+  document.getElementById("f-subject_steamid").value = data.steamid;
+  document.getElementById("err-subject_steamid").textContent = "";
+  document.getElementById("faceit").innerHTML = faceitBlock();
   result.textContent = `Found ${data.nickname}.`;
 }
 
@@ -159,10 +169,14 @@ document.getElementById("form").addEventListener("click", async e => {
     await lookupName();
     return;
   }
-  if (e.target.closest("button[data-remove-key]")) {
-    keyRemoved = true;
-    faceitKeySet = false;
-    render();
+  const remove = e.target.closest("button[data-remove-secret]");
+  if (remove) {
+    // Only this row changes: render() would rebuild the form and drop the unsaved edits.
+    const name = remove.dataset.removeSecret;
+    removedSecrets.add(name);
+    secretsSet[name] = false;
+    document.getElementById(`f-${name}`).value = "";
+    document.getElementById(`saved-${name}`).remove();
   }
 });
 
@@ -172,7 +186,7 @@ document.getElementById("save").addEventListener("click", async () => {
     if (f.kind === "secret") {
       const typed = document.getElementById(`f-${f.name}`).value;
       if (typed) changes[f.name] = typed;
-      else if (keyRemoved) changes[f.name] = null;
+      else if (removedSecrets.has(f.name)) changes[f.name] = null;
       continue;
     }
     changes[f.name] = readField(f);

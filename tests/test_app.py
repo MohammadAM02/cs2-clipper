@@ -749,7 +749,19 @@ def test_faceit_login_url_is_empty_until_there_is_a_client_id_and_a_port(tmp_pat
     app.page_port = 8765
     url = app.faceit_login_url()
     assert url.startswith("https://accounts.faceit.com?")
-    assert "redirect_uri=http%3A%2F%2Flocalhost%3A8765%2Fsettings" in url
+
+
+def test_faceit_login_url_uses_the_https_relay_page_when_no_redirect_is_set(tmp_path):
+    # FACEIT refuses a plain-http redirect URI, so the app's own http://localhost address can never be
+    # the fallback: the relay page (docs/index.html, on GitHub Pages) is.
+    store = SettingsStore(tmp_path / "settings.json")
+    store.save({"faceit_oauth_client_id": "client-1"})
+    app = App(store, index_path=tmp_path / "clipper.sqlite")
+    app.page_port = 8765
+
+    url = app.faceit_login_url()
+
+    assert "redirect_uri=https%3A%2F%2Fmohammadam02.github.io%2Fcs2-clipper%2F" in url
 
 
 def test_faceit_login_url_uses_the_registered_redirect_when_one_is_set(tmp_path):
@@ -791,6 +803,20 @@ def test_faceit_sign_in_saves_the_nickname_and_steamid(tmp_path, monkeypatch):
 
     cfg = store.current().config
     assert (cfg.faceit_nickname, cfg.subject_steamid) == ("cheesebagga", "76561198192858303")
+
+
+def test_faceit_sign_in_exchanges_the_code_under_the_redirect_the_link_named(tmp_path, monkeypatch):
+    # FACEIT's token endpoint refuses a code presented under another redirect URI than the one it was
+    # issued for; with none set in Settings, both halves name the https relay page.
+    app, _store, state = _ready(tmp_path, monkeypatch)
+    redirects = []
+    monkeypatch.setattr("clipper.app.faceit_oauth.access_token",
+                        lambda code, client_id, secret, redirect_uri, verifier:
+                        redirects.append(redirect_uri) or "a-token")
+
+    app.faceit_sign_in("a-code", state)
+
+    assert redirects == ["https://mohammadam02.github.io/cs2-clipper/"]
 
 
 def test_faceit_sign_in_refuses_a_state_that_is_not_ours(tmp_path, monkeypatch):

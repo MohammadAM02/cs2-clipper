@@ -56,7 +56,7 @@ from clipper.config import Config
 from clipper.faceit import FaceitError
 from clipper.faceit_oauth import OAuthError
 from clipper.index import Index
-from clipper.settings import FIELDS, Field, Loaded, json_values
+from clipper.settings import FIELDS, SECRETS, Field, Loaded, json_values
 from clipper.state import Snapshot, summary
 
 log = logging.getLogger(__name__)
@@ -371,7 +371,8 @@ def create_app(ctx: WebContext) -> Flask:
         body = {
             "fields": [field_dict(f) for f in FIELDS],
             "values": json_values(loaded.config),
-            "faceit_key_set": bool(loaded.config.faceit_api_key_protected),
+            # One answer per secret: the API key and the client secret are saved and removed apart.
+            "secrets_set": {name: bool(getattr(loaded.config, stored)) for name, stored in SECRETS.items()},
             "faceit_login_url": ctx.faceit_login_url(),
             "warnings": list(loaded.warnings),
             "port_in_use": ctx.port_in_use(),

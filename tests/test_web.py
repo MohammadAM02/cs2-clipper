@@ -19,7 +19,7 @@ from clipper.faceit import FaceitError
 from clipper.faceit_oauth import OAuthError
 from clipper.index import Index
 from clipper.model import FaceitStats, Highlight, MatchInfo
-from clipper.settings import FIELDS, KEY_FIELD, STORED_KEY, SettingsStore
+from clipper.settings import FIELDS, KEY_FIELD, SECRET_FIELD, STORED_KEY, SettingsStore
 from clipper.state import Rendering, Snapshot
 from clipper.web import MARKER_HEADER, WebContext, WebServer, create_app
 
@@ -701,7 +701,7 @@ def test_api_settings_get_shape_and_field_order(tmp_path):
     }
     assert data["values"]["top_n"] == 5
     assert "faceit_api_key_protected" not in data["values"]
-    assert data["faceit_key_set"] is False
+    assert data["secrets_set"] == {"faceit_api_key": False, "faceit_client_secret": False}
     assert data["warnings"] == []
     assert data["port_in_use"] == 8765
 
@@ -715,9 +715,24 @@ def test_api_settings_get_with_a_saved_key_never_echoes_it_or_its_blob(tmp_path)
     data = response.get_json()
     text = response.get_data(as_text=True)
 
-    assert data["faceit_key_set"] is True
+    assert data["secrets_set"]["faceit_api_key"] is True
     assert "super-secret-value" not in text
     assert blob not in text
+
+
+@pytest.mark.parametrize(("saved", "secrets_set"), [
+    ({KEY_FIELD: "the-app-key"}, {"faceit_api_key": True, "faceit_client_secret": False}),
+    ({SECRET_FIELD: "the-client-secret"}, {"faceit_api_key": False, "faceit_client_secret": True}),
+])
+def test_api_settings_get_says_which_secret_is_saved_each_on_its_own(tmp_path, saved, secrets_set):
+    # The page's "is saved" and Remove are per row and come from this. One flag for both made the
+    # client-secret row claim a secret nobody saved, and its Remove delete the API key as well.
+    app, store = _settings_app(tmp_path)
+    assert store.save(saved) == {}
+
+    data = pc_get(app.test_client(), "/api/settings").get_json()
+
+    assert data["secrets_set"] == secrets_set
 
 
 def test_put_settings_saves_a_change_and_the_file_holds_only_that_value(tmp_path):
@@ -815,7 +830,7 @@ def test_put_a_blank_key_keeps_the_stored_one(tmp_path):
     response = pc_put(client, "/api/settings", headers=MARKED, json={KEY_FIELD: "", "top_n": 9})
 
     assert response.status_code == 200
-    assert pc_get(client, "/api/settings").get_json()["faceit_key_set"] is True
+    assert pc_get(client, "/api/settings").get_json()["secrets_set"]["faceit_api_key"] is True
     assert _stored_blob(tmp_path) == blob
 
 

@@ -178,11 +178,13 @@ class FakeEvent:
 
 
 class FakeWindow:
-    """What pywebview's `create_window` returns: records what `WindowApi.front` does to it, and fires the
+    """What pywebview's `create_window` returns: records what `WindowApi` does to it, and fires the
     events a real window fires when its state changes."""
 
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.dialogs: list[tuple] = []                 # (dialog type, directory) of each folder dialog
+        self.dialog_answer: tuple[str, ...] | None = None
         self.events = types.SimpleNamespace(initialized=FakeEvent(), minimized=FakeEvent(),
                                             maximized=FakeEvent(), restored=FakeEvent())
 
@@ -191,6 +193,16 @@ class FakeWindow:
 
     def maximize(self) -> None:
         self.calls.append("maximize")
+
+    def minimize(self) -> None:
+        self.calls.append("minimize")
+
+    def destroy(self) -> None:
+        self.calls.append("destroy")
+
+    def create_file_dialog(self, dialog_type, directory="", **kwargs):
+        self.dialogs.append((dialog_type, directory))
+        return self.dialog_answer
 
     def show(self) -> None:
         self.calls.append("show")
@@ -208,6 +220,8 @@ class FakeWebview:
     """The pywebview module: `create_window` and `start`, and nothing shown. Like pywebview 6, `start`
     fires each window's `initialized` with the engine it picked, and a handler's False cancels the window
     before it shows."""
+
+    FileDialog = types.SimpleNamespace(OPEN=10, FOLDER=20, SAVE=30)
 
     def __init__(self) -> None:
         self.created: list[tuple[tuple, dict]] = []
@@ -293,6 +307,16 @@ def test_pywebview_shows_the_page_in_a_window_of_the_size_the_app_uses(monkeypat
     assert fakes.chromium.launched == [] and fakes.browser.opened == []
 
 
+def test_the_window_has_no_frame_of_its_own_and_the_page_does_the_dragging(monkeypatch):
+    webview = _pywebview(monkeypatch)
+
+    run_window(f"{BASE}/status", PROFILE)
+
+    (_, kwargs), = webview.created
+    assert kwargs["frameless"] is True               # the nav is the title bar
+    assert kwargs["easy_drag"] is False              # only the nav's `pywebview-drag-region` moves the window
+
+
 def test_pywebview_is_asked_for_the_edge_webview2_engine(monkeypatch):
     webview = _pywebview(monkeypatch)
 
@@ -356,6 +380,74 @@ def test_front_never_raises_into_the_page_and_is_harmless_before_there_is_a_wind
     with caplog.at_level(logging.ERROR, logger="clipper.window"):
         kwargs["js_api"].front()                     # must not raise
     assert "bring the window to the front" in caplog.text
+
+
+def _shown(monkeypatch, *events: str) -> tuple[FakeWebview, WindowApi, FakeWindow]:
+    """pywebview, the page's window API and the window behind it, after the window went through `events`."""
+    webview = _pywebview(monkeypatch)
+    run_window(f"{BASE}/status", PROFILE)
+    (_, kwargs), = webview.created
+    for name in events:
+        getattr(webview.windows[0].events, name).set()
+    return webview, kwargs["js_api"], webview.windows[0]
+
+
+def test_minimize_minimizes_the_window(monkeypatch):
+    _, api, window_ = _shown(monkeypatch)
+
+    api.minimize()
+
+    assert window_.calls == ["minimize"]
+
+
+@pytest.mark.parametrize(("events", "expected"), [
+    ((), "maximize"),
+    (("maximized",), "restore"),                     # a maximized window goes back to its size
+    (("maximized", "restored"), "maximize"),
+    (("minimized",), "maximize"),
+])
+def test_toggle_maximize_maximizes_a_window_and_restores_a_maximized_one(monkeypatch, events, expected):
+    _, api, window_ = _shown(monkeypatch, *events)
+
+    api.toggle_maximize()
+
+    assert window_.calls == [expected]
+
+
+def test_close_destroys_the_window(monkeypatch):
+    _, api, window_ = _shown(monkeypatch)
+
+    api.close()
+
+    assert window_.calls == ["destroy"]
+
+
+def test_the_title_bar_buttons_and_browse_do_nothing_before_there_is_a_window():
+    api = WindowApi()
+
+    api.minimize()
+    api.toggle_maximize()
+    api.close()
+
+    assert api.pick_folder("C:/start") is None
+
+
+def test_pick_folder_opens_the_folder_dialog_where_the_field_is_and_returns_the_choice(monkeypatch):
+    webview, api, window_ = _shown(monkeypatch)
+    window_.dialog_answer = ("D:/CS2 Clipper/reels",)
+
+    assert api.pick_folder("C:/start") == "D:/CS2 Clipper/reels"
+
+    assert window_.dialogs == [(webview.FileDialog.FOLDER, "C:/start")]
+
+
+def test_pick_folder_with_nothing_chosen_returns_none_and_starts_nowhere_in_particular(monkeypatch):
+    webview, api, window_ = _shown(monkeypatch)
+    window_.dialog_answer = None                     # the dialog was cancelled
+
+    assert api.pick_folder() is None
+
+    assert window_.dialogs == [(webview.FileDialog.FOLDER, "")]
 
 
 def test_without_pywebview_a_chromium_app_window_with_its_own_profile_is_shown_and_waited_for(fakes):

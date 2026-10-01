@@ -5,10 +5,11 @@ How the app runs, Two processes; When something goes wrong, the window row).
 thelifeofsuleyman/cs2-clipper's `aegis/app.py` (`_run_window`, `_WindowApi`, `_find_chromium`,
 `_open_app_mode`). What we changed: the window lives in a process that ends with it, so closing the
 window frees its memory (Aegis hides the window to the tray and keeps the process); `WindowApi.front`
-replaces Aegis's `background` and `quit`; the Chromium fallback takes its profile folder as an argument
-and waits for the browser, so the process ends with that window too; the last resort, the default
-browser, opens at once instead of after a timer; and errors go to stderr, never to the app's log file.
-`WindowLauncher`, the main process's side, is our own.
+replaces Aegis's `background` and `quit`; `minimize`, `toggle_maximize` and `close` are ours (the window
+has no frame, so the pages draw the title bar), and so is `pick_folder`; the Chromium fallback takes its
+profile folder as an argument and waits for the browser, so the process ends with that window too; the
+last resort, the default browser, opens at once instead of after a timer; and errors go to stderr, never
+to the app's log file. `WindowLauncher`, the main process's side, is our own.
 
 MIT License
 
@@ -110,6 +111,35 @@ class WindowApi:
         except Exception:  # noqa: BLE001 - a page asking to come forward must never get an error back
             log.exception("could not bring the window to the front")
 
+    # The window has no frame of its own, so the nav draws the title bar and these are its three buttons.
+
+    def minimize(self) -> None:
+        if self._window is not None:
+            self._window.minimize()
+
+    def toggle_maximize(self) -> None:
+        """Maximizes the window; a maximized one goes back to its size."""
+        window = self._window
+        if window is None:
+            return
+        if self._state == "maximized":
+            window.restore()
+        else:
+            window.maximize()
+
+    def close(self) -> None:
+        if self._window is not None:
+            self._window.destroy()
+
+    def pick_folder(self, start: str = "") -> str | None:
+        """The folder chosen in a system dialog that opens at `start`, or None when it is cancelled."""
+        if self._window is None:
+            return None
+        import webview
+
+        picked = self._window.create_file_dialog(webview.FileDialog.FOLDER, directory=start or "")
+        return picked[0] if picked else None
+
 
 def _show_in_pywebview(url: str) -> bool:
     """The native window, on the Edge WebView2 engine. Returns when it is closed; False, with the reason
@@ -130,7 +160,8 @@ def _show_in_pywebview(url: str) -> bool:
 
     try:
         api = WindowApi()
-        window = webview.create_window(TITLE, url, js_api=api, width=WIDTH, height=HEIGHT, min_size=MIN_SIZE)
+        window = webview.create_window(TITLE, url, js_api=api, width=WIDTH, height=HEIGHT, min_size=MIN_SIZE,
+                                       frameless=True, easy_drag=False)
         api._attach(window)
         window.events.initialized += refuse_mshtml
         webview.start(gui="edgechromium")      # blocks until the window is closed

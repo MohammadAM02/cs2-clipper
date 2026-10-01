@@ -660,6 +660,32 @@ def test_reel_video_refuses_a_phone(tmp_path, index):
     assert response.status_code == 403
 
 
+def test_a_reel_keeps_playing_after_the_clips_folder_moves(tmp_path):
+    """Paths are kept relative to the clips folder, so repointing it (the `data_root` setting) cannot
+    strand every Reel the way absolute paths did -- the bug this replaced."""
+    clips = tmp_path / "clips"
+    video = clips / "library" / "videos" / "abc" / "r8-player.mp4"
+    video.parent.mkdir(parents=True)
+    video.write_bytes(b"0123456789")
+    app, store = _settings_app(tmp_path)
+    assert store.save({"data_root": str(clips)}) == {}
+    index = Index(tmp_path / "clipper.sqlite")
+    try:
+        highlight_id = _reels_index(index)
+        index.save_reel(highlight_id, "player", store.current().config.store_path(video), 12.5)
+        reel_id = index.match_reels(REEL_MATCH.checksum)[0]["player_reel_id"]
+    finally:
+        index.close()
+
+    client = app.test_client()
+    assert pc_get(client, f"/reels/{reel_id}.mp4").status_code == 200
+
+    clips.rename(tmp_path / "moved")
+    assert store.save({"data_root": str(tmp_path / "moved")}) == {}
+
+    assert pc_get(client, f"/reels/{reel_id}.mp4").status_code == 200
+
+
 class FakeFfmpeg:
     """Stands in for `subprocess.run` on the frame route: records the command and writes `frame` to its
     output file (the last argument), or nothing when `frame` is None, which is what ffmpeg does when a

@@ -119,14 +119,16 @@ def test_clips_come_from_finished_renders_in_tick_order(index):
     index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031)], {12})
     highlight_id = index.selected_highlights(MATCH.checksum)[0]["id"]
     failed = index.queue_render(demo_id, "player", attempt=1)
-    index.add_clip(failed, highlight_id, ClipFile(1, 74007, 74263, Path("old.mp4"), 4.0))
+    index.add_clip(failed, highlight_id, ClipFile(1, 74007, 74263, Path("old.mp4"), 4.0), "old.mp4")
     index.finish_render(failed, "failed", "stalled")
     done = index.queue_render(demo_id, "player", attempt=2)
-    index.add_clip(done, highlight_id, ClipFile(10, 78233, 78489, Path("c.mp4"), 4.0))
-    index.add_clip(done, highlight_id, ClipFile(2, 76071, 76559, Path("b.mp4"), 7.6))
+    index.add_clip(done, highlight_id, ClipFile(10, 78233, 78489, Path("c.mp4"), 4.0), "c.mp4")
+    index.add_clip(done, highlight_id, ClipFile(2, 76071, 76559, Path("b.mp4"), 7.6), "b.mp4")
     index.finish_render(done, "done")
     assert [row["sequence"] for row in index.clips_for(highlight_id, "player")] == [2, 10]
     assert index.clips_for(highlight_id, "enemy") == []
+    # the stored path is the one handed in (relative to the clips folder), not the file's own
+    assert [row["path"] for row in index.clips_for(highlight_id, "player")] == ["b.mp4", "c.mp4"]
 
 
 def test_one_reel_per_highlight_and_perspective(index):

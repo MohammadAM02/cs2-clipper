@@ -304,7 +304,8 @@ class Worker:
                 ids = {h["round"]: h["id"] for h in highlights}
                 for number, clips in groups.items():
                     for clip in clips:
-                        self.index.add_clip(job["id"], ids[number], clip)
+                        self.index.add_clip(job["id"], ids[number], clip,
+                                            self.cfg.store_path(clip.path))
                 self.index.finish_render(job["id"], "done")
                 self.index.set_flag("consecutive_failures", "0")
                 return
@@ -351,11 +352,12 @@ class Worker:
     def _join(self, demo) -> None:
         for highlight in self.index.selected_highlights(demo["match_checksum"]):
             for perspective in PERSPECTIVES:
-                clips = [Path(row["path"]) for row in self.index.clips_for(highlight["id"], perspective)]
+                clips = [self.cfg.load_path(row["path"])
+                         for row in self.index.clips_for(highlight["id"], perspective)]
                 out = (self.cfg.library_dir / "videos" / demo["match_checksum"]
                        / f"r{highlight['round']}-{perspective}.mp4")
                 duration = self.services.join(clips, out)
-                self.index.save_reel(highlight["id"], perspective, out, duration)
+                self.index.save_reel(highlight["id"], perspective, self.cfg.store_path(out), duration)
 
     def _finish(self, demo) -> None:
         dem, archive = demo["dem_path"], demo["archive_path"]

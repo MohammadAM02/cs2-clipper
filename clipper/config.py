@@ -89,6 +89,22 @@ class Config:
     def library_dir(self) -> Path:
         return self.data_root / "library"
 
+    def store_path(self, path: Path) -> str:
+        """A Clip's or a Reel's path as the index keeps it: relative to the clips folder, so moving that
+        folder (the `data_root` setting) cannot strand every file the way absolute paths did. A path
+        outside the clips folder is kept whole -- there is nothing for it to be relative to."""
+        try:
+            return str(Path(path).relative_to(self.data_root))
+        except (TypeError, ValueError):      # no clips folder set, or a path outside it
+            return str(path)
+
+    def load_path(self, stored: str) -> Path:
+        """A stored path back as a real one. Rows written before paths became relative still hold an
+        absolute path, and joining an absolute path discards the clips folder, so both read correctly."""
+        if self.data_root is None:
+            return Path(stored)
+        return self.data_root / stored
+
     @property
     def csdm_exe(self) -> Path:
         return self.csdm_app_dir / "cs-demo-manager.exe"

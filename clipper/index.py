@@ -279,11 +279,13 @@ class Index:
             (state, failure, _now(), job_id),
         )
 
-    def add_clip(self, job_id: int, highlight_id: int, clip: ClipFile) -> None:
+    def add_clip(self, job_id: int, highlight_id: int, clip: ClipFile, path: str) -> None:
+        """`clip` holds the ticks and the duration; `path` is how the index keeps the file
+        (`Config.store_path`: relative to the clips folder), not where it actually is."""
         self._db.execute(
             "INSERT INTO clips (render_job_id, highlight_id, sequence, start_tick, end_tick, path, duration_s)"
             " VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (job_id, highlight_id, clip.sequence, clip.start_tick, clip.end_tick, str(clip.path),
+            (job_id, highlight_id, clip.sequence, clip.start_tick, clip.end_tick, path,
              clip.duration_s),
         )
 
@@ -295,7 +297,9 @@ class Index:
             (highlight_id, perspective),
         )
 
-    def save_reel(self, highlight_id: int, perspective: str, path: Path, duration_s: float) -> None:
+    def save_reel(self, highlight_id: int, perspective: str, path: Path | str, duration_s: float) -> None:
+        """`path` is stored as given: the app passes `Config.store_path` (relative to the clips folder),
+        tests pass whatever they like."""
         self._db.execute(
             "INSERT INTO reels (highlight_id, perspective, path, duration_s) VALUES (?, ?, ?, ?)"
             " ON CONFLICT (highlight_id, perspective) DO UPDATE SET path = excluded.path,"

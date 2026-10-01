@@ -1,4 +1,5 @@
 import pytest
+from pathlib import Path
 
 from clipper import paths
 from clipper.config import Config
@@ -25,6 +26,47 @@ def test_dirs_derived_from_the_clips_folder(tmp_path):
     assert cfg.demos_dir == tmp_path / "clips" / "demos"
     assert cfg.renders_dir == tmp_path / "clips" / "renders"
     assert cfg.library_dir == tmp_path / "clips" / "library"
+
+
+# --- paths as the index keeps them: relative to the clips folder (every Clips folder move otherwise
+# --- stranded every Clip and Reel with a path that no longer existed) -------------------------------
+
+
+def test_a_stored_path_is_relative_to_the_clips_folder(tmp_path):
+    cfg = Config(data_root=tmp_path / "clips")
+
+    stored = cfg.store_path(tmp_path / "clips" / "library" / "videos" / "r1.mp4")
+
+    assert stored == str(Path("library") / "videos" / "r1.mp4")
+
+
+def test_a_path_outside_the_clips_folder_is_stored_whole(tmp_path):
+    outside = tmp_path / "elsewhere" / "r1.mp4"
+
+    assert Config(data_root=tmp_path / "clips").store_path(outside) == str(outside)
+    assert Config().store_path(outside) == str(outside)        # no clips folder to be relative to
+
+
+def test_a_stored_path_comes_back_under_the_clips_folder(tmp_path):
+    cfg = Config(data_root=tmp_path / "clips")
+
+    assert cfg.load_path(str(Path("library") / "videos" / "r1.mp4")) == (
+        tmp_path / "clips" / "library" / "videos" / "r1.mp4")
+
+
+def test_moving_the_clips_folder_still_finds_what_was_stored_relative_to_it(tmp_path):
+    stored = Config(data_root=tmp_path / "old").store_path(
+        tmp_path / "old" / "library" / "videos" / "r1.mp4")
+
+    assert Config(data_root=tmp_path / "new").load_path(stored) == (
+        tmp_path / "new" / "library" / "videos" / "r1.mp4")
+
+
+def test_an_absolute_path_from_before_the_change_still_reads(tmp_path):
+    # Rows written earlier hold the whole path; joining an absolute path discards the clips folder.
+    cfg = Config(data_root=tmp_path / "clips")
+    assert cfg.load_path(str(tmp_path / "old" / "r1.mp4")) == tmp_path / "old" / "r1.mp4"
+    assert Config().load_path(str(tmp_path / "old" / "r1.mp4")) == tmp_path / "old" / "r1.mp4"
 
 
 def test_the_faceit_key_is_kept_out_of_repr():

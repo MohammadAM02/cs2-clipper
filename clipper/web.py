@@ -372,9 +372,10 @@ def create_app(ctx: WebContext) -> Flask:
             row = index.reel(reel_id)
         finally:
             index.close()
-        if row is None or not Path(row["path"]).is_file():
+        video = None if row is None else ctx.load_settings().config.load_path(row["path"])
+        if video is None or not video.is_file():
             return Response(status=404)
-        return send_file(Path(row["path"]), mimetype="video/mp4", conditional=True)
+        return send_file(video, mimetype="video/mp4", conditional=True)
 
     @app.get("/reels/<int:reel_id>.jpg")
     def reel_frame(reel_id: int):
@@ -383,9 +384,13 @@ def create_app(ctx: WebContext) -> Flask:
             row = index.reel(reel_id)
         finally:
             index.close()
-        if row is None or not Path(row["path"]).is_file():
+        if row is None:
             return Response(status=404)
-        frame = reel_frame_file(Path(row["path"]), ctx.load_settings().config.ffmpeg)
+        config = ctx.load_settings().config
+        video = config.load_path(row["path"])
+        if not video.is_file():
+            return Response(status=404)
+        frame = reel_frame_file(video, config.ffmpeg)
         if frame is None:
             return Response(status=404)
         return send_file(frame, mimetype="image/jpeg", conditional=True)
@@ -406,7 +411,7 @@ def create_app(ctx: WebContext) -> Flask:
             index.close()
         if row is None:
             return Response(status=404)
-        folder = Path(row["path"]).parent
+        folder = ctx.load_settings().config.load_path(row["path"]).parent
         try:
             ctx.open_folder(folder)
         except OSError as exc:            # the folder is gone

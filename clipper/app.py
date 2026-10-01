@@ -1,13 +1,13 @@
 """One running copy of the app: start-up order, the worker thread, the web server, and quitting
 (spec: How the app runs; The terminal; When something goes wrong).
 
-`single_instance`/`AlreadyRunning`, `start_match_alerts` and `build_worker` are our own code, moved
-here from `cli.py` (Tasks 1-8) rather than adapted from Aegis. The overall shape of `run` -- single
-instance, then move in, then settings, then the web server, then the worker, then the window and the
-tray, or else a short-wait loop so Ctrl+C is noticed promptly -- is adapted from
-thelifeofsuleyman/cs2-clipper's `aegis/app.py` (`main`, `_serve`); ours adds the quit-during-a-render
-choice the spec asks for, which Aegis has none of (it exits at once), and `--background`, which shows
-only the tray.
+`start_match_alerts` and `build_worker` are our own code, moved here from `cli.py` (Tasks 1-8) rather
+than adapted from Aegis; so are `single_instance`/`AlreadyRunning`, which now live in `lock.py`. The
+overall shape of `run` -- single instance, then move in, then settings, then the web server, then the
+worker, then the window and the tray, or else a short-wait loop so Ctrl+C is noticed promptly -- is
+adapted from thelifeofsuleyman/cs2-clipper's `aegis/app.py` (`main`, `_serve`); ours adds the
+quit-during-a-render choice the spec asks for, which Aegis has none of (it exits at once), and
+`--background`, which shows only the tray.
 
 MIT License
 
@@ -35,14 +35,12 @@ from __future__ import annotations
 
 import json
 import logging
-import msvcrt
 import os
 import sys
 import threading
 import time
 import urllib.request
-from collections.abc import Callable, Iterable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterable
 from functools import partial
 from pathlib import Path
 
@@ -56,6 +54,7 @@ from clipper.gate import Gate
 from clipper.index import Index
 from clipper.intake import Intake
 from clipper.join import join_reel
+from clipper.lock import AlreadyRunning, single_instance
 from clipper.media import probe_duration
 from clipper.notify import notify
 from clipper.procs import ProcessProbe, SystemProbe
@@ -105,29 +104,6 @@ def hand_over(page: str | None, ports: Iterable[int]) -> bool:
             return response.status == 204
     except OSError:   # urllib.error.HTTPError (a 4xx/5xx "refusal") is one too
         return False
-
-
-class AlreadyRunning(Exception):
-    """Another clipper holds the lock."""
-
-
-@contextmanager
-def single_instance(lock_path: Path) -> Iterator[None]:
-    """Hold an exclusive lock on lock_path for the life of the block."""
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    handle = open(lock_path, "a+b")
-    handle.seek(0)
-    try:
-        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-    except OSError as exc:
-        handle.close()
-        raise AlreadyRunning(f"another clipper is already running (lock: {lock_path})") from exc
-    try:
-        yield
-    finally:
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        handle.close()
 
 
 def start_match_alerts(cfg: Config, index: Index, probe: SystemProbe, *,

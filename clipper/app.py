@@ -232,6 +232,7 @@ class App:
             warnings=lambda: self.settings.current().warnings,
             checks=self.checks,
             quit=self.quit,
+            pause=self.pause,
             resume=self.resume,
             open_folder=os.startfile,
             load_settings=self.settings.current,
@@ -357,7 +358,7 @@ class App:
             raise FaceitError("; ".join(errors.values()))
         return {"nickname": player.nickname, "steamid": player.steamid}
 
-    # --- pause / resume (the tray, Task 14; the Status page's Resume, `/api/resume`) ---------------
+    # --- pause / resume (the tray, Task 14; the Status page's Pause and Resume) ---------------
 
     def pause(self) -> None:
         """Recorded as paused "by you", so Status can say that rather than "after 3 failed renders"."""

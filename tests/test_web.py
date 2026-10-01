@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import shutil
 import socket
+import subprocess
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,11 +18,12 @@ import pytest
 
 from clipper import protect
 from clipper.checks import Check
+from clipper.config import Config
 from clipper.faceit import FaceitError
 from clipper.faceit_oauth import OAuthError
 from clipper.index import Index
 from clipper.model import FaceitStats, Highlight, MatchInfo
-from clipper.settings import FIELDS, KEY_FIELD, SECRET_FIELD, STORED_KEY, SettingsStore
+from clipper.settings import FIELDS, KEY_FIELD, SECRET_FIELD, STORED_KEY, Loaded, SettingsStore
 from clipper.state import Rendering, Snapshot
 from clipper.web import MARKER_HEADER, WebContext, WebServer, create_app
 
@@ -400,6 +404,36 @@ def test_api_status_refuses_a_phone(client):
     assert phone_get(client, "/api/status").status_code == 403
 
 
+def test_api_summary_is_the_pill_and_never_runs_the_checks(tmp_path):
+    ran = []
+    snapshot = Snapshot(rendering=Rendering("de_mirage", "player", 1790000000.0))
+    app = app_for(tmp_path, snapshot=lambda: snapshot, checks=lambda: ran.append(True) or [])
+
+    response = pc_get(app.test_client(), "/api/summary")
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.get_json() == {"summary": "Rendering Mirage (player view)", "rendering": True,
+                                   "paused_by": None, "problems": []}
+    assert ran == []
+
+
+def test_api_summary_says_idle_paused_and_the_start_up_problems(tmp_path):
+    def summary_of(snapshot):
+        return pc_get(app_for(tmp_path, snapshot=lambda: snapshot).test_client(), "/api/summary").get_json()
+
+    assert summary_of(Snapshot()) == {"summary": "Idle", "rendering": False, "paused_by": None, "problems": []}
+    assert summary_of(Snapshot(paused_by="you")) == {"summary": "Paused by you", "rendering": False,
+                                                     "paused_by": "you", "problems": []}
+    assert summary_of(Snapshot(problems=("HLAE is missing", "Postgres is off"))) == {
+        "summary": "HLAE is missing (+1 more)", "rendering": False, "paused_by": None,
+        "problems": ["HLAE is missing", "Postgres is off"]}
+
+
+def test_api_summary_refuses_a_phone(client):
+    assert phone_get(client, "/api/summary").status_code == 403
+
+
 def test_api_log_returns_the_lines_asking_for_200(tmp_path):
     app = app_for(tmp_path, log_lines=lambda n: [f"limit={n}", "a line"])
     response = pc_get(app.test_client(), "/api/log")
@@ -438,6 +472,19 @@ def test_retry_refuses_a_phone_and_needs_the_marker(tmp_path, index):
     app = app_for(tmp_path)
     assert pc_post(app.test_client(), f"/api/demos/{demo_id}/retry").status_code == 403
     assert phone_post(app.test_client(), f"/api/demos/{demo_id}/retry", headers=MARKED).status_code == 403
+
+
+def test_pause_calls_the_context_and_replies_204(tmp_path):
+    calls = []
+    app = app_for(tmp_path, pause=lambda: calls.append(True))
+    response = pc_post(app.test_client(), "/api/pause", headers=MARKED)
+    assert response.status_code == 204
+    assert calls == [True]
+
+
+def test_pause_refuses_a_phone_and_needs_the_marker(client):
+    assert pc_post(client, "/api/pause").status_code == 403
+    assert phone_post(client, "/api/pause", headers=MARKED).status_code == 403
 
 
 def test_resume_calls_the_context_and_replies_204(tmp_path):
@@ -611,6 +658,135 @@ def test_reel_video_refuses_a_phone(tmp_path, index):
     response = phone_get(app_for(tmp_path).test_client(), f"/reels/{reel_id}.mp4")
 
     assert response.status_code == 403
+
+
+class FakeFfmpeg:
+    """Stands in for `subprocess.run` on the frame route: records the command and writes `frame` to its
+    output file (the last argument), or nothing when `frame` is None, which is what ffmpeg does when a
+    Reel is shorter than the seek."""
+
+    def __init__(self, frame: bytes | None = b"\xff\xd8 a frame"):
+        self.commands = []
+        self.frame = frame
+
+    def __call__(self, command, **kwargs):
+        self.commands.append(command)
+        if self.frame is not None:
+            Path(command[-1]).write_bytes(self.frame)
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+
+def _reel_with_video(tmp_path, index, name="clip.mp4") -> tuple[int, Path]:
+    highlight_id = _reels_index(index)
+    video_path = tmp_path / name
+    video_path.write_bytes(b"not really a video")
+    index.save_reel(highlight_id, "player", video_path, 12.5)
+    return index.match_reels(REEL_MATCH.checksum)[0]["player_reel_id"], video_path
+
+
+def test_reel_frame_is_cut_once_and_kept_beside_the_reel(tmp_path, index, monkeypatch):
+    reel_id, video_path = _reel_with_video(tmp_path, index)
+    ffmpeg = FakeFfmpeg()
+    monkeypatch.setattr(subprocess, "run", ffmpeg)
+    client = app_for(tmp_path, load_settings=lambda: Loaded(Config(ffmpeg="C:/tools/ffmpeg.exe"), ())).test_client()
+
+    first = pc_get(client, f"/reels/{reel_id}.jpg")
+    second = pc_get(client, f"/reels/{reel_id}.jpg")
+
+    assert (first.status_code, first.mimetype, first.data) == (200, "image/jpeg", ffmpeg.frame)
+    assert second.data == ffmpeg.frame
+    assert len(ffmpeg.commands) == 1                    # the second request found the frame already cut
+    command = ffmpeg.commands[0]
+    assert command[0] == "C:/tools/ffmpeg.exe"
+    assert command[command.index("-ss") + 1] == "3"
+    assert command[command.index("-i") + 1] == str(video_path)
+    assert [p.name for p in tmp_path.glob("*.jpg")] == ["clip.jpg"]      # and no half-written file
+
+
+def test_a_reel_written_after_its_frame_gets_a_new_frame(tmp_path, index, monkeypatch):
+    reel_id, video_path = _reel_with_video(tmp_path, index)
+    video_path.with_suffix(".jpg").write_bytes(b"the old frame")
+    os.utime(video_path.with_suffix(".jpg"), (1_000_000_000, 1_000_000_000))     # long before the Reel
+    ffmpeg = FakeFfmpeg(b"\xff\xd8 the new frame")
+    monkeypatch.setattr(subprocess, "run", ffmpeg)
+
+    response = pc_get(app_for(tmp_path).test_client(), f"/reels/{reel_id}.jpg")
+
+    assert response.data == ffmpeg.frame
+    assert len(ffmpeg.commands) == 1
+
+
+def test_reel_frame_404_when_ffmpeg_cuts_nothing(tmp_path, index, monkeypatch):
+    reel_id, _ = _reel_with_video(tmp_path, index)
+    monkeypatch.setattr(subprocess, "run", FakeFfmpeg(frame=None))
+
+    response = pc_get(app_for(tmp_path).test_client(), f"/reels/{reel_id}.jpg")
+
+    assert response.status_code == 404
+    assert list(tmp_path.glob("*.jpg")) == []
+
+
+def test_reel_frame_404_when_ffmpeg_cannot_start(tmp_path, index, monkeypatch):
+    reel_id, _ = _reel_with_video(tmp_path, index)
+
+    def missing(command, **kwargs):
+        raise FileNotFoundError(command[0])
+
+    monkeypatch.setattr(subprocess, "run", missing)
+
+    assert pc_get(app_for(tmp_path).test_client(), f"/reels/{reel_id}.jpg").status_code == 404
+
+
+def test_reel_frame_404_and_nothing_left_behind_when_ffmpeg_times_out(tmp_path, index, monkeypatch):
+    reel_id, _ = _reel_with_video(tmp_path, index)
+
+    def hangs(command, **kwargs):
+        Path(command[-1]).write_bytes(b"half")      # what a killed ffmpeg leaves behind
+        raise subprocess.TimeoutExpired(command, 30)
+
+    monkeypatch.setattr(subprocess, "run", hangs)
+
+    response = pc_get(app_for(tmp_path).test_client(), f"/reels/{reel_id}.jpg")
+
+    assert response.status_code == 404
+    assert list(tmp_path.glob("*.jpg")) == []
+
+
+def test_reel_frame_404_for_an_unknown_reel_or_a_missing_file_without_running_ffmpeg(tmp_path, index, monkeypatch):
+    highlight_id = _reels_index(index)
+    index.save_reel(highlight_id, "player", tmp_path / "gone.mp4", 12.5)       # never written to disk
+    reel_id = index.match_reels(REEL_MATCH.checksum)[0]["player_reel_id"]
+    ffmpeg = FakeFfmpeg()
+    monkeypatch.setattr(subprocess, "run", ffmpeg)
+    client = app_for(tmp_path).test_client()
+
+    assert pc_get(client, "/reels/999999.jpg").status_code == 404
+    assert pc_get(client, f"/reels/{reel_id}.jpg").status_code == 404
+    assert ffmpeg.commands == []
+
+
+def test_reel_frame_refuses_a_phone(tmp_path, index):
+    reel_id, _ = _reel_with_video(tmp_path, index)
+
+    response = phone_get(app_for(tmp_path).test_client(), f"/reels/{reel_id}.jpg")
+
+    assert response.status_code == 403
+
+
+@pytest.mark.ffmpeg
+def test_reel_frame_is_a_real_jpeg_from_the_real_ffmpeg(tmp_path, index):
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg not on PATH")
+    reel_id, video_path = _reel_with_video(tmp_path, index)
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=red:s=320x240:r=30:d=5",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(video_path)], check=True)
+
+    response = pc_get(app_for(tmp_path).test_client(), f"/reels/{reel_id}.jpg")
+
+    assert response.status_code == 200
+    assert response.mimetype == "image/jpeg"
+    assert response.data[:2] == b"\xff\xd8"
+    assert [p.name for p in tmp_path.glob("*.jpg")] == ["clip.jpg"]
 
 
 def test_open_folder_passes_the_folder_from_the_index_and_ignores_the_request_body(tmp_path, index):
@@ -944,9 +1120,9 @@ def test_faceit_lookup_refuses_a_phone_and_needs_the_marker(tmp_path):
 # --- every route Tasks 10-14 added is PC-only: a foreign Host is refused on all of them -------------
 
 PC_ONLY_ROUTES = [
-    ("GET", "/"), ("GET", "/status"), ("GET", "/api/status"), ("GET", "/api/log"),
-    ("POST", "/api/demos/1/retry"), ("POST", "/api/resume"), ("POST", "/api/quit"),
-    ("GET", "/reels"), ("GET", "/api/reels"), ("GET", "/reels/1.mp4"),
+    ("GET", "/"), ("GET", "/status"), ("GET", "/api/status"), ("GET", "/api/summary"), ("GET", "/api/log"),
+    ("POST", "/api/demos/1/retry"), ("POST", "/api/pause"), ("POST", "/api/resume"), ("POST", "/api/quit"),
+    ("GET", "/reels"), ("GET", "/api/reels"), ("GET", "/reels/1.mp4"), ("GET", "/reels/1.jpg"),
     ("POST", f"/api/reels/{'a' * 16}/open-folder"),
     ("GET", "/settings"), ("GET", "/api/settings"), ("PUT", "/api/settings"),
     ("POST", "/api/faceit/session"), ("POST", "/api/faceit/lookup"),

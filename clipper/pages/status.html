@@ -10,80 +10,302 @@
 <script src="/app.js"></script>
 <script>renderNav("/status");</script>
 <main>
-  <p class="brand"><span>CS2</span>clipper</p>
-  <h1>Status</h1>
-  <p class="sum" id="now">Loading…</p>
-  <div id="notice"></div>
-  <p>
-    <button class="skip" id="resume" hidden>Resume</button>
-    <button class="skip" id="quit">Quit</button>
-  </p>
-  <p id="quit-choice" hidden>
-    <button class="skip" id="quit-now">Quit now (the render is redone later)</button>
-    <button class="skip" id="quit-after">Quit when this render finishes</button>
-  </p>
+  <section class="greet rise">
+    <div style="flex-grow:1;min-width:0">
+      <h1 id="greet">Status</h1>
+      <p class="lead" id="intro">Loading…</p>
+    </div>
+    <div class="ctl">
+      <div class="row">
+        <button class="ghost" id="pause" hidden>${PAUSE}Pause rendering</button>
+        <button class="primary" id="resume" hidden>${PLAY}Resume rendering</button>
+        <button class="ghost" id="quit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>Quit</button>
+      </div>
+      <div class="split" id="quit-choice" role="group" aria-label="A render is running" hidden>
+        <button class="ghost" id="quit-now">Quit now (the render is redone later)</button>
+        <button class="primary" id="quit-after">Quit when this render finishes</button>
+      </div>
+    </div>
+  </section>
 
-  <h2>Checks</h2>
-  <ul id="checks"></ul>
+  <section id="notice" aria-label="Needs attention" style="display:flex;flex-direction:column;gap:8px"></section>
 
-  <h2>Demos</h2>
-  <div id="demos"><p class="sum">Nothing in progress.</p></div>
+  <section class="hero cut rise" id="hero" aria-label="Your latest Highlights" tabindex="0" style="animation-delay:.06s"></section>
 
-  <h2>Log</h2>
-  <pre id="log"></pre>
+  <section class="nowcard cut rise" aria-label="Now" style="animation-delay:.12s">
+    <div class="nowhead">
+      <div style="flex-grow:1;min-width:0">
+        <div class="nowmeta"><span class="dot" id="now-dot"></span><span>Now</span><span class="file" id="now-file"></span></div>
+        <div id="now" aria-live="polite">Loading…</div>
+        <div id="now-sub"></div>
+      </div>
+      <span id="elapsed" hidden></span>
+    </div>
+    <div id="current" hidden>
+      <div class="track" role="list" aria-label="Pipeline" style="margin-bottom:20px">
+        <div class="rail" id="rail"><i></i></div>
+      </div>
+      <div class="jobs" id="jobs"></div>
+    </div>
+  </section>
+
+  <div class="cols">
+    <section aria-labelledby="h-demos">
+      <div class="sechead"><h2 id="h-demos" class="h2">In progress</h2><span class="lbl" id="demo-sum"></span></div>
+      <div class="panel cut" id="demos"><p class="empty">Nothing in progress.</p></div>
+    </section>
+    <section aria-labelledby="h-grab">
+      <div class="sechead"><h2 id="h-grab" class="h2">Demos to grab</h2><a class="more" href="/demos">All${NEXT}</a></div>
+      <div class="panel cut" style="padding:4px 18px 10px"><div id="grab"></div><p class="help" id="grab-note" style="margin:10px 0 0">Download a Demo and it's taken from Downloads on its own.</p></div>
+    </section>
+    <section aria-labelledby="h-checks">
+      <div class="sechead"><h2 id="h-checks" class="h2">Checks</h2><span class="lbl" id="check-sum"></span></div>
+      <div class="panel cut" style="padding:4px" id="checks"></div>
+    </section>
+  </div>
+
+  <section aria-labelledby="h-log" style="display:flex;flex-direction:column;gap:10px">
+    <div class="loghead">
+      <h2 id="h-log" class="h2" style="margin-right:10px">Log</h2>
+      <span id="log-filters" role="group" aria-label="Show" style="display:flex;gap:8px"></span>
+      <span class="spacer"></span>
+      <button class="chip on" id="follow" aria-pressed="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>Follow new lines</button>
+    </div>
+    <div class="cut" id="log" role="log" aria-label="Log"></div>
+  </section>
 </main>
 <script>
-const esc = s => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
-let quitRequested = false;
+// Status is the home screen (spec: Pages -> Status): what the app is doing, the latest Highlights,
+// the Demos waiting to be grabbed, the checks and the log.
+const STAGES = ["spotted", "unpacked", "analyzed", "scored", "rendering", "joined", "done"];
+const STAGE_LABEL = ["Spotted", "Unpacked", "Analyzed", "Scored", "Rendering", "Joined", "Done"];
+const PERSPECTIVE = {player: "Player view", enemy: "Enemy view"};
+let quitRequested = false, pauseRoute = false, nickname = "", lastStatus = null, grabRows = [], prevDemos = null;
+let logFilter = "all", follow = true, logLines = [];
+const opened = new Set(JSON.parse(sessionStorage.getItem("opened") || "[]"));
 
-function markOf(ok) { return ok === true ? "✓" : ok === false ? "✗" : "–"; }
-function classOf(ok) { return ok === true ? "good" : ok === false ? "bad" : "muted"; }
+// The buttons' icons live in app.js; the page's markup names them.
+document.querySelectorAll("main button, main a").forEach(el => {
+  el.innerHTML = el.innerHTML.replace("${PAUSE}", ICON.pause).replace("${PLAY}", ICON.play).replace("${NEXT}", ICON.next);
+});
+const track = document.querySelector(".track");
+track.insertAdjacentHTML("beforeend", STAGE_LABEL.map(l =>
+  `<div class="st" role="listitem"><span class="node">${ICON.check.replace('stroke="currentColor"', 'stroke="#000"')}</span><span class="t">${l}</span></div>`).join(""));
+const carousel = Carousel(document.getElementById("hero"));
 
-function renderCheck(c) {
-  const hint = c.ok !== true && c.hint ? `<small>${esc(c.hint)}</small>` : "";
-  return `<li><span class="${classOf(c.ok)}">${markOf(c.ok)}</span> <b>${esc(c.name)}</b> ${esc(c.detail)}${hint}</li>`;
+function greeting() {
+  const h = new Date().getHours();
+  const part = h < 5 ? "Late night" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
+  return nickname ? `${part}, ${nickname}` : part;
 }
 
-// Plain text: renderDemo escapes the joined line once, when it goes into the page.
-function jobText(j) {
-  return `${j.perspective}: ${j.state} (attempt ${j.attempt})`;
-}
-
-function renderDemo(d) {
-  const jobs = d.jobs.map(jobText).join(", ");
-  const error = d.error ? `<small class="bad">${esc(d.error)}</small>` : "";
-  const retry = d.retry ? `<button class="skip" data-retry="${d.id}">Retry</button>` : "";
-  return `<div class="row"><b>#${d.id} ${esc(d.file_name)}</b>
-    <span>${esc(d.state)}${d.map ? " · " + esc(d.map) : ""}</span>
-    ${jobs ? `<div>${esc(jobs)}</div>` : ""}${error}${retry}</div>`;
-}
-
-function renderStatus(data) {
-  let now = esc(data.summary);
+function subLine(data) {
+  if (data.quitting) return data.quitting === "after_render" ? "The app closes when this render finishes." : "Closing CS2 Clipper.";
+  if (data.problems.length) return "Nothing renders until these are fixed.";
   if (data.rendering) {
-    const minutes = Math.max(0, Math.round(Date.now() / 60000 - data.rendering.started_at / 60));
-    now += ` <small>for ${minutes} min</small>`;
+    const minutes = Math.max(1, Math.round(Date.now() / 60000 - data.rendering.started_at / 60));
+    return `For ${plural(minutes, "min", "min")}. CS2 is recording; leave the PC to it.`;
   }
-  document.getElementById("now").innerHTML = now;
-  document.getElementById("resume").hidden = data.paused_by === null;
+  if (data.paused_by === "you") return "Demos keep arriving, but nothing renders until you resume.";
+  if (data.paused_by === "failures") return "Renders kept failing, so rendering stopped. Check the log, then resume.";
+  if (/^Waiting/.test(data.summary)) return "Rendering starts once these clear.";
+  return "Watching your Downloads for Demos and FACEIT for new matches.";
+}
 
-  const notices = [...data.problems, ...data.warnings];
-  if (data.pages_off) notices.push(data.pages_off);
-  document.getElementById("notice").innerHTML = notices.length
-    ? `<ul>${notices.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : "";
+// --- Now: the summary, the current Demo's pipeline, its Render Jobs -----------------------------------
+function currentDemo(demos) {
+  return demos.find(d => d.state === "rendering") || demos.find(d => d.state !== "failed") || null;
+}
 
-  document.getElementById("checks").innerHTML = data.checks.map(renderCheck).join("");
-  document.getElementById("demos").innerHTML = data.demos.length
-    ? data.demos.map(renderDemo).join("") : '<p class="sum">Nothing in progress.</p>';
+function progressOf(d) {
+  if (d.state === "failed") return {index: d.jobs.length ? 4 : 2, frac: (d.jobs.length ? 4 : 2) / 6};
+  const index = STAGES.indexOf(d.state);
+  let frac = Math.max(0, index) / 6;
+  if (d.state === "rendering" && d.jobs.length) {
+    const done = d.jobs.filter(j => j.state === "done").length, running = d.jobs.some(j => j.state === "running");
+    frac = (4 + (done + (running ? 0.35 : 0)) / d.jobs.length) / 6;
+  }
+  return {index, frac: Math.min(1, frac)};
+}
+
+function jobPill(j) {
+  const cls = j.state === "running" ? "job run" : j.state === "failed" ? "job fail" : "job";
+  return `<span class="${cls}" title="${esc(j.failure || "")}">${j.state === "running" ? '<span class="dot live"></span>' : ""}${PERSPECTIVE[j.perspective] || esc(j.perspective)}: ${esc(j.state)}${j.attempt > 1 ? `, attempt ${j.attempt}` : ""}</span>`;
+}
+
+let elapsedTimer = 0;
+function renderNow(data) {
+  const mode = summaryMode(data);
+  document.getElementById("now").textContent = data.summary;
+  document.getElementById("now-sub").textContent = subLine(data);
+  document.getElementById("now-dot").className = "dot" + (mode ? " " + mode : "");
+  setNavStatus(data.summary, mode);
+  setSweep(mode);
+
+  const elapsed = document.getElementById("elapsed");
+  clearInterval(elapsedTimer);
+  elapsed.hidden = !data.rendering;
+  if (data.rendering) {
+    const tick = () => {
+      const s = Math.max(0, Math.floor(Date.now() / 1000 - data.rendering.started_at));
+      elapsed.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+    };
+    tick();
+    elapsedTimer = setInterval(tick, 1000);
+  }
+
+  const d = currentDemo(data.demos);
+  document.getElementById("current").hidden = !d;
+  document.getElementById("now-file").textContent = d ? `#${d.id} ${d.map || ""}` : "";
+  if (!d) return;
+  const {index, frac} = progressOf(d);
+  const rail = document.getElementById("rail");
+  rail.className = "rail" + (d.state === "rendering" && data.rendering ? " live" : "");
+  rail.firstElementChild.style.width = (frac * 100) + "%";
+  [...track.querySelectorAll(".st")].forEach((st, i) => {
+    st.className = "st" + (i < index ? " done" : i === index ? (d.state === "failed" ? " fail" : " now") : "");
+    st.setAttribute("aria-current", i === index ? "step" : "false");
+  });
+  sync(document.getElementById("jobs"), d.jobs, j => j.perspective, jobPill);
+}
+
+// --- In progress ------------------------------------------------------------------------------------------
+function demoCard(d) {
+  const {frac} = progressOf(d);
+  const label = d.state === "failed" ? "Failed" : STAGE_LABEL[STAGES.indexOf(d.state)] || d.state;
+  const color = d.state === "failed" ? "#FF8A3D" : d.state === "rendering" ? "#FFB27A" : "#D6D3CE";
+  const bar = d.state === "failed" ? "pbar fail" : d.state === "rendering" ? "pbar live" : "pbar";
+  return `<div class="dcard">
+    <div class="top"><span class="maptile">${mapAbbr(d.map || "?")}</span>
+      <span style="flex-grow:1;min-width:0"><span style="display:block;font-weight:600;font-size:14px">${esc(d.map || "Reading the Demo…")} <span style="font-weight:400;color:#8F8F8F;font-family:var(--mono);font-size:12px">#${+d.id}</span></span>
+        <span class="${bar}" style="display:block;margin-top:6px" aria-hidden="true"><i data-w="${(frac * 100).toFixed(1)}%"></i></span></span>
+      <span style="font-size:13px;font-weight:600;color:${color};width:72px;text-align:right">${esc(label)}</span></div>
+    ${d.error ? `<div class="err"><span>${esc(d.error)}</span>${d.retry ? `<button class="primary sm" data-retry="${+d.id}">Retry</button>` : ""}</div>` : ""}
+  </div>`;
+}
+
+function renderDemos(demos) {
+  const box = document.getElementById("demos");
+  document.getElementById("demo-sum").textContent = demos.length ? `${demos.length} in progress` : "";
+  if (!demos.length) { box.innerHTML = '<p class="empty">Nothing in progress. Finished Demos are in Reels.</p>'; box._ready = false; return; }
+  sync(box, demos, d => d.id, demoCard);
+  // A Demo that left the list without failing has been joined: its Reels are ready.
+  if (prevDemos) {
+    const now = new Set(demos.map(d => d.id));
+    prevDemos.filter(d => !now.has(d.id) && d.state !== "failed" && d.map).forEach(d =>
+      toast(`${ICON.check}<span>${esc(d.map)} is ready in Reels</span><a class="primary dark sm" href="/reels">Watch</a>`));
+  }
+  prevDemos = demos;
+}
+
+// --- Checks -----------------------------------------------------------------------------------------------
+function checkRow(c) {
+  const [cls, icon] = c.ok === true ? ["ico ok", ICON.check] : c.ok === false ? ["ico bad", ICON.bang] : ["ico unk", ICON.dash];
+  const hint = c.ok !== true && c.hint ? `<span class="h">${esc(c.hint)}</span>` : "";
+  return `<div class="ck"><span class="${cls}">${icon}</span><span style="min-width:0"><b>${esc(c.name)}</b><span class="d">${esc(c.detail)}</span>${hint}</span></div>`;
+}
+
+// --- Demos to grab ----------------------------------------------------------------------------------------
+function left(iso) {
+  const hours = (new Date(iso) - Date.now()) / 3600000;
+  return hours >= 48 ? `${Math.ceil(hours / 24)} days` : `${Math.max(1, Math.ceil(hours))} hours`;
+}
+const GRAB_WORDS = [["5k", "ACE", "b-ace"], ["4k", "4K", "b-4k"], ["3k", "3K", "b-3k"]];
+function grabRow(r) {
+  const days = (new Date(r.expires_at) - Date.now()) / 86400000, soon = days <= 3;
+  const hl = GRAB_WORDS.filter(([k]) => r.highlights[k]).map(([k, w, c]) =>
+    `<span class="badge ${c}" style="font-size:12px;padding:0 7px">${r.highlights[k] > 1 ? r.highlights[k] + "× " : ""}${w}</span>`).join("");
+  const act = opened.has(r.id) ? '<span class="wait"><i></i><i></i><i></i>Waiting</span>'
+    : `<a class="primary sm" href="${esc(r.url)}" target="_blank" rel="noopener" data-open="${esc(r.id)}">Open</a>`;
+  return `<div class="mrow"><span class="maptile" style="width:36px;height:36px;font-size:14px">${mapAbbr(r.map)}</span>
+    <span style="flex-grow:1;min-width:0"><span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><b style="font-size:14px">${esc(r.map)}</b>${hl}</span>
+      <span style="display:block;font-size:12px;color:${soon ? "#FFB27A" : "#9A9A9A"}">Link expires in ${left(r.expires_at)}</span>
+      <span class="life${soon ? " soon" : ""}" style="display:block"><i data-w="${Math.max(2, Math.min(100, days / 30 * 100)).toFixed(1)}%"></i></span></span>
+    ${act}</div>`;
+}
+
+function renderGrab() {
+  const pending = pendingRows(grabRows).sort((a, b) => a.expires_at.localeCompare(b.expires_at));
+  setNavCount(pending.length);
+  const box = document.getElementById("grab");
+  if (!pending.length) { box.innerHTML = '<p class="empty" style="padding:18px 0 8px">All caught up.</p>'; box._ready = false; }
+  else sync(box, pending.slice(0, 3), r => r.id, grabRow);
+  document.getElementById("grab-note").hidden = !pending.length;
+}
+
+// --- the carousel -----------------------------------------------------------------------------------------
+function renderSlides(matches) {
+  const best = bestHighlights(matches, 4);
+  const slides = best.map(h => {
+    const play = h.player ?? h.enemy, type = String(h.type).toUpperCase();
+    const tags = reasonTags(h);
+    return {key: `${h.match.checksum}-${h.round}`, type, tab: `${type === "ACE" ? "Ace" : type}, ${h.match.map}`, thumb: play,
+      meta: `${h.match.map}, ${dateLabel(h.match.played_at)}, round ${h.round}`,
+      title: `${type === "ACE" ? "Ace" : type} in round ${h.round}`,
+      sub: tags.length ? tags.join(", ") + "." : (h.enemy !== null ? "From your view and the Enemy POV." : "From your view."),
+      acts: [{label: "Watch", primary: true, href: `/reels?play=${+play}`},
+        ...(h.player !== null && h.enemy !== null ? [{label: "Enemy POV", href: `/reels?play=${+h.enemy}`}] : [])]};
+  });
+  if (!slides.length) slides.push({key: "welcome", meta: "Reels", title: "Your Highlights land here",
+    sub: "Grab a Demo with a 3K or better and its Clips show up here once they're rendered.",
+    acts: [{label: "Demos to grab", primary: true, href: "/demos", icon: false}]});
+  carousel.set(slides);
+}
+
+// --- the log ------------------------------------------------------------------------------------------------
+const LOG_LINE = /^\d{4}-\d\d-\d\d (\d\d:\d\d:\d\d),\d+ (\w+) ([\w.]+): ([\s\S]*)$/;
+function parseLine(text) {
+  const m = LOG_LINE.exec(text);
+  return m ? {t: m[1], lv: m[2], src: m[3], msg: m[4], text} : {t: "", lv: "INFO", src: "", msg: text, text};
+}
+function renderLog() {
+  const box = document.getElementById("log");
+  const seen = {};
+  const lines = logLines.map(parseLine).map(l => { seen[l.text] = (seen[l.text] || 0) + 1; return {...l, key: l.text + "#" + seen[l.text]}; });
+  const issues = lines.filter(l => l.lv !== "INFO" && l.lv !== "DEBUG");
+  document.getElementById("log-filters").innerHTML = [["all", "All", lines.length], ["issues", "Warnings and errors", issues.length]]
+    .map(([id, label, n]) => `<button class="chip${logFilter === id ? " on" : ""}" data-filter="${id}" aria-pressed="${logFilter === id}">${label}<span class="n">${n}</span></button>`).join("");
+  const name = {WARNING: "Warning", ERROR: "Error", CRITICAL: "Error", INFO: "Info", DEBUG: "Debug"};
+  sync(box, logFilter === "issues" ? issues : lines, l => l.key, l =>
+    `<div class="logline"><span class="t">${esc(l.t)}</span><span class="lv ${esc(l.lv)}">${esc(name[l.lv] || l.lv)}</span><span class="s">${esc(l.src)}</span><span class="m">${esc(l.msg)}</span></div>`);
+  if (follow) box.scrollTop = box.scrollHeight;
+}
+
+// --- loading ------------------------------------------------------------------------------------------------
+function renderStatus(data) {
+  lastStatus = data;
+  renderNow(data);
+  document.getElementById("resume").hidden = data.paused_by === null || !!data.quitting;
+  document.getElementById("pause").hidden = !pauseRoute || data.paused_by !== null || !!data.quitting || data.problems.length > 0;
+
+  const notices = [...data.problems.map(t => ["p", t]), ...data.warnings.map(t => ["w", t])];
+  if (data.pages_off) notices.push(["w", `Pages are off: ${data.pages_off}`]);
+  sync(document.getElementById("notice"), notices, n => n[1], ([cls, text]) =>
+    `<div class="notice ${cls}">${ICON.info}<span>${esc(text)}</span>${/Settings/.test(text) ? '<a href="/settings">Open Settings</a>' : ""}</div>`);
+
+  sync(document.getElementById("checks"), data.checks, c => c.name, checkRow);
+  const passing = data.checks.filter(c => c.ok === true).length;
+  document.getElementById("check-sum").textContent = passing === data.checks.length ? `All ${passing} passing` : `${passing} of ${data.checks.length} passing`;
+  renderDemos(data.demos);
+  renderIntro();
+}
+
+function renderIntro() {
+  if (!lastStatus) return;
+  document.getElementById("greet").textContent = greeting();
+  const pending = pendingRows(grabRows).length, n = lastStatus.demos.length;
+  document.getElementById("intro").textContent = lastStatus.problems.length
+    ? "Nothing renders until the problems below are fixed."
+    : `${pending ? plural(pending, "Demo") + " to grab" : "No Demos to grab"}${n ? ` and ${n} in progress.` : ". Nothing in progress."}`;
 }
 
 function stopPolling() {
-  clearInterval(statusTimer);
-  clearInterval(logTimer);
+  clearInterval(statusTimer); clearInterval(logTimer); clearInterval(grabTimer); clearInterval(reelsTimer);
   document.getElementById("now").textContent = "Quitting…";
   document.getElementById("quit-choice").hidden = true;
   document.getElementById("quit").hidden = true;
   document.getElementById("resume").hidden = true;
+  document.getElementById("pause").hidden = true;
 }
 
 async function loadStatus() {
@@ -93,6 +315,7 @@ async function loadStatus() {
     renderStatus(await response.json());
   } catch (e) {
     if (quitRequested) stopPolling();
+    else document.getElementById("now").textContent = "Can't reach CS2 Clipper right now. Is it running?";
   }
 }
 
@@ -100,14 +323,28 @@ async function loadLog() {
   try {
     const response = await api("api/log");
     if (!response.ok) throw new Error("bad response");
-    const data = await response.json();
-    const pre = document.getElementById("log");
-    const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 4;
-    pre.textContent = data.lines.join("\n");
-    if (atBottom) pre.scrollTop = pre.scrollHeight;
+    logLines = (await response.json()).lines;
+    renderLog();
   } catch (e) {
     if (quitRequested) stopPolling();
   }
+}
+
+async function loadGrab() {
+  try {
+    const response = await api("demos.json");
+    if (response.ok) { grabRows = (await response.json()).rows; renderGrab(); renderIntro(); }
+  } catch (e) { /* ask again */ }
+}
+
+let reelsText = null;
+async function loadReels() {
+  try {
+    const response = await api("api/reels");
+    if (!response.ok) return;
+    const text = await response.text();
+    if (text !== reelsText) { reelsText = text; renderSlides(JSON.parse(text)); }
+  } catch (e) { /* ask again */ }
 }
 
 async function sendQuit(mode) {
@@ -123,11 +360,13 @@ async function sendQuit(mode) {
   }
 }
 
-document.getElementById("resume").addEventListener("click", async () => {
-  await api("api/resume", {method: "POST"});
-  loadStatus();
+document.getElementById("resume").addEventListener("click", async () => { await api("api/resume", {method: "POST"}); loadStatus(); });
+document.getElementById("pause").addEventListener("click", async () => { await api("api/pause", {method: "POST"}); loadStatus(); });
+document.getElementById("quit").addEventListener("click", () => {
+  const choice = document.getElementById("quit-choice");
+  if (!choice.hidden) { choice.hidden = true; return; }
+  sendQuit(null);
 });
-document.getElementById("quit").addEventListener("click", () => sendQuit(null));
 document.getElementById("quit-now").addEventListener("click", () => sendQuit("now"));
 document.getElementById("quit-after").addEventListener("click", () => sendQuit("after_render"));
 document.getElementById("demos").addEventListener("click", async e => {
@@ -137,11 +376,38 @@ document.getElementById("demos").addEventListener("click", async e => {
   await api(`api/demos/${button.dataset.retry}/retry`, {method: "POST"});
   loadStatus();
 });
+document.getElementById("grab").addEventListener("click", e => {
+  const link = e.target.closest("a[data-open]");
+  if (!link) return;
+  opened.add(link.dataset.open);
+  sessionStorage.setItem("opened", JSON.stringify([...opened]));
+  setTimeout(renderGrab, 0);
+});
+document.getElementById("log-filters").addEventListener("click", e => {
+  const b = e.target.closest("[data-filter]");
+  if (!b) return;
+  logFilter = b.dataset.filter;
+  document.getElementById("log").innerHTML = ""; document.getElementById("log")._ready = false;
+  renderLog();
+});
+const followButton = document.getElementById("follow");
+const setFollow = on => { follow = on; followButton.classList.toggle("on", on); followButton.setAttribute("aria-pressed", on); };
+followButton.addEventListener("click", () => { setFollow(!follow); if (follow) renderLog(); });
+document.getElementById("log").addEventListener("wheel", e => { if (e.deltaY < 0) setFollow(false); }, {passive: true});
 
-loadStatus();
-loadLog();
+(async () => {
+  pauseRoute = await hasRoute("/api/pause");
+  try {
+    const r = await api("api/settings");
+    if (r.ok) nickname = ((await r.json()).values || {}).faceit_nickname || "";
+  } catch (e) { /* the greeting goes without a name */ }
+  renderIntro();
+})();
+loadStatus(); loadLog(); loadGrab(); loadReels();
 const statusTimer = setInterval(loadStatus, 2000);
 const logTimer = setInterval(loadLog, 5000);
+const grabTimer = setInterval(loadGrab, 5000);
+const reelsTimer = setInterval(loadReels, 15000);
 </script>
 </body>
 </html>

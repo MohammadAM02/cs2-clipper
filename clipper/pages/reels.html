@@ -10,51 +10,105 @@
 <script src="/app.js"></script>
 <script>renderNav("/reels");</script>
 <main>
-  <p class="brand"><span>CS2</span>clipper</p>
-  <h1>Reels</h1>
-  <div id="matches"><p class="sum">Loading…</p></div>
+  <section class="rise" style="display:flex;align-items:flex-end;gap:24px;flex-wrap:wrap">
+    <div style="flex-grow:1">
+      <h1 class="title">Reels</h1>
+      <p class="lead" id="sum">Loading…</p>
+    </div>
+    <div id="filters" role="group" aria-label="Show" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+  </section>
+  <section class="hero tall cut rise" id="hero" aria-label="Your best Highlights" tabindex="0" hidden style="animation-delay:.06s"></section>
+  <div class="sechead" id="mhead" hidden><h2 class="h2">Matches</h2><span class="lbl">Newest first</span></div>
+  <div id="matches" style="display:flex;flex-direction:column;gap:14px"></div>
 </main>
 <script>
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const esc = s => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+// Reels (spec: Pages -> Reels): every match's Highlights, each watchable from the player's view or the
+// Enemy POV, in a player that opens under the row.
+const HEIGHT = {ACE: 36, "5K": 36, "4K": 30, "3K": 24, "2K": 18};
 let data = [];
 let shown = null;    // the /api/reels text now on screen, so a poll that finds the same thing leaves the page be
+let filter = "all";
+const closed = new Set(JSON.parse(sessionStorage.getItem("closed") || "[]"));
+const carousel = Carousel(document.getElementById("hero"), {onPlay: id => playById(id, true)});
 
-function dateLabel(iso) {
-  const d = new Date(iso);
-  return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+const typeOf = h => String(h.type).toUpperCase();
+const keep = h => filter === "all" || (filter === "hs" ? (h.reasons || []).some(r => /all headshots/i.test(r)) : typeOf(h) === filter);
+function resultLabel(result) { return result ? result.charAt(0).toUpperCase() + result.slice(1) : ""; }
+function rounds(score) {
+  const parts = String(score).split(/[^0-9]+/).filter(Boolean).map(Number);
+  return Math.max(1, parts.reduce((a, b) => a + b, 0));
 }
 
 function highlightRow(h) {
-  const reasons = h.reasons.join(", ");
-  return `<div class="hl">
-    <b>Round ${h.round} · ${esc(h.type)}</b>${reasons ? ` <span class="muted">${esc(reasons)}</span>` : ""}
-    <button class="skip" data-reel="${h.player}" ${h.player === null ? "disabled" : ""}>Player</button>
-    <button class="skip" data-reel="${h.enemy}" ${h.enemy === null ? "disabled" : ""}>Enemy</button>
+  const tags = reasonTags(h).map(t => `<span class="tag">${esc(t)}</span>`).join("");
+  return `<div class="hl" data-round="${+h.round}">
+    <span class="rd">Round ${+h.round}</span>${badge(h.type)}
+    <span class="tags">${tags}</span>
+    <span class="povs" role="group" aria-label="Watch round ${+h.round} from">
+      <button class="pov l" data-reel="${h.player}" ${h.player === null ? "disabled" : ""}>${ICON.play}Player</button>
+      <button class="pov r" data-reel="${h.enemy}" ${h.enemy === null ? 'disabled title="No Enemy POV for this round"' : ""}>${ICON.play}Enemy</button>
+    </span>
   </div>`;
 }
 
-function resultClass(result) {
-  return result === "win" ? "good" : result === "loss" ? "bad" : "";
-}
-
 function matchBlock(m) {
-  const rows = m.highlights.map(highlightRow).join("");
-  const score = `<span class="num ${resultClass(m.result)}">${esc(m.score)} ${esc(m.result)}</span>`;
-  return `<section class="match" data-checksum="${esc(m.checksum)}">
-    <h2 class="match-title">${esc(m.map)} · ${dateLabel(m.played_at)} · ${score}</h2>
-    ${rows}
-    <button class="skip" data-open="${esc(m.checksum)}">Open folder</button>
+  const rows = m.highlights.filter(keep);
+  const byRound = {};
+  m.highlights.forEach(h => { byRound[h.round] = h; });
+  const cells = Array.from({length: rounds(m.score)}, (_, i) => {
+    const h = byRound[i + 1];
+    return h ? `<span class="cell ${keep(h) ? "on" : "dim"}" style="height:${HEIGHT[typeOf(h)] || 18}px" title="Round ${i + 1}"></span>` : '<span class="cell"></span>';
+  }).join("");
+  const won = m.result === "win";
+  return `<section class="mcard cut${closed.has(m.checksum) ? "" : " open"}" data-checksum="${esc(m.checksum)}" aria-label="${esc(m.map)}, ${dateLabel(m.played_at)}">
+    <button class="mhead" data-toggle aria-expanded="${!closed.has(m.checksum)}">
+      <span class="maptile" style="width:54px;height:54px;font-size:21px">${mapAbbr(m.map)}</span>
+      <span class="nm"><b>${esc(m.map)}</b><small>${dateLabel(m.played_at)}, ${plural(m.highlights.length, "Highlight")}</small></span>
+      <span class="sc" style="color:${won ? "#F2EFEA" : "#8F8F8F"}"><b>${esc(m.score)}</b><small>${esc(resultLabel(m.result))}</small></span>
+      <span class="strip-w" aria-hidden="true"><span class="rstrip">${cells}</span><span class="ends"><span>Round 1</span><span>Round ${rounds(m.score)}</span></span></span>
+      ${ICON.chev}
+    </button>
+    <div class="collapse"><div>
+      ${rows.length ? rows.map(highlightRow).join("") : '<p class="empty" style="padding:16px 22px">No Highlights of this kind in this match.</p>'}
+      <div class="mfoot"><button class="ghost" data-open="${esc(m.checksum)}">${ICON.folder}Open folder</button></div>
+    </div></div>
   </section>`;
 }
 
-function render() {
-  const main = document.getElementById("matches");
-  main.innerHTML = data.length ? data.map(matchBlock).join("")
-    : '<p class="sum">No Reels yet. Finished Demos show up here.</p>';
+function renderFilters() {
+  const all = data.flatMap(m => m.highlights);
+  const defs = [["all", "All"], ["ACE", "Aces"], ["4K", "4K"], ["3K", "3K"], ["2K", "2K"], ["hs", "All headshots"]];
+  document.getElementById("filters").innerHTML = defs.map(([id, label]) => {
+    const n = all.filter(h => id === "all" || (id === "hs" ? (h.reasons || []).some(r => /all headshots/i.test(r)) : typeOf(h) === id)).length;
+    return n || id === "all" ? `<button class="chip${filter === id ? " on" : ""}" data-filter="${id}" aria-pressed="${filter === id}">${label}<span class="n">${n}</span></button>` : "";
+  }).join("");
 }
 
-// A render replaces the whole list, and the <video> sits inside it: never while a Reel is playing.
+function renderSlides() {
+  const best = bestHighlights(data, 5);
+  document.getElementById("hero").hidden = !best.length;
+  carousel.set(best.map(h => {
+    const type = typeOf(h), name = type === "ACE" ? "Ace" : type, tags = reasonTags(h);
+    return {key: `${h.match.checksum}-${h.round}`, type, tab: `${name}, ${h.match.map}`, thumb: h.player ?? h.enemy,
+      meta: `${h.match.map}, ${dateLabel(h.match.played_at)}, ${h.match.result === "win" ? "won" : h.match.result === "loss" ? "lost" : ""} ${h.match.score}`,
+      title: `${name} in round ${h.round}`, sub: tags.length ? tags.join(", ") + "." : "",
+      acts: [...(h.player !== null ? [{label: "Watch", primary: true, play: h.player}] : []),
+        ...(h.enemy !== null ? [{label: "Enemy POV", primary: h.player === null, play: h.enemy}] : [])]};
+  }));
+}
+
+function render() {
+  const all = data.flatMap(m => m.highlights);
+  document.getElementById("sum").textContent = data.length
+    ? `${plural(all.length, "Highlight")} from ${plural(data.length, "match", "matches")}. Watch each from your view or the Enemy POV.`
+    : "No Reels yet. Finished Demos show up here.";
+  document.getElementById("mhead").hidden = !data.length;
+  renderFilters();
+  renderSlides();
+  sync(document.getElementById("matches"), data.filter(m => filter === "all" || m.highlights.some(keep)), m => m.checksum, matchBlock);
+}
+
+// A render replaces the changed matches, and the <video> sits inside one: never while a Reel is playing.
 function playing() {
   const video = document.getElementById("player-video");
   return video !== null && !video.paused && !video.ended;
@@ -72,7 +126,7 @@ async function load() {
   } catch (e) {
     if (playing()) return;
     shown = null;                                  // what is on screen is no longer what the server said
-    document.getElementById("matches").textContent = "Can't reach clipper right now. Is it running?";
+    document.getElementById("sum").textContent = "Can't reach CS2 Clipper right now. Is it running?";
   }
 }
 
@@ -84,12 +138,45 @@ function showReel(button) {
     video.controls = true;
     video.autoplay = true;
   }
+  document.querySelectorAll(".hl.on, .pov.on").forEach(n => n.classList.remove("on"));
+  button.classList.add("on");
+  const row = button.closest(".hl");
+  row.classList.add("on");
   video.src = `/reels/${button.dataset.reel}.mp4`;
-  button.closest(".hl").insertAdjacentElement("afterend", video);    // under the row that was clicked
+  row.insertAdjacentElement("afterend", video);    // under the row that was clicked
   video.play().catch(() => {});      // `paused` is false from here on, even while the file loads
 }
 
+// Plays a Reel by id: from the carousel, or from Status's "Watch" (?play=<id>).
+function playById(id, scroll) {
+  const button = document.querySelector(`.pov[data-reel="${+id}"]`);
+  if (!button) return false;
+  const card = button.closest(".mcard");
+  if (!card.classList.contains("open")) toggle(card);
+  showReel(button);
+  if (scroll) setTimeout(() => button.closest(".hl").scrollIntoView({behavior: "smooth", block: "center"}), 120);
+  return true;
+}
+
+function toggle(card) {
+  const open = card.classList.toggle("open");
+  card.querySelector("[data-toggle]").setAttribute("aria-expanded", open);
+  const id = card.dataset.checksum;
+  if (open) closed.delete(id); else closed.add(id);
+  sessionStorage.setItem("closed", JSON.stringify([...closed]));
+}
+
 document.addEventListener("click", async e => {
+  const f = e.target.closest("[data-filter]");
+  if (f) {
+    if (playing()) document.getElementById("player-video").pause();
+    filter = f.dataset.filter;
+    document.getElementById("matches")._ready = false;   // a new filter is not news: no flashes
+    render();
+    return;
+  }
+  const head = e.target.closest("[data-toggle]");
+  if (head) { toggle(head.closest(".mcard")); return; }
   const openButton = e.target.closest("button[data-open]");
   if (openButton) {
     openButton.disabled = true;
@@ -101,7 +188,11 @@ document.addEventListener("click", async e => {
   if (reelButton && !reelButton.disabled) showReel(reelButton);
 });
 
-load();
+(async () => {
+  await load();
+  const wanted = new URLSearchParams(location.search).get("play");
+  if (wanted && playById(wanted, true)) history.replaceState(null, "", location.pathname);
+})();
 setInterval(load, 5000);
 </script>
 </body>

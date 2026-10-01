@@ -10,71 +10,106 @@
 <script src="/app.js"></script>
 <script>renderNav("/settings");</script>
 <main>
-  <p class="brand"><span>CS2</span>clipper</p>
-  <h1>Settings</h1>
-  <div id="notice"></div>
-  <div id="faceit"></div>
-  <form id="form"></form>
-  <p><button class="skip" id="save" type="button">Save</button> <span id="result"></span></p>
+  <h1 class="title rise">Settings</h1>
+  <div id="notice" style="display:flex;flex-direction:column;gap:8px"></div>
+  <div class="sgrid">
+    <nav class="snav" id="snav" aria-label="Settings sections"></nav>
+    <div class="groups">
+      <form id="form" class="groups" onsubmit="return false"></form>
+      <div class="savebar" id="savebar" role="region" aria-label="Unsaved changes" hidden>
+        <span id="dirty-text">Unsaved changes</span>
+        <button class="ghost" id="discard" type="button">Discard</button>
+        <button class="primary dark" id="save" type="button">Save</button>
+      </div>
+      <div class="savebar done" id="result" role="status" hidden></div>
+    </div>
+  </div>
 </main>
 <script>
-const esc = s => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
-let fields = [], values = {}, secretsSet = {}, removedSecrets = new Set(), loginUrl = "", signInNote = "";
+// Settings (spec: Pages -> Settings): built from the fields the app sends, so a new setting shows up
+// here with no change to this page. Each kind gets its own control; the two "seconds around each Frag"
+// numbers share one timeline. Nothing is sent until Save.
+const BLURB = {"You": "Who the Highlights are for", "Folders": "Where things live on this PC", "Picture": "What each Clip looks like",
+  "Rendering": "How hard it tries, and when it waits", "Match alerts": "Notifications when a FACEIT match has Highlights", "App": "The pages and the worker"};
+const RATIO = {"16:9": ["16:9", "1920×1080", 64, 36], "4:3": ["4:3", "1280×960", 48, 36], "4:3-hd": ["4:3 HD", "1440×1080", 48, 36],
+  "4:3-stretched": ["4:3 stretched", "1280×960 shown at 1920×1080", 64, 36]};
+const CHOICE_LABEL = {kills: "Kill", rounds: "Round"};
+const CHOICE_HELP = {kills: "Each Frag starts its own Sequence.", rounds: "A whole round of Frags becomes one Sequence."};
+const MONO = new Set(["steamid", "folder", "program", "url"]);
+const PAD = ["padding_before_s", "padding_after_s"];
+let fields = [], values = {}, secretsSet = {}, removedSecrets = new Set(), loginUrl = "", signInNote = "", warnings = [];
+let canPick = false;
 
-function inputFor(f) {
-  const id = `f-${f.name}`;
-  const value = values[f.name];
+const okIcon = '<span class="ok" style="position:absolute;right:13px;top:13px;color:#FF5500">' + ICON.check + '</span>';
+const fid = name => `f-${name}`;
+const unitOf = label => { const m = /\s*\((s|GB|min)\)$/.exec(label); return m ? [label.slice(0, m.index), m[1]] : [label, ""]; };
+const stepOf = f => f.kind === "int" ? 1 : (f.maximum || 0) >= 1000 ? 10 : PAD.includes(f.name) ? 0.5 : 1;
+
+function control(f) {
+  const id = fid(f.name), v = values[f.name];
   if (f.kind === "secret") {
-    // Each secret has its own "is saved" and its own Remove: the API key and the client secret are
-    // saved and removed apart.
     const noun = f.name.endsWith("_secret") ? "secret" : "key";
-    const status = secretsSet[f.name]
-      ? `<span id="saved-${f.name}"><span class="muted">A ${noun} is saved.</span>
-          <button type="button" class="skip" data-remove-secret="${f.name}">Remove ${noun}</button></span>`
-      : "";
-    return `<input type="password" id="${id}" autocomplete="new-password"> ${status}`;
+    return secretsSet[f.name]
+      ? `<div class="keycard" id="saved-${f.name}"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#FF8A3D" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><b>A ${noun} is saved</b><button type="button" class="ghost sm" data-remove-secret="${f.name}">Remove ${noun}</button></div>
+         <input type="password" class="inp mono" id="${id}" autocomplete="new-password" placeholder="Paste a new ${noun} to replace it" aria-label="${esc(f.label)}">`
+      : `<input type="password" class="inp mono" id="${id}" autocomplete="new-password" placeholder="Paste your ${esc(f.label)}">`;
   }
   if (f.kind === "bool") {
-    return `<input type="checkbox" id="${id}" ${value ? "checked" : ""}>`;
+    return `<button type="button" class="tog" role="switch" id="${id}" aria-checked="${!!v}" data-bool><span class="sw"></span><span><span class="flabel" style="display:block">${esc(f.label)}</span>${f.help ? `<span class="help" style="display:block">${esc(f.help)}</span>` : ""}</span></button>`;
+  }
+  if (f.kind === "choice" && f.name === "aspect_ratio") {
+    return `<div class="ar" role="radiogroup" id="${id}" data-choice data-value="${esc(v)}" aria-labelledby="l-${f.name}">${f.choices.map(c => {
+      const [label, res, w, h] = RATIO[c] || [c, "", 56, 36];
+      return `<button type="button" class="arc${c === v ? " on" : ""}" role="radio" aria-checked="${c === v}" data-pick="${esc(c)}"><span class="shape"><span style="width:${w}px;height:${h}px"></span></span><b>${esc(label)}</b><span class="help">${esc(res)}</span></button>`;
+    }).join("")}</div>`;
+  }
+  if (f.kind === "choice" && f.choices.length <= 4) {
+    return `<div class="seg" role="radiogroup" id="${id}" data-choice data-value="${esc(v)}" aria-labelledby="l-${f.name}"><span class="pill2"></span>${f.choices.map(c =>
+      `<button type="button" role="radio" class="${c === v ? "on" : ""}" aria-checked="${c === v}" data-pick="${esc(c)}">${esc(CHOICE_LABEL[c] || c)}</button>`).join("")}</div>`;
   }
   if (f.kind === "choice") {
-    const options = f.choices.map(c => `<option value="${esc(c)}"${c === value ? " selected" : ""}>${esc(c)}</option>`);
-    return `<select id="${id}">${options.join("")}</select>`;
+    return `<select class="inp" id="${id}">${f.choices.map(c => `<option value="${esc(c)}"${c === v ? " selected" : ""}>${esc(c)}</option>`).join("")}</select>`;
   }
   if (f.kind === "int" || f.kind === "number") {
-    const min = f.minimum === null ? "" : `min="${f.minimum}"`;
-    const max = f.maximum === null ? "" : `max="${f.maximum}"`;
-    const step = f.kind === "int" ? "1" : "any";
-    return `<input type="number" id="${id}" value="${esc(value)}" ${min} ${max} step="${step}">`;
+    const [, unit] = unitOf(f.label);
+    return `<div class="step"><button type="button" aria-label="Less" data-step="-1" data-for="${f.name}">−</button><input id="${id}" inputmode="decimal" value="${esc(v)}"${f.minimum !== null ? ` data-min="${f.minimum}"` : ""}${f.maximum !== null ? ` data-max="${f.maximum}"` : ""} data-stepby="${stepOf(f)}"><span class="u">${esc(unit)}</span><button type="button" aria-label="More" data-step="1" data-for="${f.name}">+</button></div>`;
   }
-  return `<input type="text" id="${id}" value="${esc(value)}">`;
+  const valid = f.kind === "steamid" && /^7656119\d{10}$/.test(v || "") ? okIcon : "";
+  const browse = f.kind === "folder" && canPick ? `<button type="button" class="ghost" style="height:44px" data-browse="${f.name}">Browse</button>` : "";
+  const lookup = f.name === "faceit_nickname" ? '<button type="button" class="ghost" style="height:44px" data-lookup>Look up</button>' : "";
+  return `<div class="inrow"><div class="inwrap"><input type="text" class="inp${MONO.has(f.kind) ? " mono" : ""}" id="${id}" value="${esc(v)}" spellcheck="false"${f.kind === "steamid" ? ' placeholder="7656119…" style="padding-right:40px"' : ""}>${valid}</div>${browse}${lookup}</div>`;
+}
+
+function padWidget() {
+  const [b, a] = PAD.map(n => fields.find(f => f.name === n));
+  return `<div class="field wide" data-field="padding">
+    <span class="flabel">Seconds around each Frag</span>
+    <div class="tl" aria-hidden="true"><span class="pre"></span><span class="post"></span><span class="frag"></span>
+      <span class="lb" id="pad-b" style="left:12px;color:#FFB27A"></span><span class="lb" id="pad-a" style="right:12px;color:#BDBDBD"></span></div>
+    <div class="fgrid">${[b, a].map(f => `<label class="help" style="display:flex;flex-direction:column;gap:4px">${esc(f.label)}
+      <input type="range" id="${fid(f.name)}" min="${f.minimum ?? 0}" max="${f.maximum ?? 30}" step="0.5" value="${esc(values[f.name])}"></label>`).join("")}</div>
+    ${PAD.map(n => `<span class="err" id="err-${n}"></span>`).join("")}
+  </div>`;
 }
 
 function fieldRow(f) {
-  const note = f.name === "data_root"
-    ? '<p class="note">A new folder applies to Demos from now on; files already in the old one stay.</p>' : "";
-  const help = f.help ? `<small>${esc(f.help)}</small>` : "";
-  // Nobody knows their SteamID64: the button asks FACEIT for it and fills both fields in.
-  const lookup = f.name === "faceit_nickname"
-    ? '<button type="button" class="skip" data-lookup="1">Look up my FACEIT name</button>' : "";
-  return `<p class="field">
-    <label for="f-${f.name}">${esc(f.label)}</label>
-    ${inputFor(f)}
-    ${lookup}
-    ${help}
-    <span class="err" id="err-${f.name}"></span>
-  </p>${note}`;
+  if (f.name === PAD[1]) return "";
+  if (f.name === PAD[0] && fields.some(x => x.name === PAD[1])) return padWidget();
+  const wide = f.kind === "secret" || f.kind === "choice" || f.kind === "bool" || f.name === "data_root" || f.kind === "url";
+  const [label] = unitOf(f.label);
+  const head = f.kind === "bool" ? "" : f.kind === "choice" ? `<span class="flabel" id="l-${f.name}">${esc(label)}</span>` : `<label for="${fid(f.name)}">${esc(label)}</label>`;
+  const help = f.kind !== "bool" && (f.help || (f.kind === "choice" && CHOICE_HELP[values[f.name]]))
+    ? `<span class="help" id="help-${f.name}">${esc(f.help || CHOICE_HELP[values[f.name]])}</span>` : "";
+  const note = f.name === "data_root" ? '<div class="notice p" id="root-note" hidden>A new folder applies to Demos from now on; files already in the old one stay.</div>' : "";
+  return `<div class="field${wide ? " wide" : ""}" data-field="${f.name}">${head}${control(f)}<span class="err" id="err-${f.name}"></span>${help}${note}</div>`;
 }
 
-// Sign in with FACEIT fills in the nickname and SteamID below; without a client ID there is no button.
+// Sign in with FACEIT fills in the nickname and SteamID; without a client ID there is no button.
 function faceitBlock() {
-  if (!loginUrl) return "";
-  const signedIn = values.faceit_nickname
-    ? `<span class="muted">Signed in as <b>${esc(values.faceit_nickname)}</b>.</span>` : "";
-  const note = signInNote ? `<p class="note">${signInNote}</p>` : "";
-  return `<h2>FACEIT sign-in</h2>
-    <p class="field"><a class="skip" href="${esc(loginUrl)}">Sign in with FACEIT</a> ${signedIn}</p>
-    ${note}`;
+  if (!loginUrl && !signInNote) return "";
+  const who = values.faceit_nickname ? `Signed in as <b>${esc(values.faceit_nickname)}</b>.` : "Sign in so the app knows which FACEIT player you are.";
+  return `<div class="signin" id="faceit" style="grid-column:1 / -1"><span class="who"><span class="flabel" style="display:block">FACEIT sign-in</span><span class="help" style="display:block">${signInNote || who}</span></span>
+    ${loginUrl ? `<a class="primary" href="${esc(loginUrl)}">Sign in with FACEIT</a>` : ""}</div>`;
 }
 
 function render() {
@@ -84,9 +119,84 @@ function render() {
     if (!group) { group = {name: f.group, fields: []}; groups.push(group); }
     group.fields.push(f);
   }
-  document.getElementById("form").innerHTML = groups
-    .map(g => `<h2>${esc(g.name)}</h2>${g.fields.map(fieldRow).join("")}`).join("");
-  document.getElementById("faceit").innerHTML = faceitBlock();
+  const slug = name => "g-" + name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+  document.getElementById("snav").innerHTML = groups.map(g => `<a href="#${slug(g.name)}"><i></i>${esc(g.name)}</a>`).join("");
+  document.getElementById("form").innerHTML = groups.map((g, i) => `<section id="${slug(g.name)}" class="group cut rise" style="animation-delay:${i * 0.04}s" aria-labelledby="h-${slug(g.name)}">
+    <div class="gtitle"><h2 id="h-${slug(g.name)}" class="h2" style="font-size:28px">${esc(g.name)}</h2>${BLURB[g.name] ? `<span class="help">${BLURB[g.name]}</span>` : ""}</div>
+    <div class="fgrid">${g.name === "You" ? faceitBlock() : ""}${g.fields.map(fieldRow).join("")}</div></section>`).join("");
+  document.querySelectorAll(".seg").forEach(placePill);
+  updatePad();
+  updateDepends();
+  updateDirty();
+}
+
+function placePill(seg) {
+  const on = seg.querySelector("button.on"), pill = seg.querySelector(".pill2");
+  if (!on || !pill) return;
+  pill.style.left = on.offsetLeft + "px"; pill.style.width = on.offsetWidth + "px";
+}
+
+function updatePad() {
+  const b = document.getElementById(fid(PAD[0])), a = document.getElementById(fid(PAD[1]));
+  if (!b || !a) return;
+  const before = parseFloat(b.value) || 0, after = parseFloat(a.value) || 0, total = Math.max(1, before + after);
+  const span = 76, start = 12, frag = start + span * before / total;
+  const box = b.closest("[data-field]");
+  Object.assign(box.querySelector(".pre").style, {left: start + "%", width: (span * before / total) + "%"});
+  Object.assign(box.querySelector(".post").style, {left: frag + "%", width: (span * after / total) + "%"});
+  box.querySelector(".frag").style.left = frag + "%";
+  document.getElementById("pad-b").textContent = `${before} s before`;
+  document.getElementById("pad-a").textContent = `${after} s after`;
+}
+
+// "Minutes after you stop playing" means nothing while Match alerts are off.
+function updateDepends() {
+  const alerts = document.getElementById(fid("match_alerts"));
+  const minutes = document.querySelector('[data-field="stopped_playing_minutes"]');
+  if (alerts && minutes) minutes.classList.toggle("off", alerts.getAttribute("aria-checked") !== "true");
+}
+
+function readField(f) {
+  const el = document.getElementById(fid(f.name));
+  if (f.kind === "bool") return el.getAttribute("aria-checked") === "true";
+  if (el.dataset.choice !== undefined) return el.dataset.value;
+  if (f.kind === "int") return el.value.trim() === "" ? null : parseInt(el.value, 10);
+  if (f.kind === "number") return el.value.trim() === "" ? null : parseFloat(el.value);
+  return el.value;
+}
+
+function changes() {
+  const out = {};
+  for (const f of fields) {
+    if (f.kind === "secret") {
+      const typed = document.getElementById(fid(f.name)).value;
+      if (typed) out[f.name] = typed;
+      else if (removedSecrets.has(f.name)) out[f.name] = null;
+      continue;
+    }
+    out[f.name] = readField(f);
+  }
+  return out;
+}
+
+function updateDirty() {
+  const now = changes();
+  const n = Object.entries(now).filter(([k, v]) => {
+    const f = fields.find(x => x.name === k);
+    return f.kind === "secret" ? true : String(v ?? "") !== String(values[k] ?? "");
+  }).length;
+  const bar = document.getElementById("savebar");
+  bar.hidden = n === 0;
+  if (n) { document.getElementById("result").hidden = true; document.getElementById("dirty-text").textContent = n === 1 ? "1 unsaved change" : `${n} unsaved changes`; }
+  const root = document.getElementById(fid("data_root")), note = document.getElementById("root-note");
+  if (root && note) note.hidden = root.value === String(values.data_root ?? "");
+  const sid = document.getElementById(fid("subject_steamid"));
+  if (sid) {
+    const wrap = sid.parentElement, ok = /^7656119\d{10}$/.test(sid.value);
+    const icon = wrap.querySelector(".ok");
+    if (ok && !icon) wrap.insertAdjacentHTML("beforeend", okIcon);
+    if (!ok && icon) icon.remove();
+  }
 }
 
 async function load() {
@@ -94,20 +204,12 @@ async function load() {
   const data = await response.json();
   fields = data.fields;
   values = data.values;
-  secretsSet = data.secrets_set;
+  secretsSet = data.secrets_set || {};
   loginUrl = data.faceit_login_url || "";
+  warnings = data.warnings || [];
   removedSecrets = new Set();
-  document.getElementById("notice").innerHTML = data.warnings.length
-    ? `<ul>${data.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : "";
+  document.getElementById("notice").innerHTML = warnings.map(w => `<div class="notice p rise">${ICON.info}<span>${esc(w)}</span></div>`).join("");
   render();
-}
-
-function readField(f) {
-  const el = document.getElementById(`f-${f.name}`);
-  if (f.kind === "bool") return el.checked;
-  if (f.kind === "int") return el.value === "" ? null : parseInt(el.value, 10);
-  if (f.kind === "number") return el.value === "" ? null : parseFloat(el.value);
-  return el.value;
 }
 
 // FACEIT sends the user back with ?code=…&state=… (the fragment too, if a relay forwards it that
@@ -135,81 +237,121 @@ async function finishSignIn() {
 }
 
 // Asks the app to resolve the typed FACEIT name; it saves the nickname and the SteamID itself. Only
-// those two boxes are filled in afterwards: a load() here would rebuild the form and drop whatever
-// else is typed but not saved yet.
-async function lookupName() {
+// those two boxes change afterwards, so nothing else typed but not saved is lost.
+async function lookupName(button) {
   const err = document.getElementById("err-faceit_nickname");
-  const result = document.getElementById("result");
-  const nickname = (document.getElementById("f-faceit_nickname").value || "").trim();
+  const nickname = (document.getElementById(fid("faceit_nickname")).value || "").trim();
   err.textContent = "";
-  if (!nickname) {
-    err.textContent = "type your FACEIT name first";
-    return;
-  }
+  if (!nickname) { err.textContent = "Type your FACEIT name first"; return; }
+  button.disabled = true;
   const response = await api("api/faceit/lookup", {
-    method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({nickname}),
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({nickname}),
   });
+  button.disabled = false;
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    err.textContent = data.error || "FACEIT lookup failed";
-    return;
-  }
+  if (!response.ok) { err.textContent = data.error || "FACEIT lookup failed"; return; }
   values.faceit_nickname = data.nickname;
   values.subject_steamid = data.steamid;
-  document.getElementById("f-faceit_nickname").value = data.nickname;
-  document.getElementById("f-subject_steamid").value = data.steamid;
+  document.getElementById(fid("faceit_nickname")).value = data.nickname;
+  const sid = document.getElementById(fid("subject_steamid"));
+  if (sid) sid.value = data.steamid;
   document.getElementById("err-subject_steamid").textContent = "";
-  document.getElementById("faceit").innerHTML = faceitBlock();
-  result.textContent = `Found ${data.nickname}.`;
+  const block = document.getElementById("faceit");
+  if (block) block.outerHTML = faceitBlock();
+  updateDirty();
+  toast(`${ICON.check}<span>Found ${esc(data.nickname)}. Nickname and SteamID are saved.</span>`, 3600);
 }
 
-document.getElementById("form").addEventListener("click", async e => {
-  if (e.target.closest("button[data-lookup]")) {
-    await lookupName();
-    return;
-  }
-  const remove = e.target.closest("button[data-remove-secret]");
+const form = document.getElementById("form");
+form.addEventListener("input", e => {
+  if (e.target.type === "range") updatePad();
+  updateDirty();
+});
+form.addEventListener("change", updateDirty);
+form.addEventListener("click", async e => {
+  const t = e.target;
+  if (t.closest("button[data-lookup]")) { await lookupName(t.closest("button")); return; }
+  const remove = t.closest("button[data-remove-secret]");
   if (remove) {
-    // Only this row changes: render() would rebuild the form and drop the unsaved edits.
+    // Only this row changes: a full render would drop the unsaved edits.
     const name = remove.dataset.removeSecret;
     removedSecrets.add(name);
     secretsSet[name] = false;
-    document.getElementById(`f-${name}`).value = "";
     document.getElementById(`saved-${name}`).remove();
-  }
-});
-
-document.getElementById("save").addEventListener("click", async () => {
-  const changes = {};
-  for (const f of fields) {
-    if (f.kind === "secret") {
-      const typed = document.getElementById(`f-${f.name}`).value;
-      if (typed) changes[f.name] = typed;
-      else if (removedSecrets.has(f.name)) changes[f.name] = null;
-      continue;
-    }
-    changes[f.name] = readField(f);
-  }
-  const response = await api("api/settings", {
-    method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify(changes),
-  });
-  const data = await response.json();
-  const result = document.getElementById("result");
-  document.querySelectorAll(".err").forEach(el => el.textContent = "");
-  if (response.status === 400) {
-    result.textContent = "";
-    for (const [name, message] of Object.entries(data.errors || {})) {
-      const el = document.getElementById(`err-${name}`);
-      if (el) el.textContent = message;
-    }
+    const input = document.getElementById(fid(name));
+    input.value = ""; input.placeholder = "Paste a new one, or save to remove it"; input.focus();
+    updateDirty();
     return;
   }
-  result.textContent = data.restart_needed ? "Saved. The port changes at the next start." : "Saved.";
-  load();
+  const pick = t.closest("[data-pick]");
+  if (pick) {
+    const box = pick.closest("[data-choice]");
+    box.dataset.value = pick.dataset.pick;
+    box.querySelectorAll("[data-pick]").forEach(b => { const on = b === pick; b.classList.toggle("on", on); b.setAttribute("aria-checked", on); });
+    if (box.classList.contains("seg")) placePill(box);
+    const name = box.id.slice(2), help = document.getElementById(`help-${name}`);
+    if (help && CHOICE_HELP[box.dataset.value] && !fields.find(f => f.name === name).help) help.textContent = CHOICE_HELP[box.dataset.value];
+    updateDirty();
+    return;
+  }
+  const tog = t.closest("[data-bool]");
+  if (tog) { tog.setAttribute("aria-checked", tog.getAttribute("aria-checked") !== "true"); updateDepends(); updateDirty(); return; }
+  const step = t.closest("[data-step]");
+  if (step) {
+    const input = document.getElementById(fid(step.dataset.for));
+    const by = parseFloat(input.dataset.stepby) * +step.dataset.step;
+    let v = (parseFloat(input.value) || 0) + by;
+    if (input.dataset.min !== undefined) v = Math.max(+input.dataset.min, v);
+    if (input.dataset.max !== undefined) v = Math.min(+input.dataset.max, v);
+    input.value = String(Math.round(v * 100) / 100);
+    updateDirty();
+    return;
+  }
+  const browse = t.closest("[data-browse]");
+  if (browse) {
+    const input = document.getElementById(fid(browse.dataset.browse));
+    const picked = await window.pywebview.api.pick_folder(input.value);
+    if (picked) { input.value = Array.isArray(picked) ? picked[0] : picked; updateDirty(); }
+  }
 });
 
-(async () => { await finishSignIn(); await load(); })();
+document.getElementById("discard").addEventListener("click", () => { load(); });
+document.getElementById("save").addEventListener("click", async () => {
+  const button = document.getElementById("save");
+  button.disabled = true;
+  const response = await api("api/settings", {
+    method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify(changes()),
+  });
+  button.disabled = false;
+  const data = await response.json().catch(() => ({}));
+  document.querySelectorAll(".err").forEach(el => el.textContent = "");
+  document.querySelectorAll(".inp.bad").forEach(el => el.classList.remove("bad"));
+  if (response.status === 400) {
+    let first = null;
+    for (const [name, message] of Object.entries(data.errors || {})) {
+      const el = document.getElementById(`err-${name}`);
+      const f = fields.find(x => x.name === name);
+      if (el) { el.innerHTML = `${ICON.info.replace('width="18" height="18"', 'width="14" height="14"')}${esc(unitOf(f ? f.label : name)[0])} ${esc(message)}`; first = first || el; }
+      document.getElementById(fid(name))?.classList.add("bad");
+    }
+    first?.scrollIntoView({behavior: "smooth", block: "center"});
+    return;
+  }
+  await load();
+  const result = document.getElementById("result");
+  result.innerHTML = `${ICON.check.replace('stroke="currentColor"', 'stroke="#FF8A3D"')}<span>${data.restart_needed ? "Saved. The port changes at the next start." : "Saved."}</span>`;
+  result.hidden = false;
+  setTimeout(() => { result.hidden = true; }, 2600);
+});
+
+(async () => {
+  addEventListener("pywebviewready", () => {
+    if (window.pywebview?.api?.pick_folder && !canPick) { canPick = true; if (fields.length) render(); }
+  });
+  canPick = !!window.pywebview?.api?.pick_folder;
+  await finishSignIn();
+  await load();
+})();
 </script>
 </body>
 </html>

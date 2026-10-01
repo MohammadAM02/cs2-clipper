@@ -35,9 +35,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import socket
 import sqlite3
+import subprocess
 import threading
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -169,6 +171,26 @@ def reels_row(index: Index, match: sqlite3.Row) -> dict:
     }
 
 
+def reel_frame_file(video: Path, ffmpeg: str) -> Path | None:
+    """The still the Reels carousel shows for `video`, cut on the first request and kept beside it; None
+    when ffmpeg cannot cut one. Three seconds in lands just before the first Frag (4 s of padding). It is
+    cut under a name of its own and moved into place whole, so a second request for the same Reel never
+    serves a half-written file."""
+    frame = video.with_suffix(".jpg")
+    if frame.is_file() and frame.stat().st_mtime >= video.stat().st_mtime:
+        return frame
+    part = video.with_name(f"{video.stem}.{threading.get_ident()}.part.jpg")
+    try:
+        subprocess.run([ffmpeg, "-y", "-ss", "3", "-i", str(video), "-frames:v", "1", "-vf", "scale=1280:-2",
+                        "-q:v", "4", str(part)],
+                       capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+        os.replace(part, frame)      # no `part` at all when ffmpeg cut nothing (a Reel under 3 s)
+    except (OSError, subprocess.SubprocessError):
+        part.unlink(missing_ok=True)
+        return frame if frame.is_file() else None
+    return frame
+
+
 def _faceit_not_set_up(token: str, state: str) -> str:
     raise OAuthError("FACEIT sign-in is not set up")
 
@@ -191,6 +213,7 @@ class WebContext:
     warnings: Callable[[], tuple[str, ...]] = tuple
     checks: Callable[[], list[Check]] = list
     quit: Callable[[str | None], str] = lambda mode: "now"
+    pause: Callable[[], None] = lambda: None
     resume: Callable[[], None] = lambda: None
     log_lines: Callable[[int], list[str]] = applog.recent
     open_folder: Callable[[Path], None] = lambda folder: None
@@ -280,6 +303,17 @@ def create_app(ctx: WebContext) -> Flask:
         }
         return _no_store(jsonify(body))
 
+    @app.get("/api/summary")
+    def api_summary():
+        """What the nav's status pill needs on every page: `/api/status` without its six checks."""
+        snapshot = ctx.snapshot()
+        return _no_store(jsonify(
+            summary=summary(snapshot),
+            rendering=snapshot.rendering is not None,
+            paused_by=snapshot.paused_by,
+            problems=list(snapshot.problems),
+        ))
+
     @app.get("/api/log")
     def api_log():
         return _no_store(jsonify(lines=ctx.log_lines(200)))
@@ -299,6 +333,11 @@ def create_app(ctx: WebContext) -> Flask:
         finally:
             index.close()
         return _no_store(jsonify(state=state))
+
+    @app.post("/api/pause")
+    def api_pause():
+        ctx.pause()
+        return Response(status=204)
 
     @app.post("/api/resume")
     def api_resume():
@@ -336,6 +375,20 @@ def create_app(ctx: WebContext) -> Flask:
         if row is None or not Path(row["path"]).is_file():
             return Response(status=404)
         return send_file(Path(row["path"]), mimetype="video/mp4", conditional=True)
+
+    @app.get("/reels/<int:reel_id>.jpg")
+    def reel_frame(reel_id: int):
+        index = Index(ctx.index_path)
+        try:
+            row = index.reel(reel_id)
+        finally:
+            index.close()
+        if row is None or not Path(row["path"]).is_file():
+            return Response(status=404)
+        frame = reel_frame_file(Path(row["path"]), ctx.load_settings().config.ffmpeg)
+        if frame is None:
+            return Response(status=404)
+        return send_file(frame, mimetype="image/jpeg", conditional=True)
 
     @app.post("/api/reels/<checksum:checksum>/open-folder")
     def api_open_folder(checksum: str):

@@ -10,25 +10,32 @@
 <script src="/app.js"></script>
 <script>renderNav("/demos");</script>
 <main>
-  <p class="brand"><span>CS2</span>clipper</p>
-  <h1>Demos to grab</h1>
-  <p class="sum" id="sum">Loading…</p>
-  <p class="note" id="note" hidden>Grab these at your PC. Watch Demo downloads to whichever device you press it on.</p>
-  <div class="wrap"><table>
-    <thead><tr><th>Match</th><th>Result</th><th>Highlights</th><th>Rating 2.0</th><th>K–D</th><th>ADR</th>
-      <th>Link expires</th><th></th></tr></thead>
-    <tbody id="rows"></tbody>
-  </table></div>
+  <p class="brand" id="brand" hidden></p>
+  <section class="rise">
+    <h1 class="title">Demos to grab</h1>
+    <p class="lead" id="sum">Loading…</p>
+  </section>
+  <p class="notice w" id="note" hidden>Grab these at your PC. Watch Demo downloads to whichever device you press it on.</p>
+  <div class="dgrid dhead" id="head" aria-hidden="true" hidden><span>Match</span><span>Result</span><span>Highlights</span><span>Rating 2.0</span><span>K–D</span><span>ADR</span><span>Link expires</span><span></span></div>
+  <div id="rows" role="list" aria-label="Matches" style="display:flex;flex-direction:column;gap:8px"></div>
+  <div class="emptybig cut rise" id="empty" hidden>
+    <svg width="72" height="72" viewBox="0 0 72 72" fill="none" aria-hidden="true"><circle cx="36" cy="36" r="34" stroke="#262626" stroke-dasharray="4 6"/><circle cx="36" cy="36" r="22" fill="#1F1209"/><polyline points="27 36 33 42 45 30" stroke="#FF5500" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <h2>All caught up</h2>
+    <p>New matches show up here after you play. You'll get a Match Alert when one has Highlights.</p>
+  </div>
 </main>
 <script>
-const WORDS = [["5k", "ACE", "ace"], ["4k", "4K", "k4"], ["3k", "3K", "k3"]];
-const opened = new Set();
+// Demos to grab (spec: Pages -> Demos to grab): the one page a phone can open too. On the PC each match
+// has Open (its FACEIT match room) and Skip; elsewhere only Skip, with a note to grab at the PC.
+const WORDS = [["5k", "ACE", "b-ace"], ["4k", "4K", "b-4k"], ["3k", "3K", "b-3k"]];
+const opened = new Set(JSON.parse(sessionStorage.getItem("opened") || "[]"));
 let data = {this_pc: false, rows: []};
-const esc = s => String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+
+if (!onThisPC()) { const b = document.getElementById("brand"); b.hidden = false; b.innerHTML = `${MARK}<span>CS2 Clipper</span>`; }
 
 function badges(h) {
   return WORDS.filter(([k]) => h[k]).map(([k, word, cls]) =>
-    `<span class="b ${cls}">${h[k] > 1 ? h[k] + "× " : ""}${word}</span>`).join("");
+    `<span class="badge ${cls}">${h[k] > 1 ? h[k] + "× " : ""}${word}</span>`).join("");
 }
 function when(iso) {
   const d = new Date(iso);
@@ -42,50 +49,68 @@ function left(iso) {
 }
 function actions(r) {
   if (r.state === "grabbed") {
-    return `<span class="got">✓ Got it${r.waiting_for ? `<small>rendering waits: ${esc(r.waiting_for)}</small>` : ""}</span>`;
+    return `<span class="got"><b>${ICON.check.replace('stroke="currentColor"', 'stroke="#FF5500"')}Got it</b>${r.waiting_for ? `<small>Rendering waits: ${esc(r.waiting_for)}</small>` : ""}</span>`;
   }
   if (r.state === "skipped") {
-    return `<span class="muted">Skipped</span> <button class="undo" data-act="undo" data-id="${esc(r.id)}">Undo</button>`;
+    return `<span class="muted">Skipped</span> <button class="link" data-act="undo" data-id="${esc(r.id)}">Undo</button>`;
   }
-  const open = !data.this_pc ? "" : opened.has(r.id) ? `<span class="muted">Waiting for the download…</span>`
-    : `<a class="open" href="${esc(r.url)}" target="_blank" rel="noopener" data-open="${esc(r.id)}">Open</a>`;
-  return `${open}<button class="skip" data-act="skip" data-id="${esc(r.id)}">Skip</button>`;
+  const open = !data.this_pc ? "" : opened.has(r.id) ? '<span class="wait"><i></i><i></i><i></i>Waiting for the download</span>'
+    : `<a class="primary" href="${esc(r.url)}" target="_blank" rel="noopener" data-open="${esc(r.id)}">Open${ICON.out}</a>`;
+  return `${open}<button class="ghost" data-act="skip" data-id="${esc(r.id)}">Skip</button>`;
+}
+function row(r) {
+  const rating = r.rating >= 1.1 ? "good" : r.rating < 0.95 ? "bad" : "";
+  const rateColor = rating === "good" ? "#F2EFEA" : rating === "bad" ? "#8F8F8F" : "#D6D3CE";
+  const arrow = rating === "good" ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="#FF5500" aria-label="good"><polygon points="12 4 22 18 2 18"/></svg>'
+    : rating === "bad" ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="#6F6F6F" aria-label="low"><polygon points="2 6 22 6 12 20"/></svg>' : "";
+  const days = (new Date(r.expires_at) - Date.now()) / 86400000, soon = days <= 3;
+  const done = r.state === "skipped" || r.state === "grabbed";
+  const resColor = r.won ? "#F2EFEA" : "#8F8F8F";
+  return `<article class="drow dgrid${done ? " done" : ""}" role="listitem">
+    <div class="who"><span class="maptile">${mapAbbr(r.map)}</span><span style="min-width:0"><b>${esc(r.map)}</b><small>${when(r.finished_at)}</small></span></div>
+    <div class="res" style="color:${resColor}"><b class="num">${esc(r.score)}</b><small>${r.won ? "Win" : "Loss"}</small></div>
+    <div class="hls" style="display:flex;gap:5px;flex-wrap:wrap">${badges(r.highlights)}</div>
+    <div class="rate c-rate" style="color:${rateColor}"><span class="num">${r.rating.toFixed(2)}</span>${arrow}</div>
+    <span class="num c-kd" style="font-size:15px">${esc(r.kd)}</span>
+    <span class="num c-adr" style="font-size:15px">${r.adr.toFixed(1)}</span>
+    <div class="stats"><div><b style="color:${rateColor}">${r.rating.toFixed(2)}</b><span>Rating 2.0</span></div><div><b>${esc(r.kd)}</b><span>K–D</span></div><div><b>${r.adr.toFixed(1)}</b><span>ADR</span></div></div>
+    <div class="exp"><span style="font-size:13.5px;color:${soon ? "#FFB27A" : "#BDBDBD"}">${left(r.expires_at)}</span>${r.reminded ? '<span class="pill">Reminder</span>' : ""}
+      <div class="life${soon ? " soon" : ""}" title="FACEIT keeps a Demo link for about 30 days"><i data-w="${Math.max(2, Math.min(100, days / 30 * 100)).toFixed(1)}%"></i></div></div>
+    <div class="dact">${actions(r)}</div>
+  </article>`;
 }
 function render() {
-  const pending = data.rows.filter(r => r.state === "ready" || r.state === "announced");
+  const pending = pendingRows(data.rows);
   const count = pending.reduce((n, r) => n + r.highlights["3k"] + r.highlights["4k"] + r.highlights["5k"], 0);
   const soonest = [...pending].sort((a, b) => a.expires_at.localeCompare(b.expires_at))[0];
   const urgent = soonest && new Date(soonest.expires_at) - Date.now() <= 3 * 86400000;
-  document.getElementById("sum").textContent = pending.length
-    ? `${pending.length} match${pending.length > 1 ? "es" : ""} · ${count} Highlight${count > 1 ? "s" : ""}`
-      + (urgent ? ` · ${soonest.map} expires in ${left(soonest.expires_at)}` : "")
+  const sum = document.getElementById("sum");
+  sum.innerHTML = pending.length
+    ? `${esc(plural(pending.length, "match", "matches"))} with ${esc(plural(count, "Highlight"))} to grab.`
+      + (urgent ? ` <span class="warn">${esc(soonest.map)} expires in ${left(soonest.expires_at)}.</span>` : "")
     : "All caught up. New matches show up here after you play.";
+  setNavCount(pending.length);
   document.getElementById("note").hidden = data.this_pc;
-  document.getElementById("rows").innerHTML = data.rows.map(r => {
-    const rating = r.rating >= 1.1 ? "good" : r.rating < 0.95 ? "bad" : "";
-    const soon = new Date(r.expires_at) - Date.now() <= 3 * 86400000;
-    return `<tr class="${r.state === "skipped" || r.state === "grabbed" ? "done" : ""}">
-      <td><b>${esc(r.map)}</b><small>${when(r.finished_at)}</small></td>
-      <td class="num ${r.won ? "good" : "bad"}">${r.won ? "W" : "L"} ${esc(r.score)}</td>
-      <td>${badges(r.highlights)}</td>
-      <td class="num ${rating}">${r.rating.toFixed(2)}</td>
-      <td class="num">${esc(r.kd)}</td>
-      <td class="num">${r.adr.toFixed(1)}</td>
-      <td><span class="${soon ? "warn" : ""}">${left(r.expires_at)}</span>${r.reminded ? '<span class="pill">Reminder</span>' : ""}</td>
-      <td class="act">${actions(r)}</td></tr>`;
-  }).join("");
+  document.getElementById("head").hidden = !data.rows.length;
+  document.getElementById("empty").hidden = data.rows.length > 0;
+  sync(document.getElementById("rows"), data.rows, r => r.id, row);
 }
 async function load() {
   try {
     const response = await api("demos.json");
     if (response.ok) { data = await response.json(); render(); }
   } catch (e) {
-    document.getElementById("sum").textContent = "Can't reach clipper right now. Is it running?";
+    document.getElementById("sum").textContent = "Can't reach CS2 Clipper right now. Is it running?";
   }
 }
 document.addEventListener("click", async e => {
   const link = e.target.closest("a[data-open]");
-  if (link) { opened.add(link.dataset.open); setTimeout(render, 0); return; }
+  if (link) {
+    opened.add(link.dataset.open);
+    sessionStorage.setItem("opened", JSON.stringify([...opened]));
+    setTimeout(render, 0);
+    return;
+  }
   const button = e.target.closest("button[data-act]");
   if (!button) return;
   button.disabled = true;

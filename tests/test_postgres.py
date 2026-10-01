@@ -31,7 +31,8 @@ class FakePgCtl:
     def __call__(self, args, **kwargs):
         assert args[0] == str(BIN / "pg_ctl.exe")
         self.calls.append(args[1:])
-        return subprocess.CompletedProcess(args, self.codes.get(args[-1], 0))
+        code = self.codes.get(args[-1], 0)
+        return subprocess.CompletedProcess(args, code.pop(0) if isinstance(code, list) else code)
 
 
 @pytest.fixture
@@ -70,6 +71,14 @@ def test_a_cluster_that_will_not_start_names_its_log(pg_ctl):
 
     with pytest.raises(RuntimeError, match="Postgres did not start; see .*postgres.log"):
         postgres.ensure_running(BIN, DATA, 5433)
+
+
+def test_a_start_that_another_start_beat_to_it_is_not_an_error(pg_ctl):
+    pg_ctl.codes = {"status": [3, 0], "start": 1}       # down, then up: setup and the worker both started it
+
+    postgres.ensure_running(BIN, DATA, 5433)
+
+    assert [call[-1] for call in pg_ctl.calls] == ["status", "start", "status"]
 
 
 def test_stop_waits_until_the_cluster_is_down(pg_ctl):

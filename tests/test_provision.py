@@ -679,6 +679,22 @@ def test_status_on_a_pc_that_has_everything_needs_nothing(world, tmp_path):
     assert (status["needed"], status["download_bytes"], states(status)) == (False, 0, ["ok"] * 5)
 
 
+def test_a_step_that_replaces_what_is_already_there_is_an_update(world, tmp_path):
+    install_by_hand(world, tmp_path, hlae="2.191.0")
+
+    status = provision.Setup(lambda: context(world)).status()
+
+    assert [(step["id"], step["state"], step["update"]) for step in status["steps"] if step["state"] != "ok"] == [
+        ("hlae", "needed", True)]
+    assert [step["update"] for step in status["steps"]] == [False, False, False, False, True]
+
+
+def test_on_a_fresh_pc_nothing_is_an_update(world):
+    status = provision.Setup(lambda: context(world)).status()
+
+    assert [step["update"] for step in status["steps"]] == [False] * 5
+
+
 def test_a_run_goes_on_a_thread_one_at_a_time_and_ends_with_nothing_needed(world):
     threads, ended = Threads(), []
     setup = provision.Setup(lambda: context(world), after=lambda: ended.append(True), spawn=threads)
@@ -747,6 +763,72 @@ def test_a_run_that_cannot_even_begin_still_ends(world):
     threads.run()
 
     assert ended == [True] and setup.start() is True        # not stuck on "running"
+
+
+def test_running_is_true_from_the_start_of_a_run_to_its_end(world):
+    threads = Threads()
+    setup = provision.Setup(lambda: context(world), spawn=threads)
+
+    assert setup.running is False
+    setup.start()
+    assert setup.running is True
+    threads.run()
+    assert setup.running is False
+
+
+class Clock:
+    def __init__(self):
+        self.now = 100.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_between_runs_the_pc_is_looked_at_only_every_few_seconds(world, tmp_path):
+    clock, looks = Clock(), []
+
+    def looked_at():
+        looks.append(clock.now)
+        return context(world)
+    setup = provision.Setup(looked_at, clock=clock)
+
+    assert setup.status()["needed"] is True
+    install_by_hand(world, tmp_path)
+    clock.now += provision.LOOK_SECONDS - 0.1
+    assert setup.status()["needed"] is True and len(looks) == 1     # Status asks far more often than the PC changes
+
+    clock.now += 0.1
+    status = setup.status()
+    assert (status["needed"], states(status), len(looks)) == (False, ["ok"] * 5, 2)
+
+
+def test_what_status_is_given_cannot_change_what_the_next_one_is_told(world):
+    setup = provision.Setup(lambda: context(world), clock=Clock())
+
+    setup.status()["steps"].clear()
+
+    assert states(setup.status()) == ["needed"] * 5
+
+
+def test_what_a_run_changed_is_seen_as_soon_as_it_ends(world):
+    threads = Threads()
+    setup = provision.Setup(lambda: context(world), spawn=threads, clock=Clock())
+    assert setup.status()["needed"] is True         # looked at just before the run
+
+    setup.start()
+    threads.run()
+
+    assert setup.status()["needed"] is False        # not what that look found
+
+
+def test_a_look_that_fails_is_answered_and_not_raised(world):
+    def no_context():
+        raise OSError("settings.json is locked")
+
+    status = provision.Setup(no_context).status()
+
+    assert status == {"running": False, "needed": True, "steps": [], "download_bytes": 0, "progress": None,
+                      "error": "settings.json is locked"}
 
 
 # --- the real tools ----------------------------------------------------------------------------------

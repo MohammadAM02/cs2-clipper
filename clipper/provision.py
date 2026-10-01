@@ -51,6 +51,7 @@ FFMPEG_FILES = ("bin/ffmpeg.exe", "bin/ffprobe.exe", "LICENSE", "README.txt")
 VC_RUNTIME = ("vcruntime140.dll", "msvcp140.dll")     # what the Postgres programs import and do not bring
 VC_REDIST_URL = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 STRUCK = "***"
+LOOK_SECONDS = 5.0                          # Status asks far more often than this: how long a look is good for
 
 
 class SetupError(Exception):
@@ -421,8 +422,10 @@ def _run(ctx: Context, report: Callable[[str, str], None]) -> str | None:
 
 
 def _look(ctx: Context) -> dict:
+    """`update` is true of a needed step that replaces what is there already: a newer HLAE."""
     todo = needed(ctx)
-    return {"steps": [{"id": step.id, "name": step.name, "state": "needed" if step.id in todo else "ok"}
+    return {"steps": [{"id": step.id, "name": step.name, "state": "needed" if step.id in todo else "ok",
+                       "update": step.id in todo and step.installed is not None and step.installed(ctx)}
                       for step in STEPS],
             "download_bytes": sum(step.download(ctx) for step in STEPS if step.id in todo)}
 
@@ -436,13 +439,20 @@ class Setup:
     Context for a run or a look; `after()` is called when a run has ended, however it ended."""
 
     def __init__(self, context: Callable[[], Context], *, after: Callable[[], None] = lambda: None,
-                 spawn: Callable[[Callable[[], None]], None] = _on_a_thread):
-        self._context, self._after, self._spawn = context, after, spawn
+                 spawn: Callable[[Callable[[], None]], None] = _on_a_thread,
+                 clock: Callable[[], float] = time.monotonic):
+        self._context, self._after, self._spawn, self._clock = context, after, spawn, clock
         self._lock = threading.Lock()
         self._running = False
         self._seen: dict | None = None          # during a run: what it found as it began, and each step's state since
+        self._looked: tuple[float, dict] | None = None      # between runs: when the PC was looked at, and what it had
         self._progress: dict[str, int] | None = None
         self._error: str | None = None
+
+    @property
+    def running(self) -> bool:
+        with self._lock:
+            return self._running
 
     def start(self) -> bool:
         """Starts a run. False when one is under way already."""
@@ -454,16 +464,32 @@ class Setup:
         return True
 
     def status(self) -> dict:
-        """Each step's state ("ok", "needed", "running" or "failed"), what a run would download, how
-        the download under way is going, and what the last run ended on. While a run is under way the
-        states are the ones it reports, so nothing is read from folders it is busy filling."""
+        """Each step's state ("ok", "needed", "running" or "failed") and whether it is an update, what a
+        run would download, how the download under way is going, and what the last run ended on. While
+        a run is under way the states are the ones it reports, so nothing is read from folders it is
+        busy filling. A PC that cannot be looked at is answered too: no steps, and why in `error`."""
         with self._lock:
             running, progress, error = self._running, self._progress, self._error
             seen = copy.deepcopy(self._seen)
         if seen is None:
-            seen = _look(self._context())
+            try:
+                seen = self._between_runs()
+            except Exception as exc:  # noqa: BLE001 - Status asks every two seconds: it is told why, and nothing is logged
+                return {"running": running, "needed": True, "steps": [], "download_bytes": 0, "progress": progress,
+                        "error": _said(exc)}
         return {"running": running, "needed": any(step["state"] != "ok" for step in seen["steps"]), **seen,
                 "progress": progress, "error": error}
+
+    def _between_runs(self) -> dict:
+        """What the PC has, looked at no more than once in LOOK_SECONDS."""
+        now = self._clock()
+        with self._lock:
+            looked = self._looked
+        if looked is None or now - looked[0] >= LOOK_SECONDS:
+            looked = (now, _look(self._context()))
+            with self._lock:
+                self._looked = looked
+        return copy.deepcopy(looked[1])
 
     def _run(self) -> None:
         error = None
@@ -480,6 +506,7 @@ class Setup:
         finally:
             with self._lock:
                 self._running, self._seen, self._progress, self._error = False, None, None, error
+                self._looked = None             # whatever was found before the run, the run has changed it
             self._after()
 
     def _on_step(self, step_id: str, state: str) -> None:

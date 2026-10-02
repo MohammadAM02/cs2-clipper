@@ -50,6 +50,11 @@ ICON.parent.mkdir(exist_ok=True)
 write_ico(ICON)
 
 datas = [(os.path.join(ROOT, "clipper", "pages"), "clipper/pages")]
+SHIPPED_ENV = os.path.join(ROOT, "packaging", "shipped.env")
+if os.path.isfile(SHIPPED_ENV):
+    # The FACEIT key this build ships to every install, at the bundle's root where move_in finds it.
+    # packaging/build.ps1 writes it from what this machine already uses (never committed, .gitignore).
+    datas.append((SHIPPED_ENV, "."))
 binaries = []
 hiddenimports = ["clr", "webview.platforms.edgechromium", "webview.platforms.winforms",
                  "webview.platforms.mshtml"] + collect_submodules("psycopg")

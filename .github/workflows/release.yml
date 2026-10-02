@@ -77,6 +77,11 @@ jobs:
       # not PowerShell 7. Inno Setup 6 is on the machine already.
       - name: Build the app and its installer
         shell: powershell
+        env:
+          # The FACEIT key every install gets, baked into the exe and never written to the repo.
+          # Without this secret the released installer carries no key and a friend cannot look up
+          # his own nickname -- see packaging/make_shipped_env.py.
+          CS2CLIPPER_FACEIT_KEY: ${{ secrets.CS2CLIPPER_FACEIT_KEY }}
         run: .\packaging\build.ps1 -Installer
 
       - name: The tag is the exe's version

@@ -18,4 +18,6 @@ data/
 .claude/worktrees/
 # the packaged exe (packaging/build.ps1)
 build/
+# the FACEIT key a packaged build ships to every install (packaging/make_shipped_env.py)
+packaging/shipped.env
 dist/

@@ -22,32 +22,35 @@ log = logging.getLogger(__name__)
 
 OLD_STEAMID = "76561198192858303"     # the old built-in default subject_steamid
 OLD_CLIPS_FOLDER = "E:/cs2clips"      # the old built-in default data_root
+SHIPPED_ENV = "shipped.env"           # the key a packaged build ships (packaging/build.ps1 writes it)
 
 
 def needed(repo_root: Path, data_dir: Path) -> bool:
-    """True when `data_dir` has no settings.json yet and the repo holds an old setup: any of
-    clipper.toml, .env, data\\clipper.sqlite, home\\ exists. A fresh clone has none of them, so
-    nothing is moved in."""
+    """True when `data_dir` has no settings.json yet and there is a setup to copy from: any of
+    clipper.toml, .env, shipped.env, data\\clipper.sqlite, home\\ exists. A fresh clone has none of them,
+    so nothing is moved in."""
     if (data_dir / "settings.json").exists():
         return False
     return any((
         (repo_root / "clipper.toml").exists(),
         (repo_root / ".env").exists(),
+        (repo_root / SHIPPED_ENV).exists(),
         (repo_root / "data" / "clipper.sqlite").exists(),
         (repo_root / "home").exists(),
     ))
 
 
-def move_in(repo_root: Path, data_dir: Path) -> list[str]:
+def move_in(repo_root: Path, data_dir: Path, old_defaults: bool = True) -> list[str]:
     """Copies the repo's old setup into `data_dir` (never moves, never deletes the originals).
-    Returns a short description of each thing copied."""
+    Returns a short description of each thing copied. `old_defaults` is False when there is no old
+    setup to speak of -- the packaged app -- so this developer's SteamID and clips folder stay out."""
     copied: list[str] = []
     if _copy_index(repo_root, data_dir):
         copied.append("the index")
     if _copy_csdm_home(repo_root, data_dir):
         copied.append("CS Demo Manager's settings folder")
 
-    settings_out, key_copied = _collect_settings(repo_root)
+    settings_out, key_copied = _collect_settings(repo_root, old_defaults)
     paths.atomic_write_text(data_dir / "settings.json", json.dumps(settings_out, indent=2, sort_keys=True))
     if settings_out:
         copied.append("the settings")
@@ -61,14 +64,17 @@ def move_in(repo_root: Path, data_dir: Path) -> list[str]:
 
 def on_start(repo_root: Path = REPO_ROOT) -> list[str]:
     """The call site: [] when CLIPPER_DATA_DIR is set (tests and development never copy the real
-    .env key, index or home\\), in the packaged exe (it has no repo to move in from), or when nothing
-    needs moving in; else the result of move_in()."""
-    if paths.overridden() or packaged.frozen():
+    .env key, index or home\\), or when there is nothing to move in; else the result of move_in().
+
+    In the packaged exe `repo_root` is the folder it unpacked into, which holds no repo: the only
+    thing there to move in is a `shipped.env` when the build was given a key to ship. This
+    developer's SteamID and clips folder must not follow it (old_defaults=False)."""
+    if paths.overridden():
         return []
     data_dir = paths.data_dir()
     if not needed(repo_root, data_dir):
         return []
-    return move_in(repo_root, data_dir)
+    return move_in(repo_root, data_dir, old_defaults=not packaged.frozen())
 
 
 # --- the index --------------------------------------------------------------------------------------------
@@ -136,20 +142,24 @@ def _copy_csdm_home(repo_root: Path, data_dir: Path) -> bool:
 # --- settings.json ------------------------------------------------------------------------------------------
 
 
-def _collect_settings(repo_root: Path) -> tuple[dict[str, object], bool]:
-    """The settings.json content to write, and whether it holds the FACEIT key."""
+def _collect_settings(repo_root: Path, old_defaults: bool = True) -> tuple[dict[str, object], bool]:
+    """The settings.json content to write, and whether it holds the FACEIT key. `old_defaults` is
+    False for the packaged app, which has no old setup: its `shipped.env` holds a key and nothing
+    else, so this developer's SteamID and clips folder stay out of someone else's install."""
     toml_values = _load_toml(repo_root / "clipper.toml")
     defaults_ = defaults()
     out: dict[str, object] = {
         name: value for name, value in toml_values.items()
         if name in defaults_ and differs_from_default(name, value, defaults_[name])
     }
-    if "subject_steamid" not in toml_values:
-        out["subject_steamid"] = OLD_STEAMID
-    if "data_root" not in toml_values:
-        out["data_root"] = OLD_CLIPS_FOLDER
+    if old_defaults:
+        if "subject_steamid" not in toml_values:
+            out["subject_steamid"] = OLD_STEAMID
+        if "data_root" not in toml_values:
+            out["data_root"] = OLD_CLIPS_FOLDER
 
-    env_values = _load_env(repo_root / ".env")
+    # The packaged app has no .env of its own: what the build shipped stands in for it.
+    env_values = _load_env(repo_root / ".env") or _load_env(repo_root / SHIPPED_ENV)
     nickname = env_values.get("FACEIT_NICKNAME", "")
     if nickname:
         out["faceit_nickname"] = nickname

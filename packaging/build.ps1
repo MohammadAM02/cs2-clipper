@@ -55,6 +55,9 @@ try {
     }
 
     Invoke-Tool 'uv sync' { uv sync --group build }
+    # The FACEIT key every install gets, written to the gitignored packaging\shipped.env and bundled
+    # into the exe by the spec. Never printed; the app protects it for the account that runs it.
+    Invoke-Tool 'shipped.env' { uv run --no-sync python packaging\make_shipped_env.py }
     Invoke-Tool 'PyInstaller' { uv run --no-sync pyinstaller --noconfirm --clean packaging\cs2clipper.spec }
 
     $exe = Join-Path $root 'dist\CS2Clipper.exe'

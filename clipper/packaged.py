@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import ctypes
 import io
+import os
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
+
+import psutil
 
 Check = tuple[str, Callable[[], object]]
 
@@ -31,6 +34,18 @@ def release_dll_directory() -> None:
     own. The window process keeps it: pywebview loads .NET and WebView2 from the bundle."""
     if frozen():
         ctypes.windll.kernel32.SetDllDirectoryW(None)
+
+
+def other_copies() -> list[psutil.Process]:
+    """The other processes running this exe's file; none when this is not the exe. The exe is one file
+    that runs as two processes, and the outer one is still clearing away what it unpacked for a moment
+    after the app inside it has ended: the file cannot be replaced until that one is gone too."""
+    if not frozen():
+        return []
+    mine = {os.getpid(), os.getppid()}
+    exe = os.path.normcase(sys.executable)
+    return [process for process in psutil.process_iter(["exe"])
+            if process.pid not in mine and os.path.normcase(process.info["exe"] or "") == exe]
 
 
 # --- the bundle check --------------------------------------------------------------------------------------

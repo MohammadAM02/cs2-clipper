@@ -262,3 +262,13 @@ def test_setup_releases_the_dll_search_path_before_it_starts_anything(events, mo
 
     assert main(["setup"]) == 0
     assert events == ["release", "setup"]
+
+
+def test_quit_asks_the_running_copy_to_quit_and_starts_nothing_else(monkeypatch):
+    # The installer runs it before it replaces the exe; its exit code says whether the copy has ended.
+    monkeypatch.setattr("clipper.cli.app.quit_running", lambda: 1)
+    monkeypatch.setattr("clipper.cli.app.run", lambda **kwargs: pytest.fail("quit starts no app"))
+    monkeypatch.setattr("clipper.cli.move_in.on_start", lambda: pytest.fail("quit moves nothing in"))
+    monkeypatch.setattr("clipper.cli.Index", lambda path: pytest.fail("quit opens no index"))
+
+    assert main(["quit"]) == 1

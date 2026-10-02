@@ -1,5 +1,6 @@
 """Command line (spec: The terminal): the app itself (no subcommand, or `run`), `setup` for a PC that
-is set up from a terminal or by a script, and status, retry, resume and highlights for development.
+is set up from a terminal or by a script, `quit` for the installer, which cannot replace an exe that is
+running, and status, retry, resume and highlights for development.
 `--window` is internal: the window process. So is `--bundle-check`: the build's check of the packaged
 exe (clipper.packaged)."""
 
@@ -152,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
                             help="no tray or window: the worker and the web server only")
     _add_open_argument(run_parser)
     commands.add_parser("setup", help="install what this PC lacks: CS Demo Manager, Postgres, FFmpeg and HLAE")
+    commands.add_parser("quit", help="ask the running copy to quit, and wait until it has")
     commands.add_parser("status", help="show every Demo's state and the Gate")
     commands.add_parser("retry", help="send a failed Demo back through").add_argument(
         "demo", help="index id or file name")
@@ -170,6 +172,8 @@ def main(argv: list[str] | None = None) -> int:
                        headless=args.command == "run" and args.headless)
     if args.command == "setup":     # no index and no move-in: a fresh PC has nothing of either yet
         return cmd_setup()
+    if args.command == "quit":      # the installer's, before it replaces the exe: it starts nothing either
+        return app.quit_running()
 
     copied = move_in.on_start()
     if copied:

@@ -17,8 +17,8 @@ import pytest
 
 from clipper import checks, paths, web
 from clipper.app import (
-    PAGES, AlreadyRunning, App, find_running, gate_reasons, hand_over, run, run_headless, single_instance,
-    start_match_alerts,
+    PAGES, AlreadyRunning, App, ask_to_quit, find_running, gate_reasons, hand_over, quit_running, run, run_headless,
+    single_instance, start_match_alerts,
 )
 from clipper.config import Config
 from clipper.faceit import FaceitError, Player
@@ -724,6 +724,98 @@ def test_hand_over_skips_a_foreign_server_that_answers_health_without_our_app_fi
 
 def test_hand_over_with_nothing_listening_returns_false():
     assert hand_over("/reels", [_free_port()]) is False
+
+
+# --- ask_to_quit / quit_running: `clipper quit`, which the installer runs before it replaces the exe ---
+
+
+def test_ask_to_quit_finds_the_running_copy_and_asks_it_to_quit_now(tmp_path):
+    modes = []
+    ctx = WebContext(index_path=tmp_path / "clipper.sqlite", gate_reasons=lambda: (),
+                     quit=lambda mode: modes.append(mode) or "now")
+    server = WebServer(create_app(ctx), 0, host="127.0.0.1", tries=1)
+    server.start()
+    try:
+        assert ask_to_quit([server.port]) is True
+        assert modes == ["now"]         # not None: a render under way is stopped, nobody is there to be asked
+    finally:
+        server.stop()
+
+
+def test_ask_to_quit_with_nothing_listening_returns_false():
+    assert ask_to_quit([_free_port()]) is False
+
+
+class Naps:
+    """A clock that only moves when `sleep` is called, and `then(n, do)`: what happens during nap n."""
+
+    def __init__(self):
+        self.now, self.taken, self._then = 0.0, 0, {}
+
+    def then(self, nap: int, do) -> None:
+        self._then[nap] = do
+
+    def clock(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+        self.taken += 1
+        self._then.pop(self.taken, lambda: None)()
+
+
+def _never_asked(ports):
+    pytest.fail("asked a copy to quit")      # and never the real ask_to_quit: 8765 may be the user's running app
+
+
+def test_quit_with_no_copy_running_asks_nothing_and_ends_at_once():
+    naps = Naps()
+
+    assert quit_running(ask=_never_asked, others=lambda: [], clock=naps.clock, sleep=naps.sleep) == 0
+    assert naps.taken == 0
+
+
+def test_quit_asks_the_running_copy_once_and_waits_until_it_has_ended():
+    naps, asked = Naps(), []
+    running = single_instance(paths.lock_file())
+    running.__enter__()
+    naps.then(3, lambda: running.__exit__(None, None, None))      # stopping a render takes it a moment
+
+    code = quit_running(ask=lambda ports: asked.append(ports) or True, others=lambda: [],
+                        clock=naps.clock, sleep=naps.sleep)
+
+    assert code == 0
+    assert asked == [range(Config.page_port, Config.page_port + web.PORTS_TO_TRY)]      # where its pages may be
+    assert naps.taken == 3
+
+
+def test_quit_asks_again_a_copy_whose_pages_did_not_answer():
+    naps, answers = Naps(), [False, True]
+    running = single_instance(paths.lock_file())
+    running.__enter__()
+    naps.then(4, lambda: running.__exit__(None, None, None))
+
+    assert quit_running(ask=lambda ports: answers.pop(0), others=lambda: [], clock=naps.clock, sleep=naps.sleep) == 0
+    assert answers == []
+
+
+def test_quit_waits_for_the_exes_other_processes_to_end_too():
+    # The onefile exe's outer process is still clearing away what it unpacked: the file is in use until it ends.
+    naps, others = Naps(), [["outer"], ["outer"], []]
+
+    assert quit_running(ask=_never_asked, others=lambda: others.pop(0), clock=naps.clock, sleep=naps.sleep) == 0
+    assert naps.taken == 2
+
+
+def test_quit_gives_up_on_a_copy_that_is_still_running_when_the_wait_is_over(capsys):
+    naps = Naps()
+    with single_instance(paths.lock_file()):
+        code = quit_running(wait_seconds=5.0, ask=lambda ports: True, others=lambda: [],
+                            clock=naps.clock, sleep=naps.sleep)
+
+    assert code == 1
+    assert 5.0 <= naps.now < 6.0
+    assert "still running" in capsys.readouterr().err
 
 
 # --- run_headless --------------------------------------------------------------------------------

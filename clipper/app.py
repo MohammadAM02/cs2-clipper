@@ -45,7 +45,7 @@ from functools import partial
 from pathlib import Path
 
 from clipper import (
-    applog, checks, csdm_db, faceit_oauth, move_in, paths, protect, provision, settings, tray, web,
+    applog, checks, csdm_db, faceit_oauth, move_in, packaged, paths, protect, provision, settings, tray, web,
 )
 from clipper.alerts import MatchAlerts
 from clipper.config import Config
@@ -73,6 +73,8 @@ log = logging.getLogger(__name__)
 CHECKS_CACHE_SECONDS = 15.0            # the Status page polls every 2 s; some checks are not free
 RELEASES_INTERVAL_SECONDS = 10 * 60.0  # HlaeReleases.refresh_if_due only asks GitHub when it is due
 WORKER_ERROR_WAIT_SECONDS = 30.0       # how long the worker thread waits after a pass that raised
+QUIT_WAIT_SECONDS = 60.0               # how long `clipper quit` waits for the running copy to end
+QUIT_LOOK_SECONDS = 0.25               # and how often it looks whether it has
 
 
 def find_running(ports: Iterable[int], *, timeout: float = 1.0) -> int | None:
@@ -90,22 +92,33 @@ def find_running(ports: Iterable[int], *, timeout: float = 1.0) -> int | None:
     return None
 
 
-def hand_over(page: str | None, ports: Iterable[int]) -> bool:
-    """Finds the running copy among `ports` and asks it to show `page` (or Status). True once it
-    answers 204; False when none of `ports` is a running copy, or it refuses."""
+def _ask(ports: Iterable[int], route: str, body: dict) -> int | None:
+    """Finds the running copy among `ports` and posts `body` to its `route`: the status it answers
+    with, or None when none of `ports` is a running copy, or it refuses."""
     port = find_running(ports)
     if port is None:
-        return False
-    body = json.dumps({"page": page or "/status"}).encode("utf-8")
+        return None
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/api/window", data=body, method="POST",
+        f"http://127.0.0.1:{port}{route}", data=json.dumps(body).encode("utf-8"), method="POST",
         headers={"Content-Type": "application/json", web.MARKER_HEADER: "1"},
     )
     try:
         with urllib.request.urlopen(request, timeout=1.0) as response:
-            return response.status == 204
+            return response.status
     except OSError:   # urllib.error.HTTPError (a 4xx/5xx "refusal") is one too
-        return False
+        return None
+
+
+def hand_over(page: str | None, ports: Iterable[int]) -> bool:
+    """Finds the running copy among `ports` and asks it to show `page` (or Status). True once it
+    answers 204; False when none of `ports` is a running copy, or it refuses."""
+    return _ask(ports, "/api/window", {"page": page or "/status"}) == 204
+
+
+def ask_to_quit(ports: Iterable[int]) -> bool:
+    """Finds the running copy among `ports` and asks it to quit now, stopping a render that is under
+    way. True once it answers; False when none of `ports` is a running copy, or it refuses."""
+    return _ask(ports, "/api/quit", {"mode": "now"}) == 200
 
 
 def start_match_alerts(cfg: Config, index: Index, probe: SystemProbe, *,
@@ -570,3 +583,34 @@ def run(*, open_page: str | None = None, background: bool = False, headless: boo
 def run_headless(open_page: str | None = None) -> int:
     """`clipper run --headless`: `run` without the window and the tray."""
     return run(headless=True, open_page=open_page)
+
+
+def _a_copy_holds_the_lock() -> bool:
+    try:
+        with single_instance(paths.lock_file()):
+            return False
+    except AlreadyRunning:
+        return True
+
+
+def quit_running(*, wait_seconds: float = QUIT_WAIT_SECONDS, ask: Callable[[Iterable[int]], bool] = ask_to_quit,
+                 others: Callable[[], list] = packaged.other_copies, clock: Callable[[], float] = time.monotonic,
+                 sleep: Callable[[float], None] = time.sleep) -> int:
+    """`clipper quit`, which the installer runs before it replaces the exe, as an exe that is running
+    cannot be replaced: asks the running copy to quit and waits until it has ended, and with it every
+    other process that runs the exe (`others`). 0 once nothing of the app runs, which is at once when
+    nothing did; 1 when something still does after `wait_seconds`."""
+    page_port = settings.load(paths.settings_file()).config.page_port
+    ports = range(page_port, page_port + web.PORTS_TO_TRY)
+    deadline = clock() + wait_seconds
+    asked = False
+    while True:
+        running = _a_copy_holds_the_lock()
+        if not running and not others():
+            return 0
+        if clock() >= deadline:
+            print("CS2 Clipper is still running", file=sys.stderr)
+            return 1
+        if running and not asked:
+            asked = ask(ports)      # and again the next time round, when its pages did not answer
+        sleep(QUIT_LOOK_SECONDS)

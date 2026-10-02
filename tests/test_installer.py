@@ -32,7 +32,7 @@ def test_the_installer_asks_the_exe_only_for_what_its_command_line_has(monkeypat
     assert asked == ["quit", {"open_page": None, "background": True, "headless": False}]
 
 
-@pytest.mark.parametrize("name", ["cs2clipper.iss", "build.ps1"])
+@pytest.mark.parametrize("name", ["cs2clipper.iss", "build.ps1", "prove.ps1"])
 def test_a_script_a_windows_tool_reads_is_plain_ascii(name):
     # Inno Setup and Windows PowerShell read a file that has no byte order mark in the PC's own code page.
     (PACKAGING / name).read_bytes().decode("ascii")

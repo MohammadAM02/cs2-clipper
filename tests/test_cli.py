@@ -190,3 +190,85 @@ def test_the_window_process_keeps_the_bundle_on_its_dll_search_path(events):
 def test_the_bundle_check_runs_released_like_the_app_and_starts_nothing(events, tmp_path):
     assert main(["--bundle-check", str(tmp_path / "report.txt")]) == 0
     assert events == ["release", "check report.txt"]
+
+
+# --- setup: the Status page's "Set up", from a terminal ----------------------------------------------
+
+
+@pytest.fixture
+def setup_runs(monkeypatch):
+    """`clipper setup` with the run faked, so nothing is downloaded or installed and no log file is
+    opened. Each run's Context is kept."""
+    runs = []
+    monkeypatch.setattr("clipper.cli.provision.run", lambda context: runs.append(context))
+    monkeypatch.setattr("clipper.cli.checks.latest_hlae_release", lambda: "2.200.0")
+    monkeypatch.setattr("clipper.cli.applog.setup", lambda logs_dir: [])
+    monkeypatch.setattr("clipper.cli.move_in.on_start", lambda: pytest.fail("setup moves nothing in"))
+    monkeypatch.setattr("clipper.cli.Index", lambda path: pytest.fail("setup opens no index"))
+    return runs
+
+
+def test_setup_installs_what_the_pc_lacks_and_exits_0(setup_runs, capsys):
+    assert main(["setup"]) == 0
+
+    [context] = setup_runs
+    assert context.store.path == paths.settings_file()      # the app's own settings
+    assert context.latest_hlae == "2.200.0"                 # so an HLAE that is behind is replaced
+    assert "Everything is installed." in capsys.readouterr().out
+
+
+def test_a_setup_that_fails_exits_1_and_says_why(monkeypatch, setup_runs, capsys):
+    monkeypatch.setattr("clipper.cli.provision.run", lambda context: "FFmpeg: the download was cut short")
+
+    assert main(["setup"]) == 1
+
+    said = capsys.readouterr()
+    assert "FFmpeg: the download was cut short" in said.err and "Everything is installed." not in said.out
+
+
+def test_setup_goes_ahead_when_the_newest_hlae_cannot_be_asked_for(monkeypatch, setup_runs):
+    def offline():
+        raise OSError("no network")
+    monkeypatch.setattr("clipper.cli.checks.latest_hlae_release", offline)
+
+    assert main(["setup"]) == 0
+
+    assert setup_runs[0].latest_hlae is None
+
+
+def test_setup_writes_to_the_apps_log(monkeypatch, setup_runs):
+    logged_to = []
+    monkeypatch.setattr("clipper.cli.applog.setup", logged_to.append)
+
+    main(["setup"])
+
+    assert logged_to == [paths.logs_dir()]
+
+
+def test_setup_tells_a_download_with_a_line_for_each_tenth(setup_runs, capsys):
+    main(["setup"])
+    progress = setup_runs[0].progress
+    capsys.readouterr()
+
+    for done in (0, 4, 9, 10, 55, 100, 0, 100):       # one download, and then the next
+        progress(done, 100)
+
+    assert capsys.readouterr().out.split() == ["0%", "10%", "50%", "100%", "0%", "100%"]
+
+
+def test_setup_releases_the_dll_search_path_before_it_starts_anything(events, monkeypatch):
+    # The installer and Postgres it starts must not inherit the exe's bundle on theirs.
+    monkeypatch.setattr("clipper.cli.cmd_setup", lambda: events.append("setup") or 0)
+
+    assert main(["setup"]) == 0
+    assert events == ["release", "setup"]
+
+
+def test_quit_asks_the_running_copy_to_quit_and_starts_nothing_else(monkeypatch):
+    # The installer runs it before it replaces the exe; its exit code says whether the copy has ended.
+    monkeypatch.setattr("clipper.cli.app.quit_running", lambda: 1)
+    monkeypatch.setattr("clipper.cli.app.run", lambda **kwargs: pytest.fail("quit starts no app"))
+    monkeypatch.setattr("clipper.cli.move_in.on_start", lambda: pytest.fail("quit moves nothing in"))
+    monkeypatch.setattr("clipper.cli.Index", lambda path: pytest.fail("quit opens no index"))
+
+    assert main(["quit"]) == 1

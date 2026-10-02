@@ -43,6 +43,37 @@ def test_running_from_source_leaves_the_dll_search_path_alone(bundle_on_dll_path
     assert _dll_directory() == bundle_on_dll_path
 
 
+# --- the exe's other processes -----------------------------------------------------------------------------
+
+
+class FakeProcess:
+    def __init__(self, pid: int, exe: str | None):
+        self.pid, self.info = pid, {"exe": exe}
+
+
+def test_the_exes_other_copies_are_the_other_processes_running_its_file(monkeypatch):
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", r"C:\Apps\CS2Clipper\CS2Clipper.exe")
+    monkeypatch.setattr(packaged.os, "getpid", lambda: 11)
+    monkeypatch.setattr(packaged.os, "getppid", lambda: 10)       # a onefile exe: its outer process is its parent
+    running = [
+        FakeProcess(10, r"C:\Apps\CS2Clipper\CS2Clipper.exe"),
+        FakeProcess(11, r"C:\Apps\CS2Clipper\CS2Clipper.exe"),
+        FakeProcess(20, r"c:\apps\cs2clipper\CS2CLIPPER.EXE"),      # Windows tells the same file in any case
+        FakeProcess(30, r"C:\Elsewhere\CS2Clipper.exe"),
+        FakeProcess(40, None),                                      # one that may not be asked
+    ]
+    monkeypatch.setattr(packaged.psutil, "process_iter", lambda attrs: iter(running))
+
+    assert [process.pid for process in packaged.other_copies()] == [20]
+
+
+def test_python_running_the_source_has_no_other_copies(monkeypatch):
+    monkeypatch.setattr(packaged.psutil, "process_iter", lambda attrs: pytest.fail("looked at the PC's processes"))
+
+    assert packaged.other_copies() == []
+
+
 # --- the bundle check --------------------------------------------------------------------------------------
 
 

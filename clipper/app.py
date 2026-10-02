@@ -1,13 +1,13 @@
 """One running copy of the app: start-up order, the worker thread, the web server, and quitting
 (spec: How the app runs; The terminal; When something goes wrong).
 
-`single_instance`/`AlreadyRunning`, `start_match_alerts` and `build_worker` are our own code, moved
-here from `cli.py` (Tasks 1-8) rather than adapted from Aegis. The overall shape of `run` -- single
-instance, then move in, then settings, then the web server, then the worker, then the window and the
-tray, or else a short-wait loop so Ctrl+C is noticed promptly -- is adapted from
-thelifeofsuleyman/cs2-clipper's `aegis/app.py` (`main`, `_serve`); ours adds the quit-during-a-render
-choice the spec asks for, which Aegis has none of (it exits at once), and `--background`, which shows
-only the tray.
+`start_match_alerts` and `build_worker` are our own code, moved here from `cli.py` (Tasks 1-8) rather
+than adapted from Aegis; so are `single_instance`/`AlreadyRunning`, which now live in `lock.py`. The
+overall shape of `run` -- single instance, then move in, then settings, then the web server, then the
+worker, then the window and the tray, or else a short-wait loop so Ctrl+C is noticed promptly -- is
+adapted from thelifeofsuleyman/cs2-clipper's `aegis/app.py` (`main`, `_serve`); ours adds the
+quit-during-a-render choice the spec asks for, which Aegis has none of (it exits at once), and
+`--background`, which shows only the tray.
 
 MIT License
 
@@ -35,18 +35,18 @@ from __future__ import annotations
 
 import json
 import logging
-import msvcrt
 import os
 import sys
 import threading
 import time
 import urllib.request
-from collections.abc import Callable, Iterable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterable
 from functools import partial
 from pathlib import Path
 
-from clipper import applog, checks, csdm_db, faceit_oauth, move_in, paths, protect, settings, tray, web
+from clipper import (
+    applog, checks, csdm_db, faceit_oauth, move_in, packaged, paths, protect, provision, settings, tray, web,
+)
 from clipper.alerts import MatchAlerts
 from clipper.config import Config
 from clipper.csdm_cli import CsdmCli
@@ -56,6 +56,7 @@ from clipper.gate import Gate
 from clipper.index import Index
 from clipper.intake import Intake
 from clipper.join import join_reel
+from clipper.lock import AlreadyRunning, single_instance
 from clipper.media import probe_duration
 from clipper.notify import notify
 from clipper.procs import ProcessProbe, SystemProbe
@@ -72,6 +73,8 @@ log = logging.getLogger(__name__)
 CHECKS_CACHE_SECONDS = 15.0            # the Status page polls every 2 s; some checks are not free
 RELEASES_INTERVAL_SECONDS = 10 * 60.0  # HlaeReleases.refresh_if_due only asks GitHub when it is due
 WORKER_ERROR_WAIT_SECONDS = 30.0       # how long the worker thread waits after a pass that raised
+QUIT_WAIT_SECONDS = 60.0               # how long `clipper quit` waits for the running copy to end
+QUIT_LOOK_SECONDS = 0.25               # and how often it looks whether it has
 
 
 def find_running(ports: Iterable[int], *, timeout: float = 1.0) -> int | None:
@@ -89,45 +92,33 @@ def find_running(ports: Iterable[int], *, timeout: float = 1.0) -> int | None:
     return None
 
 
-def hand_over(page: str | None, ports: Iterable[int]) -> bool:
-    """Finds the running copy among `ports` and asks it to show `page` (or Status). True once it
-    answers 204; False when none of `ports` is a running copy, or it refuses."""
+def _ask(ports: Iterable[int], route: str, body: dict) -> int | None:
+    """Finds the running copy among `ports` and posts `body` to its `route`: the status it answers
+    with, or None when none of `ports` is a running copy, or it refuses."""
     port = find_running(ports)
     if port is None:
-        return False
-    body = json.dumps({"page": page or "/status"}).encode("utf-8")
+        return None
     request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/api/window", data=body, method="POST",
+        f"http://127.0.0.1:{port}{route}", data=json.dumps(body).encode("utf-8"), method="POST",
         headers={"Content-Type": "application/json", web.MARKER_HEADER: "1"},
     )
     try:
         with urllib.request.urlopen(request, timeout=1.0) as response:
-            return response.status == 204
+            return response.status
     except OSError:   # urllib.error.HTTPError (a 4xx/5xx "refusal") is one too
-        return False
+        return None
 
 
-class AlreadyRunning(Exception):
-    """Another clipper holds the lock."""
+def hand_over(page: str | None, ports: Iterable[int]) -> bool:
+    """Finds the running copy among `ports` and asks it to show `page` (or Status). True once it
+    answers 204; False when none of `ports` is a running copy, or it refuses."""
+    return _ask(ports, "/api/window", {"page": page or "/status"}) == 204
 
 
-@contextmanager
-def single_instance(lock_path: Path) -> Iterator[None]:
-    """Hold an exclusive lock on lock_path for the life of the block."""
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    handle = open(lock_path, "a+b")
-    handle.seek(0)
-    try:
-        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-    except OSError as exc:
-        handle.close()
-        raise AlreadyRunning(f"another clipper is already running (lock: {lock_path})") from exc
-    try:
-        yield
-    finally:
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        handle.close()
+def ask_to_quit(ports: Iterable[int]) -> bool:
+    """Finds the running copy among `ports` and asks it to quit now, stopping a render that is under
+    way. True once it answers; False when none of `ports` is a running copy, or it refuses."""
+    return _ask(ports, "/api/quit", {"mode": "now"}) == 200
 
 
 def start_match_alerts(cfg: Config, index: Index, probe: SystemProbe, *,
@@ -185,20 +176,22 @@ def gate_reasons(cfg: Config, probe: ProcessProbe) -> tuple[str, ...]:
 
 
 class App:
-    """One running copy: its settings, what it is doing (`state`), the web server, the window and the
-    worker thread. `problems`, `build` and `launcher` (given the web server's base URL) are swappable so
-    tests never touch real csdm/CS2/Postgres or open a window."""
+    """One running copy: its settings, what it is doing (`state`), the web server, the window, the
+    worker thread and Setup. `problems`, `build`, `launcher` (given the web server's base URL) and
+    `setup` are swappable so tests never touch real csdm/CS2/Postgres, open a window or install anything."""
 
     def __init__(self, settings: SettingsStore, *, index_path: Path, state: AppState | None = None,
                  stop: StopRequest | None = None,
                  problems: Callable[[Config], list[str]] = checks.startup_problems,
                  build: Callable[..., Worker] = build_worker,
                  launcher: Callable[[str], WindowLauncher] = WindowLauncher,
+                 setup: Callable[..., provision.Setup] = provision.Setup,
                  recheck_seconds: float = 60.0, clock: Callable[[], float] = time.monotonic):
         self.settings = settings
         self.state = state if state is not None else AppState()
         self.stop = stop if stop is not None else StopRequest()
         self.releases = checks.HlaeReleases()
+        self.setup = setup(self._setup_context, after=self._after_setup)
         self.page_port: int | None = None
         self._index_path = index_path
         self._problems = problems
@@ -217,6 +210,9 @@ class App:
         self._releases_thread: threading.Thread | None = None
         self._checks_cache: list[checks.Check] | None = None
         self._checks_at: float | None = None
+        self._setups_ended = 0                  # counted on Setup's thread; the two below are what was last looked at
+        self._problems_setups = 0
+        self._checks_setups = 0
 
     # --- the web server --------------------------------------------------------------------------
 
@@ -241,6 +237,8 @@ class App:
             faceit_login_url=self.faceit_login_url,
             faceit_sign_in=self.faceit_sign_in,
             faceit_lookup=self.faceit_lookup,
+            setup_status=self.setup.status,
+            start_setup=self.start_setup,
         )
         try:
             self._web = web.WebServer(web.create_app(ctx), self.settings.current().config.page_port,
@@ -414,17 +412,22 @@ class App:
         (which replaces the problem with the real start-up problems); a tick that raises is logged and
         the next pass still runs. Anything else it raises is `run_worker`'s to catch."""
         cfg = self.settings.current().config
+        if self.setup.running:      # it stops and starts Postgres and replaces what a tick would run
+            return cfg.poll_seconds
         now = self._clock()
+        setups = self._setups_ended
         needs_check = (
             self._problems_checked_at is None
             or cfg != self._problems_cfg
             or now - self._problems_checked_at >= self._recheck_seconds
+            or setups != self._problems_setups
         )
         if needs_check:
             problems = self._problems(cfg)
             self.state.set_problems(problems)
             self._problems_cfg = cfg
             self._problems_checked_at = now
+            self._problems_setups = setups      # the count from before the check: a run ending during it is not missed
         else:
             problems = self.state.snapshot().problems
         if problems:
@@ -473,7 +476,9 @@ class App:
         and some checks (a `pg_ctl status`, file-version reads) are not free. Never calls
         `self.releases.refresh_if_due` itself: that thread is the release check's only writer."""
         now = self._clock()
-        if self._checks_at is None or now - self._checks_at >= CHECKS_CACHE_SECONDS:
+        setups = self._setups_ended
+        if (self._checks_at is None or now - self._checks_at >= CHECKS_CACHE_SECONDS
+                or setups != self._checks_setups):
             cfg = self.settings.current().config
             index = Index(self._index_path)
             try:
@@ -482,7 +487,26 @@ class App:
                 index.close()
             self._checks_cache = checks.run_checks(cfg, alerts_status=alerts_status, releases=self.releases)
             self._checks_at = now
+            self._checks_setups = setups
         return self._checks_cache
+
+    # --- Setup: what a fresh PC lacks ----------------------------------------------------------------
+
+    def start_setup(self) -> str | None:
+        """Starts Setup, unless it is running already. Returns why not, in words for the user, when it
+        must not start now: it replaces HLAE and FFmpeg, which a render is using."""
+        if self.state.snapshot().rendering is not None:
+            return "A Reel is rendering. Set up once it is done."
+        self.setup.start()
+        return None
+
+    def _setup_context(self) -> provision.Context:
+        return provision.Context(store=self.settings, latest_hlae=self.releases.latest)
+
+    def _after_setup(self) -> None:
+        """Called on Setup's thread when a run has ended: the worker's next pass and Status's next
+        checks look at the PC again, rather than at what they found before."""
+        self._setups_ended += 1
 
     # --- the HLAE release check ----------------------------------------------------------------------
 
@@ -559,3 +583,34 @@ def run(*, open_page: str | None = None, background: bool = False, headless: boo
 def run_headless(open_page: str | None = None) -> int:
     """`clipper run --headless`: `run` without the window and the tray."""
     return run(headless=True, open_page=open_page)
+
+
+def _a_copy_holds_the_lock() -> bool:
+    try:
+        with single_instance(paths.lock_file()):
+            return False
+    except AlreadyRunning:
+        return True
+
+
+def quit_running(*, wait_seconds: float = QUIT_WAIT_SECONDS, ask: Callable[[Iterable[int]], bool] = ask_to_quit,
+                 others: Callable[[], list] = packaged.other_copies, clock: Callable[[], float] = time.monotonic,
+                 sleep: Callable[[float], None] = time.sleep) -> int:
+    """`clipper quit`, which the installer runs before it replaces the exe, as an exe that is running
+    cannot be replaced: asks the running copy to quit and waits until it has ended, and with it every
+    other process that runs the exe (`others`). 0 once nothing of the app runs, which is at once when
+    nothing did; 1 when something still does after `wait_seconds`."""
+    page_port = settings.load(paths.settings_file()).config.page_port
+    ports = range(page_port, page_port + web.PORTS_TO_TRY)
+    deadline = clock() + wait_seconds
+    asked = False
+    while True:
+        running = _a_copy_holds_the_lock()
+        if not running and not others():
+            return 0
+        if clock() >= deadline:
+            print("CS2 Clipper is still running", file=sys.stderr)
+            return 1
+        if running and not asked:
+            asked = ask(ports)      # and again the next time round, when its pages did not answer
+        sleep(QUIT_LOOK_SECONDS)

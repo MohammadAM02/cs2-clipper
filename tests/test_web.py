@@ -500,6 +500,58 @@ def test_resume_refuses_a_phone_and_needs_the_marker(client):
     assert phone_post(client, "/api/resume", headers=MARKED).status_code == 403
 
 
+# --- Set up: what a fresh PC lacks, and the button that installs it ---------------------------------
+
+SETUP_STATUS = {"running": False, "needed": True, "download_bytes": 300_000_000, "progress": None, "error": None,
+                "steps": [{"id": "csdm", "name": "CS Demo Manager", "state": "needed"}]}
+RENDERING = "A Reel is rendering. Set up once it is done."
+
+
+def test_api_setup_is_what_setup_says_and_is_not_stored(tmp_path):
+    response = pc_get(app_for(tmp_path, setup_status=lambda: SETUP_STATUS).test_client(), "/api/setup")
+
+    assert (response.status_code, response.get_json()) == (200, SETUP_STATUS)
+    assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_api_setup_needs_nothing_when_no_setup_is_wired_in(client):
+    data = pc_get(client, "/api/setup").get_json()
+
+    assert (data["running"], data["needed"], data["steps"], data["error"]) == (False, False, [], None)
+
+
+def test_posting_to_api_setup_starts_it_and_replies_202(tmp_path):
+    calls = []
+    app = app_for(tmp_path, start_setup=lambda: calls.append(True))
+
+    assert pc_post(app.test_client(), "/api/setup", headers=MARKED).status_code == 202
+    assert calls == [True]
+
+
+def test_a_setup_that_is_refused_is_a_409_that_says_why(tmp_path):
+    app = app_for(tmp_path, start_setup=lambda: RENDERING)
+
+    response = pc_post(app.test_client(), "/api/setup", headers=MARKED)
+
+    assert (response.status_code, response.get_json()) == (409, {"error": RENDERING})
+
+
+def test_api_setup_refuses_a_phone_and_needs_the_marker(tmp_path):
+    calls = []
+    client = app_for(tmp_path, start_setup=lambda: calls.append(True)).test_client()
+
+    assert pc_post(client, "/api/setup").status_code == 403
+    assert phone_post(client, "/api/setup", headers=MARKED).status_code == 403
+    assert phone_get(client, "/api/setup").status_code == 403
+    assert calls == []
+
+
+def test_the_status_page_carries_the_set_up_card(client):
+    page = pc_get(client, "/status").get_data(as_text=True)
+
+    assert 'id="setup"' in page and 'api("api/setup"' in page
+
+
 def test_quit_passes_the_mode_through_and_returns_the_result(tmp_path):
     calls = []
     app = app_for(tmp_path, quit=lambda mode: calls.append(mode) or "ask")
@@ -1148,6 +1200,7 @@ def test_faceit_lookup_refuses_a_phone_and_needs_the_marker(tmp_path):
 PC_ONLY_ROUTES = [
     ("GET", "/"), ("GET", "/status"), ("GET", "/api/status"), ("GET", "/api/summary"), ("GET", "/api/log"),
     ("POST", "/api/demos/1/retry"), ("POST", "/api/pause"), ("POST", "/api/resume"), ("POST", "/api/quit"),
+    ("GET", "/api/setup"), ("POST", "/api/setup"),
     ("GET", "/reels"), ("GET", "/api/reels"), ("GET", "/reels/1.mp4"), ("GET", "/reels/1.jpg"),
     ("POST", f"/api/reels/{'a' * 16}/open-folder"),
     ("GET", "/settings"), ("GET", "/api/settings"), ("PUT", "/api/settings"),

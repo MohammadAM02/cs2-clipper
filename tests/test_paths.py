@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
+import pytest
+
 from clipper import paths
+from tests.fakes import refusing
 
 
 def test_data_dir_defaults_to_localappdata_cs2clipper(tmp_path, monkeypatch):
@@ -50,6 +54,42 @@ def test_atomic_write_text_replaces_an_existing_file_and_leaves_no_tmp(tmp_path)
 
     assert target.read_text(encoding="utf-8") == "café ☃"
     assert not target.with_name(target.name + ".tmp").exists()
+
+
+def test_a_move_windows_refuses_for_a_moment_is_tried_again(tmp_path, monkeypatch):
+    src, dst, naps = tmp_path / "new", tmp_path / "old", []
+    src.write_text("new")
+    dst.write_text("old")
+    monkeypatch.setattr(os, "replace", refusing(2))
+
+    paths.move_into_place(src, dst, sleep=naps.append)
+
+    assert dst.read_text() == "new" and not src.exists()
+    assert naps == [paths.MOVE_WAIT_SECONDS] * 2
+
+
+def test_a_move_that_stays_refused_gives_up_and_leaves_both_as_they_were(tmp_path, monkeypatch):
+    src, dst, naps = tmp_path / "new", tmp_path / "old", []
+    src.write_text("new")
+    dst.write_text("old")
+    monkeypatch.setattr(os, "replace", refusing(10_000))
+
+    with pytest.raises(PermissionError):
+        paths.move_into_place(src, dst, sleep=naps.append)
+
+    assert (src.read_text(), dst.read_text()) == ("new", "old")
+    assert len(naps) == paths.MOVE_TRIES - 1
+
+
+def test_atomic_write_text_gets_past_a_file_that_is_being_read_for_a_moment(tmp_path, monkeypatch):
+    target = tmp_path / "settings.json"
+    target.write_text("old content", encoding="utf-8")
+    monkeypatch.setattr(os, "replace", refusing(2))
+    monkeypatch.setattr(time, "sleep", lambda seconds: None)
+
+    paths.atomic_write_text(target, "new content")
+
+    assert target.read_text(encoding="utf-8") == "new content"
 
 
 def test_conftest_keeps_this_test_off_the_real_localappdata():

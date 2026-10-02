@@ -2,7 +2,8 @@
 wrong; Testing, checks and start-up problems).
 
 CS:DM's settings.json holds passwords and API keys (spec: Settings and data): this module reads
-only ``video.hlae`` from it, and never logs or returns anything else it contains.
+only ``video.hlae`` and the database's port from it, and never logs or returns anything else it
+contains.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from pathlib import Path
 
 import psutil
 
-from clipper import postgres
+from clipper import csdm_settings, download, postgres
 from clipper.config import Config
 
 log = logging.getLogger(__name__)
@@ -129,7 +130,7 @@ def hlae_version(exe: Path) -> str | None:
 
 
 def _fetch_release_json(url: str) -> dict:
-    request = urllib.request.Request(url, headers={"User-Agent": "cs2-clipper"})
+    request = urllib.request.Request(url, headers=download.headers_for(url))
     with urllib.request.urlopen(request, timeout=10.0) as response:
         return json.loads(response.read())
 
@@ -188,6 +189,13 @@ def _version_tuple(text: str) -> tuple[int, ...]:
 
 def _is_newer(candidate: str, than: str) -> bool:
     return _version_tuple(candidate) > _version_tuple(than)
+
+
+def hlae_behind(csdm_home: Path, latest: str | None) -> bool:
+    """Whether the HLAE that CS:DM uses is older than `latest`. False when either version is unknown."""
+    exe = hlae_exe(csdm_home)
+    installed = hlae_version(exe) if exe is not None else None
+    return installed is not None and latest is not None and _is_newer(latest, installed)
 
 
 def _free_bytes(path: Path) -> int:
@@ -280,8 +288,15 @@ def run_checks(cfg: Config, *, alerts_status: str | None, releases: HlaeReleases
 # --- start-up problems -----------------------------------------------------------------------------
 
 
+def database_port(cfg: Config) -> int:
+    """The port CS:DM's settings name for its database, which is the port Postgres has to listen on;
+    Postgres's usual one when they name none."""
+    database = csdm_settings.database(cfg.csdm_home)
+    return database["port"] if database else postgres.PORT
+
+
 def startup_problems(cfg: Config, *,
-                     ensure_postgres: Callable[[Path, Path], None] = postgres.ensure_running) -> list[str]:
+                     ensure_postgres: Callable[[Path, Path, int], None] = postgres.ensure_running) -> list[str]:
     """What keeps the worker from doing anything, in order; an empty list means it may run.
     `ensure_postgres` is always attempted, regardless of earlier problems."""
     problems = []
@@ -296,7 +311,7 @@ def startup_problems(cfg: Config, *,
     if not (cfg.csdm_home / ".csdm" / "settings.json").exists():
         problems.append(f"CS Demo Manager's settings are missing from {cfg.csdm_home}")
     try:
-        ensure_postgres(cfg.pg_bin, cfg.pg_data)
+        ensure_postgres(cfg.pg_bin, cfg.pg_data, database_port(cfg))
     except Exception as exc:  # noqa: BLE001 - any failure is reported, never crashes the app
         problems.append(f"Postgres won't start: {exc}")
     return problems

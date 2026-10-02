@@ -1,6 +1,8 @@
-"""Command line (spec: The terminal): the app itself (no subcommand, or `run`), and status, retry,
-resume and highlights for development. `--window` is internal: the window process. So is
-`--bundle-check`: the build's check of the packaged exe (clipper.packaged)."""
+"""Command line (spec: The terminal): the app itself (no subcommand, or `run`), `setup` for a PC that
+is set up from a terminal or by a script, `quit` for the installer, which cannot replace an exe that is
+running, and status, retry, resume and highlights for development.
+`--window` is internal: the window process. So is `--bundle-check`: the build's check of the packaged
+exe (clipper.packaged)."""
 
 from __future__ import annotations
 
@@ -8,14 +10,16 @@ import argparse
 import re
 import socket
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
-from clipper import app, csdm_db, move_in, packaged, paths, settings, window
+from clipper import app, applog, checks, csdm_db, move_in, packaged, paths, provision, settings, window
 from clipper.config import REPO_ROOT, Config
 from clipper.gate import Gate, GateStatus
 from clipper.index import Index
 from clipper.procs import SystemProbe
 from clipper.scoring import score_match, select
+from clipper.settings import SettingsStore
 from clipper.worker import PERSPECTIVES
 
 CHECKSUM = re.compile(r"^[0-9a-f]{16}$")
@@ -95,6 +99,39 @@ def cmd_highlights(cfg: Config, index: Index, key: str) -> int:
     return 0
 
 
+def _in_tenths() -> Callable[[int, int], None]:
+    """Tells how a download is going: a line for each tenth of it, not one for each piece that arrives."""
+    last = -1
+
+    def progress(done: int, total: int) -> None:
+        nonlocal last
+        tenth = done * 10 // total if total else 10
+        if tenth != last:       # a lower one is the next download starting
+            last = tenth
+            print(f"  {tenth * 10}%")
+    return progress
+
+
+def cmd_setup() -> int:
+    """What the Status page's "Set up" does: installs what this PC lacks. Each step is told by the
+    log, which goes to the console too and to the app's log file; the exit code is 0 once everything
+    is installed. Like the page, it leaves an HLAE that is there alone when the newest release cannot
+    be asked for."""
+    applog.setup(paths.logs_dir())
+    try:
+        latest = checks.latest_hlae_release()
+    except (OSError, ValueError, KeyError):
+        latest = None
+    context = provision.Context(store=SettingsStore(paths.settings_file()), latest_hlae=latest,
+                                progress=_in_tenths())
+    error = provision.run(context)
+    if error:
+        print(f"Setup did not finish. {error}", file=sys.stderr)
+        return 1
+    print("Everything is installed.")
+    return 0
+
+
 _OPEN_CHOICES = tuple(page.removeprefix("/") for page in app.PAGES)
 
 
@@ -115,6 +152,8 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--headless", action="store_true",
                             help="no tray or window: the worker and the web server only")
     _add_open_argument(run_parser)
+    commands.add_parser("setup", help="install what this PC lacks: CS Demo Manager, Postgres, FFmpeg and HLAE")
+    commands.add_parser("quit", help="ask the running copy to quit, and wait until it has")
     commands.add_parser("status", help="show every Demo's state and the Gate")
     commands.add_parser("retry", help="send a failed Demo back through").add_argument(
         "demo", help="index id or file name")
@@ -131,6 +170,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command in (None, "run"):
         return app.run(open_page=f"/{args.open}" if args.open else None, background=args.background,
                        headless=args.command == "run" and args.headless)
+    if args.command == "setup":     # no index and no move-in: a fresh PC has nothing of either yet
+        return cmd_setup()
+    if args.command == "quit":      # the installer's, before it replaces the exe: it starts nothing either
+        return app.quit_running()
 
     copied = move_in.on_start()
     if copied:

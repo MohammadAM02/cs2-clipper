@@ -23,7 +23,7 @@ from pathlib import Path
 
 import psutil
 
-from clipper import csdm_settings, postgres
+from clipper import csdm_settings, download, postgres
 from clipper.config import Config
 
 log = logging.getLogger(__name__)
@@ -130,7 +130,7 @@ def hlae_version(exe: Path) -> str | None:
 
 
 def _fetch_release_json(url: str) -> dict:
-    request = urllib.request.Request(url, headers={"User-Agent": "cs2-clipper"})
+    request = urllib.request.Request(url, headers=download.headers_for(url))
     with urllib.request.urlopen(request, timeout=10.0) as response:
         return json.loads(response.read())
 

@@ -236,6 +236,39 @@ def test_fetch_json_reads_an_object_and_reports_anything_else(tmp_path):
         download.fetch_json("https://example.test/latest", opener=opener_for(b"<html>"))
 
 
+# --- what a request carries: GitHub's API counts an address's questions, and a build's runner shares its own ---
+
+LATEST = "https://api.github.com/repos/advancedfx/advancedfx/releases/latest"
+
+
+def test_a_github_token_goes_to_githubs_api_and_to_nothing_else(monkeypatch):
+    monkeypatch.setenv("CLIPPER_GITHUB_TOKEN", "t0ken")
+
+    assert download.headers_for(LATEST) == {"User-Agent": "cs2-clipper", "Authorization": "Bearer t0ken"}
+    for elsewhere in ("https://github.com/advancedfx/advancedfx/releases/download/v2.192.6/hlae_2_192_6.zip",
+                      "https://api.github.com.example.test/repos", URL):
+        assert download.headers_for(elsewhere) == {"User-Agent": "cs2-clipper"}
+
+
+def test_a_pc_with_no_token_sends_none(monkeypatch):
+    monkeypatch.delenv("CLIPPER_GITHUB_TOKEN", raising=False)
+
+    assert download.headers_for(LATEST) == {"User-Agent": "cs2-clipper"}
+
+
+def test_both_questions_setup_asks_github_carry_the_token(monkeypatch):
+    from clipper import checks
+
+    monkeypatch.setenv("CLIPPER_GITHUB_TOKEN", "t0ken")
+    asked = []
+    monkeypatch.setattr(download.urllib.request, "urlopen",
+                        lambda request, timeout: asked.append(request) or io.BytesIO(b'{"tag_name": "v2.192.6"}'))
+
+    assert download.fetch_json(LATEST) == {"tag_name": "v2.192.6"}
+    assert checks.latest_hlae_release() == "2.192.6"
+    assert [request.get_header("Authorization") for request in asked] == ["Bearer t0ken", "Bearer t0ken"]
+
+
 def test_extract_gets_past_a_folder_that_is_in_use_for_a_moment(tmp_path, monkeypatch):
     archive = make_zip(tmp_path / "a.zip", {"bin/tool.exe": b"new"})
     dest = tmp_path / "tool"

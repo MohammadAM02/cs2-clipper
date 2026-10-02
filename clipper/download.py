@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import http.client
 import json
+import os
 import shutil
 import urllib.request
 import zipfile
@@ -18,14 +19,27 @@ from clipper import paths
 
 CHUNK = 1024 * 1024
 TIMEOUT_SECONDS = 30.0
+GITHUB_API = "https://api.github.com/"
+TOKEN_VARIABLE = "CLIPPER_GITHUB_TOKEN"
 
 
 class DownloadError(Exception):
     """A file that could not be fetched, is not the file expected, or could not be unpacked."""
 
 
+def headers_for(url: str) -> dict[str, str]:
+    """What a request to `url` carries. GitHub's API answers an address sixty times an hour, and the
+    runner a release is built on shares its address with many others: a token in CLIPPER_GITHUB_TOKEN,
+    which the release workflow sets, goes to GitHub's API and to nothing else."""
+    headers = {"User-Agent": "cs2-clipper"}
+    token = os.environ.get(TOKEN_VARIABLE)
+    if token and url.startswith(GITHUB_API):
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
 def _open(url: str):
-    request = urllib.request.Request(url, headers={"User-Agent": "cs2-clipper"})
+    request = urllib.request.Request(url, headers=headers_for(url))
     return urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS)
 
 

@@ -127,8 +127,11 @@ function subLine(data) {
 }
 
 // --- Now: the summary, the current Demo's pipeline, its Render Jobs -----------------------------------
+// The list is newest first, but the worker renders the oldest Demo in rendering first (maps first).
 function currentDemo(demos) {
-  return demos.find(d => d.state === "rendering") || demos.find(d => d.state !== "failed") || null;
+  const rendering = demos.filter(d => d.state === "rendering");
+  return rendering.find(d => d.jobs.some(j => j.state === "running")) || rendering[rendering.length - 1]
+    || demos.find(d => d.state !== "failed") || null;
 }
 
 function progressOf(d) {

@@ -136,7 +136,8 @@ class Worker:
 
     def tick(self) -> None:
         """Take any new Demos, move every unfinished Demo on by at most one step, then run match
-        alerts. Once a stop is requested, no new step starts (a running one, a render included,
+        alerts. Only the oldest Demo in rendering gets a step there, so one map has both views
+        rendered before the next map's first. Once a stop is requested, no new step starts (a running one, a render included,
         finishes on its own terms); publishes the "what it's doing" summary throughout, and always
         ends idle or waiting, never stuck saying "rendering"."""
         self.state.set_paused_by(self.index.paused_by())
@@ -149,9 +150,14 @@ class Worker:
                     self.services.intake.take(path, self.index)
                 except OSError:
                     log.exception("could not take %s; will try again", path.name)
+            render_turn_taken = False
             for demo in self.index.demos_in(ACTIVE_STATES):
                 if self.stop.stopping():
                     return
+                if demo["state"] == "rendering":
+                    if render_turn_taken:
+                        continue      # maps first: the oldest Demo renders both views before the next starts
+                    render_turn_taken = True
                 self._advance(demo)
             if self.stop.stopping():
                 return

@@ -1,5 +1,5 @@
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,6 +18,8 @@ from tests.fixtures import DEMO_NAME, MATCH_CHECKSUM, MATCH_FACTS
 
 FAKE_CSDM = Path(__file__).with_name("fake_csdm.py")
 ROUND_START = {facts.round: facts.round_start_tick for facts in MATCH_FACTS}
+SECOND_DEMO = "1-00000000-0000-4000-8000-000000000002-1-1"
+SECOND_CHECKSUM = "00000000000000b2"
 MATCH = MatchInfo(checksum=MATCH_CHECKSUM, map_name="de_inferno",
                   played_at=datetime(2026, 9, 22, 9, 39, 14, tzinfo=timezone.utc),
                   team_score=13, opponent_score=5)
@@ -35,12 +37,13 @@ class FakeFacts:
     def __init__(self):
         self.info = MATCH
         self.facts = MATCH_FACTS
+        self.checksums = {SECOND_DEMO: SECOND_CHECKSUM}
 
     def find_checksum(self, demo_name):
-        return MATCH_CHECKSUM
+        return self.checksums.get(demo_name, MATCH_CHECKSUM)
 
     def match_info(self, checksum, steamid):
-        return self.info
+        return None if self.info is None else replace(self.info, checksum=checksum)
 
     def round_facts(self, checksum, steamid):
         return list(self.facts)
@@ -89,9 +92,9 @@ class World:
     state: AppState
     stop: StopRequest
 
-    def add_demo(self) -> int:
-        name = f"{DEMO_NAME}.dem.zst"
-        return self.index.add_demo(name, "0" * 64, self.cfg.demos_dir / name)
+    def add_demo(self, name: str = DEMO_NAME, sha256: str = "0" * 64) -> int:
+        file_name = f"{name}.dem.zst"
+        return self.index.add_demo(file_name, sha256, self.cfg.demos_dir / file_name)
 
     def ticks(self, count: int) -> None:
         for _ in range(count):
@@ -134,6 +137,28 @@ def test_a_demo_goes_from_spotted_to_done(world):
     assert (first.event, first.width, first.height) == ("kills", 1920, 1080)
     assert world.index.reel_count(MATCH_CHECKSUM) == 10
     assert world.titles() == ["Rendering highlights", "Rendering highlights", "Highlights ready"]
+
+
+def test_one_demo_renders_both_views_before_the_next_demo_starts(world):
+    first = world.add_demo()
+    second = world.add_demo(SECOND_DEMO, "1" * 64)
+    world.ticks(12)
+    assert [(call.demo_path.name, call.perspective) for call in world.render.calls] == [
+        (f"{DEMO_NAME}.dem", "player"), (f"{DEMO_NAME}.dem", "enemy"),
+        (f"{SECOND_DEMO}.dem", "player"), (f"{SECOND_DEMO}.dem", "enemy"),
+    ]
+    assert world.index.demo(first)["state"] == world.index.demo(second)["state"] == "done"
+
+
+def test_the_next_demo_waits_while_the_first_retries_a_failed_view(world):
+    world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran")]
+    world.add_demo()
+    world.add_demo(SECOND_DEMO, "1" * 64)
+    world.ticks(13)
+    assert [(call.demo_path.name, call.perspective) for call in world.render.calls] == [
+        (f"{DEMO_NAME}.dem", "player"), (f"{DEMO_NAME}.dem", "player"), (f"{DEMO_NAME}.dem", "enemy"),
+        (f"{SECOND_DEMO}.dem", "player"), (f"{SECOND_DEMO}.dem", "enemy"),
+    ]
 
 
 def test_a_match_without_the_subject_is_skipped(world):

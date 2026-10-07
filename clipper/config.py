@@ -25,6 +25,7 @@ RATIOS: dict[str, tuple[int, int, bool]] = {
     "4:3-stretched": (1280, 960, True),
 }
 SEQUENCE_EVENTS = ("kills", "rounds")
+RENDERERS = ("csdm", "hlae")     # what records a Sequence: CS Demo Manager, or this app through HLAE
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,7 @@ class Config:
     poll_seconds: float = 5.0
     aspect_ratio: str = "16:9"
     sequence_event: str = "kills"
+    renderer: str = "csdm"
     match_alerts: bool = True
     stopped_playing_minutes: float = 5.0
     page_port: int = 8765
@@ -66,6 +68,8 @@ class Config:
             raise ValueError(
                 f"sequence_event must be one of {', '.join(SEQUENCE_EVENTS)} (got {self.sequence_event!r})"
             )
+        if self.renderer not in RENDERERS:
+            raise ValueError(f"renderer must be one of {', '.join(RENDERERS)} (got {self.renderer!r})")
 
     @property
     def video_size(self) -> tuple[int, int]:

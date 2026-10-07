@@ -30,6 +30,13 @@ def test_fields_cover_every_group_in_page_order():
     assert FIELDS[0].name == "subject_steamid"
 
 
+def test_the_renderer_choice_leads_the_rendering_group():
+    rendering = [f for f in FIELDS if f.group == "Rendering"]
+
+    first = rendering[0]
+    assert (first.name, first.label, first.kind, first.choices) == ("renderer", "Renderer", "choice", ("csdm", "hlae"))
+
+
 # --- defaults() ----------------------------------------------------------------------------------------
 
 
@@ -47,6 +54,7 @@ def test_defaults_match_configs_own_defaults():
     assert values["top_n"] == cfg.top_n == 5
     assert values["page_port"] == cfg.page_port == 8765
     assert values["aspect_ratio"] == "16:9"
+    assert values["renderer"] == cfg.renderer == "csdm"
     assert values["match_alerts"] is True
     assert isinstance(values["pg_bin"], str)
     assert values["pg_bin"] == str(cfg.pg_bin)
@@ -69,9 +77,10 @@ def test_json_values_matches_defaults_minus_the_secret_blobs():
 
 
 def test_json_values_reflects_the_given_configs_effective_values(tmp_path):
-    cfg = Config(top_n=9, data_root=tmp_path, faceit_api_key_protected=protect.protect("a-key"))
+    cfg = Config(top_n=9, renderer="hlae", data_root=tmp_path, faceit_api_key_protected=protect.protect("a-key"))
     values = json_values(cfg)
     assert values["top_n"] == 9
+    assert values["renderer"] == "hlae"
     assert values["data_root"] == str(tmp_path)
     assert STORED_KEY not in values
 
@@ -126,6 +135,36 @@ def test_known_values_are_applied(tmp_path):
     assert loaded.config.top_n == 10
     assert loaded.config.subject_steamid == "76561198000000001"
     assert loaded.warnings == ()
+
+
+def test_a_file_written_before_the_renderer_existed_loads_as_csdm(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"top_n": 10, "aspect_ratio": "4:3"}), encoding="utf-8")
+
+    loaded = load(path)
+
+    assert loaded.config.renderer == "csdm"
+    assert loaded.warnings == ()
+
+
+def test_the_renderer_is_read_from_the_file(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"renderer": "hlae"}), encoding="utf-8")
+
+    loaded = load(path)
+
+    assert loaded.config.renderer == "hlae"
+    assert loaded.warnings == ()
+
+
+def test_an_unknown_renderer_in_the_file_falls_back_to_csdm_and_warns_with_its_label(tmp_path):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"renderer": "obs"}), encoding="utf-8")
+
+    loaded = load(path)
+
+    assert loaded.config.renderer == "csdm"
+    assert loaded.warnings == ("Renderer: must be one of csdm, hlae; using the default",)
 
 
 def test_data_root_empty_string_becomes_none_and_a_real_path_becomes_a_path(tmp_path):
@@ -204,6 +243,8 @@ def test_the_stored_protected_key_loads_as_is_and_a_corrupt_one_falls_back(tmp_p
     ("faceit_redirect_uri", "https://baggaclipper.pages.dev/"),
     ("aspect_ratio", "4:3-stretched"),
     ("sequence_event", "rounds"),
+    ("renderer", "csdm"),
+    ("renderer", "hlae"),
     ("top_n", 25),
     ("padding_before_s", 4),
     ("padding_before_s", 4.5),
@@ -223,6 +264,8 @@ def test_valid_values_pass(name, value):
     ("faceit_redirect_uri", 5),
     ("aspect_ratio", "21:9"),
     ("sequence_event", "frags"),
+    ("renderer", "obs"),
+    ("renderer", 1),
     ("top_n", 0),
     ("top_n", 5.0),
     ("padding_before_s", -1),
@@ -240,6 +283,8 @@ def test_error_messages_are_short_and_say_whats_allowed():
     assert errors["top_n"] == "must be a whole number from 1 to 50"
     errors = validate({"aspect_ratio": "21:9"}, check_exists=False)
     assert errors["aspect_ratio"] == "must be one of 16:9, 4:3, 4:3-hd, 4:3-stretched"
+    errors = validate({"renderer": "obs"}, check_exists=False)
+    assert errors["renderer"] == "must be one of csdm, hlae"
 
 
 def test_the_secret_kind_is_only_checked_when_a_value_is_given():
@@ -296,6 +341,32 @@ def test_a_value_set_back_to_its_default_disappears_from_the_file(tmp_path):
     assert save(path, {"top_n": 5}) == {}
 
     assert read_raw(path) == {}
+
+
+def test_the_renderer_is_saved_and_loads_back(tmp_path):
+    path = tmp_path / "settings.json"
+
+    assert save(path, {"renderer": "hlae"}) == {}
+
+    assert read_raw(path) == {"renderer": "hlae"}
+    assert load(path).config.renderer == "hlae"
+
+
+def test_choosing_csdm_again_takes_the_renderer_out_of_the_file(tmp_path):
+    path = tmp_path / "settings.json"
+    save(path, {"renderer": "hlae"})
+
+    assert save(path, {"renderer": "csdm"}) == {}
+
+    assert read_raw(path) == {}
+
+
+def test_an_unknown_renderer_is_not_saved(tmp_path):
+    path = tmp_path / "settings.json"
+
+    assert save(path, {"renderer": "obs"}) == {"renderer": "must be one of csdm, hlae"}
+
+    assert not path.exists()
 
 
 def test_numbers_are_compared_by_value_not_type(tmp_path):

@@ -16,7 +16,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 
 from clipper import paths, protect
-from clipper.config import RATIOS, SEQUENCE_EVENTS, Config
+from clipper.config import RATIOS, RENDERERS, SEQUENCE_EVENTS, Config
 from clipper.faceit_oauth import RELAY_URL
 
 KEY_FIELD = "faceit_api_key"                  # write-only: never stored or read back under this name
@@ -66,6 +66,7 @@ FIELDS: tuple[Field, ...] = (
     Field("sequence_event", "Picture", "One Clip per", "choice", choices=SEQUENCE_EVENTS),
     Field("padding_before_s", "Picture", "Seconds before each Frag", "number", minimum=0, maximum=30),
     Field("padding_after_s", "Picture", "Seconds after each Frag", "number", minimum=0, maximum=30),
+    Field("renderer", "Rendering", "Renderer", "choice", choices=RENDERERS),
     Field("top_n", "Rendering", "Highlights per match", "int", minimum=1, maximum=50),
     Field("stall_seconds", "Rendering", "Stall timeout (s)", "number", minimum=30, maximum=3600),
     Field("launch_timeout_seconds", "Rendering", "Launch timeout (s)", "number", minimum=30, maximum=3600),

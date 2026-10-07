@@ -105,6 +105,16 @@ def test_an_unknown_sequence_event_is_rejected():
         Config(sequence_event="frags")
 
 
+def test_the_renderer_is_csdm_unless_hlae_is_chosen():
+    assert Config().renderer == "csdm"
+    assert Config(renderer="hlae").renderer == "hlae"
+
+
+def test_an_unknown_renderer_is_rejected():
+    with pytest.raises(ValueError, match="renderer"):
+        Config(renderer="obs")
+
+
 def test_match_alert_settings_have_defaults():
     cfg = Config()
     assert (cfg.match_alerts, cfg.stopped_playing_minutes, cfg.page_port) == (True, 5.0, 8765)

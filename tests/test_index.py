@@ -92,6 +92,43 @@ def test_a_retry_that_fails_midway_changes_nothing(index, monkeypatch):
     assert index.demo(demo_id)["state"] == "failed"
 
 
+def test_deleting_a_demo_removes_its_rows_and_unlinks_its_faceit_match(index):
+    index.save_match(MATCH)
+    index.save_highlights(MATCH.checksum, [highlight(3, 10, 1000)], {3})
+    hl = index.selected_highlights(MATCH.checksum)[0]["id"]
+    demo_id = add(index, name="1-abc-1.dem.zst")
+    index.advance(demo_id, "rendering", match_checksum=MATCH.checksum)
+    job = index.queue_render(demo_id, "player", attempt=1)
+    index.add_clip(job, hl, ClipFile(sequence=1, start_tick=1100, end_tick=1356,
+                                     path=Path("sequence-1.mp4"), duration_s=4.0), "renders/sequence-1.mp4")
+    index.finish_render(job, "done")
+    found = datetime(2026, 10, 6, 20, 0, tzinfo=timezone.utc)
+    index.save_faceit_match("1-abc", found, "ready")
+    index.link_grabbed_matches(found)
+
+    deleted = index.delete_demo(demo_id)
+
+    assert deleted["archive_path"] == str(Path("E:/cs2clips/demos/1-abc-1.dem.zst"))
+    assert index.demo(demo_id) is None
+    assert index.latest_render(demo_id, "player") is None
+    assert index.clips_for(hl, "player") == []
+    assert index.faceit_match("1-abc")["demo_id"] is None
+    assert not index.has_demo("1-abc-1.dem.zst", "a" * 64)      # downloaded again, it is taken fresh
+
+
+@pytest.mark.parametrize("state", ["joined", "done"])
+def test_a_demo_that_has_its_reels_is_never_deleted(index, state):
+    demo_id = add(index)
+    index.advance(demo_id, state)
+    with pytest.raises(ValueError, match="Reels"):
+        index.delete_demo(demo_id)
+    assert index.demo(demo_id)["state"] == state
+
+
+def test_deleting_an_unknown_demo_finds_nothing(index):
+    assert index.delete_demo(999) is None
+
+
 def test_saving_highlights_again_updates_them_in_place(index):
     both = [highlight(3, 40, 15259), highlight(12, 80, 72031)]
     index.save_highlights(MATCH.checksum, both, {3, 12})

@@ -7,6 +7,7 @@ Every step can run again safely, so a crash or a reboot resumes where it stopped
 from __future__ import annotations
 
 import logging
+import shutil
 import threading
 import time
 from collections.abc import Callable
@@ -96,6 +97,57 @@ class StopRequest:
         return self._event.wait(timeout)
 
 
+class DeleteRequest:
+    """How the Status page deletes a Demo without pulling it out from under the worker. The worker
+    claims each Demo for a step; a delete asked during that step aborts its render the way a FACEIT AC
+    abort stops it, and the worker deletes the Demo once the step is over. Any other Demo is deleted
+    on the spot, the worker keeping off it until it is gone. Thread-safe."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._working_on: int | None = None
+        self._asked: set[int] = set()
+
+    def claim(self, demo_id: int) -> bool:
+        """The worker is about to take a step on this Demo. False while it is being deleted."""
+        with self._lock:
+            if demo_id in self._asked:
+                return False
+            self._working_on = demo_id
+            return True
+
+    def asked(self, demo_id: int) -> bool:
+        with self._lock:
+            return demo_id in self._asked
+
+    def release(self, demo_id: int, remove: Callable[[], object]) -> None:
+        """The worker's step on this Demo is over: a delete asked during it happens now."""
+        with self._lock:
+            self._working_on = None
+            if demo_id not in self._asked:
+                return
+        try:
+            remove()
+        finally:
+            with self._lock:
+                self._asked.discard(demo_id)
+
+    def delete(self, demo_id: int, remove: Callable[[], bool]) -> str | None:
+        """"deferred" while the worker is on this Demo (or it is already going); otherwise `remove`
+        runs now: "deleted", or None when it found no such Demo. Its errors pass through."""
+        with self._lock:
+            if demo_id in self._asked:
+                return "deferred"
+            self._asked.add(demo_id)
+            if self._working_on == demo_id:
+                return "deferred"
+        try:
+            return "deleted" if remove() else None
+        finally:
+            with self._lock:
+                self._asked.discard(demo_id)
+
+
 @dataclass
 class Services:
     """Everything the worker talks to. Tests swap in fakes."""
@@ -121,14 +173,38 @@ def _fresh_dir(path: Path) -> Path:
     return candidate
 
 
+def delete_demo(index: Index, cfg: Config, demo_id: int) -> bool:
+    """Forget a Demo that is not in Reels yet, with its download, its unpacked .dem and its renders;
+    its logs stay. False when there is no such Demo; ValueError when it is already in Reels. A file
+    that cannot go is logged and left."""
+    demo = index.delete_demo(demo_id)
+    if demo is None:
+        return False
+    for path in filter(None, (demo["archive_path"], demo["dem_path"])):
+        try:
+            Path(path).unlink(missing_ok=True)
+        except OSError as exc:
+            log.warning("demo #%s: could not remove %s: %s", demo_id, path, exc)
+    checksum = demo["match_checksum"]
+    if checksum and not any(other["match_checksum"] == checksum for other in index.all_demos()):
+        renders = cfg.renders_dir / checksum
+        shutil.rmtree(renders, ignore_errors=True)
+        if renders.exists():
+            log.warning("demo #%s: could not remove all of %s", demo_id, renders)
+    log.info("demo #%s deleted: %s", demo_id, demo["file_name"])
+    return True
+
+
 class Worker:
     def __init__(self, cfg: Config, index: Index, services: Services, *,
-                 state: AppState | None = None, stop: StopRequest | None = None):
+                 state: AppState | None = None, stop: StopRequest | None = None,
+                 deletes: DeleteRequest | None = None):
         self.cfg = cfg
         self.index = index
         self.services = services
         self.state = state if state is not None else AppState()
         self.stop = stop if stop is not None else StopRequest()
+        self.deletes = deletes if deletes is not None else DeleteRequest()
         self._told_about_gui = False
         self._waiting_reasons: tuple[str, ...] = ()
 
@@ -158,7 +234,7 @@ class Worker:
                     if render_turn_taken:
                         continue      # maps first: the oldest Demo renders both views before the next starts
                     render_turn_taken = True
-                self._advance(demo)
+                self._step(demo["id"])
             if self.stop.stopping():
                 return
             if self.services.alerts is not None:
@@ -171,6 +247,27 @@ class Worker:
                 self.state.set_waiting(self._waiting_reasons)
             else:
                 self.state.set_idle()
+
+    def _step(self, demo_id: int) -> None:
+        """One step on one Demo, which the Status page cannot delete under it: a delete asked
+        meanwhile aborts its render and happens once the step is over."""
+        if not self.deletes.claim(demo_id):
+            return                                    # being deleted right now
+        try:
+            demo = self.index.demo(demo_id)           # None: deleted since this tick listed it
+            if demo is not None and not self.deletes.asked(demo_id):
+                self._advance(demo)
+        finally:
+            self.deletes.release(demo_id, lambda: self._delete(demo_id))
+
+    def _delete(self, demo_id: int) -> None:
+        try:
+            delete_demo(self.index, self.cfg, demo_id)
+        except ValueError as exc:                     # it reached Reels during the step
+            log.warning("demo #%s was not deleted: %s", demo_id, exc)
+
+    def _gives_way(self, demo_id: int) -> bool:
+        return self.stop.stopping() or self.deletes.asked(demo_id)
 
     def _advance(self, demo) -> None:
         steps = {
@@ -256,7 +353,7 @@ class Worker:
         self.index.advance(demo["id"], "joined")
 
     def _try_render(self, demo, job) -> None:
-        if self.stop.stopping():
+        if self._gives_way(demo["id"]):
             return
         if self.index.paused_by() is not None:
             return
@@ -269,7 +366,7 @@ class Worker:
             f"{len(highlights)} Highlights from {match['map']} ({job['perspective']} view). "
             f"CS2 opens in {self.cfg.heads_up_seconds:g} s — please don't start it yourself.",
         )
-        if not self._gate_stays_clear(self.cfg.heads_up_seconds):
+        if not self._gate_stays_clear(self.cfg.heads_up_seconds, demo["id"]):
             return
         output_dir = _fresh_dir(
             self.cfg.renders_dir / demo["match_checksum"] / job["perspective"] / f"attempt-{job['attempt']}"
@@ -292,7 +389,8 @@ class Worker:
         )
         try:
             result = self.services.render(
-                request, lambda: self.services.gate.faceit_running() or self.stop.abort_render()
+                request, lambda: (self.services.gate.faceit_running() or self.stop.abort_render()
+                                  or self.deletes.asked(demo["id"]))
             )
         except Exception as exc:  # noqa: BLE001 - a crashed render is a failed attempt
             log.exception("render crashed")
@@ -338,16 +436,17 @@ class Worker:
             self._waiting_reasons = status.reasons
         return status.ok
 
-    def _gate_stays_clear(self, seconds: float) -> bool:
-        """Wait out the heads-up, giving way as soon as the Gate closes or a stop is requested."""
+    def _gate_stays_clear(self, seconds: float, demo_id: int) -> bool:
+        """Wait out the heads-up, giving way as soon as the Gate closes, a stop is requested or the
+        Demo is to be deleted."""
         waited = 0.0
         while waited < seconds:
-            if self.stop.stopping():
+            if self._gives_way(demo_id):
                 return False
             step = min(1.0, seconds - waited)
             self.services.sleep(step)
             waited += step
-            if self.stop.stopping():
+            if self._gives_way(demo_id):
                 return False
             status = self.services.gate.check()
             if not status.ok:

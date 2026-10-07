@@ -11,9 +11,9 @@ from clipper.csdm_cli import CsdmCli
 from clipper.gate import GUI_REASON, GateStatus
 from clipper.index import Index
 from clipper.model import ClipFile, MatchInfo
-from clipper.render import RenderResult, render as run_render
+from clipper.render import ABORTED, RenderResult, render as run_render
 from clipper.state import AppState
-from clipper.worker import QUIT_ABORT, Services, StopRequest, Worker
+from clipper.worker import QUIT_ABORT, DeleteRequest, Services, StopRequest, Worker, delete_demo
 from tests.fakes import FakeProbe
 from tests.fixtures import DEMO_NAME, MATCH_CHECKSUM, MATCH_FACTS
 
@@ -92,6 +92,7 @@ class World:
     notices: list
     state: AppState
     stop: StopRequest
+    deletes: DeleteRequest
 
     def add_demo(self, name: str = DEMO_NAME, sha256: str = "0" * 64) -> int:
         file_name = f"{name}.dem.zst"
@@ -111,7 +112,7 @@ def world(tmp_path):
                  index_path=tmp_path / "clipper.sqlite")
     index = Index(cfg.index_path)
     facts, gate, render, notices = FakeFacts(), FakeGate(), FakeRender(), []
-    state, stop = AppState(), StopRequest()
+    state, stop, deletes = AppState(), StopRequest(), DeleteRequest()
     services = Services(
         intake=FakeIntake(),
         unpack=lambda archive, out_dir: out_dir / archive.name.removesuffix(".zst"),
@@ -123,8 +124,8 @@ def world(tmp_path):
         notify=lambda title, body: notices.append((title, body)),
         sleep=lambda seconds: None,
     )
-    worker = Worker(cfg, index, services, state=state, stop=stop)
-    yield World(cfg, index, services, worker, facts, gate, render, notices, state, stop)
+    worker = Worker(cfg, index, services, state=state, stop=stop, deletes=deletes)
+    yield World(cfg, index, services, worker, facts, gate, render, notices, state, stop, deletes)
     index.close()
 
 
@@ -281,6 +282,104 @@ class _CountingAlerts:
 
     def tick(self):
         self.ticks += 1
+
+
+# --- deleting a Demo -----------------------------------------------------------------------------
+
+
+def _write(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"x")
+    return path
+
+
+def test_deleting_a_demo_takes_its_download_its_dem_and_its_renders_but_not_its_logs(world, tmp_path):
+    demo_id = world.add_demo()
+    world.ticks(3)                                  # unpacked and analyzed: it has a .dem and a match
+    cfg = replace(world.cfg, logs_dir=tmp_path / "logs")
+    files = [_write(cfg.demos_dir / f"{DEMO_NAME}.dem.zst"), _write(cfg.demos_dir / f"{DEMO_NAME}.dem"),
+             _write(cfg.renders_dir / MATCH_CHECKSUM / "player" / "attempt-1" / "sequence-1.mp4")]
+    log_file = _write(cfg.logs_dir / f"demo-{demo_id}-analyze.log")
+    assert delete_demo(world.index, cfg, demo_id) is True
+    assert world.index.demo(demo_id) is None
+    assert [path.exists() for path in files] == [False, False, False]
+    assert not (cfg.renders_dir / MATCH_CHECKSUM).exists()
+    assert log_file.exists()
+    assert delete_demo(world.index, cfg, demo_id) is False      # nothing left to delete
+
+
+def test_deleting_a_demo_leaves_the_renders_another_demo_of_its_match_has(world):
+    first = world.add_demo()
+    world.add_demo("1-00000000-0000-4000-8000-000000000003-1-1", "3" * 64)   # the same match, another file
+    world.ticks(3)
+    clip = _write(world.cfg.renders_dir / MATCH_CHECKSUM / "player" / "attempt-1" / "sequence-1.mp4")
+    assert delete_demo(world.index, world.cfg, first) is True
+    assert clip.exists()
+
+
+def test_deleting_the_demo_being_rendered_aborts_its_render_then_deletes_it(world):
+    seen = {}
+
+    def render_while_deleted(request, should_abort):
+        seen["before"] = should_abort()
+        seen["delete"] = world.deletes.delete(demo_id, lambda: pytest.fail("deleted under the worker"))
+        seen["after"] = should_abort()
+        return RenderResult(ok=False, aborted=True, failure=ABORTED)
+
+    world.services.render = render_while_deleted
+    demo_id = world.add_demo()
+    world.ticks(5)
+    assert seen == {"before": False, "delete": "deferred", "after": True}
+    assert world.index.demo(demo_id) is None
+
+
+def test_a_delete_during_the_heads_up_keeps_cs2_closed(world):
+    def sleep_while_deleted(seconds):
+        world.deletes.delete(demo_id, lambda: pytest.fail("deleted under the worker"))
+
+    world.services.sleep = sleep_while_deleted
+    demo_id = world.add_demo()
+    world.ticks(5)
+    assert world.render.calls == []
+    assert world.index.demo(demo_id) is None
+
+
+def test_a_demo_deleted_after_the_tick_listed_it_gets_no_step(world):
+    unpacked = []
+
+    def unpack_and_delete_the_other(archive, out_dir):
+        unpacked.append(archive.name)
+        world.deletes.delete(second, lambda: delete_demo(world.index, world.cfg, second))
+        return out_dir / archive.name.removesuffix(".zst")
+
+    world.services.unpack = unpack_and_delete_the_other
+    world.add_demo()
+    second = world.add_demo(SECOND_DEMO, "1" * 64)
+    world.ticks(1)
+    assert unpacked == [f"{DEMO_NAME}.dem.zst"]
+    assert world.index.demo(second) is None
+
+
+def test_delete_request_keeps_the_worker_off_a_demo_while_it_goes():
+    deletes = DeleteRequest()
+    claimed = []
+    assert deletes.delete(7, lambda: claimed.append(deletes.claim(7)) or True) == "deleted"
+    assert claimed == [False]
+    assert deletes.claim(7)                         # gone: nothing holds the id any more
+    assert deletes.delete(9, lambda: False) is None   # no such Demo
+
+
+def test_delete_request_waits_for_the_step_the_worker_is_taking():
+    deletes = DeleteRequest()
+    removed = []
+    assert deletes.claim(7)
+    assert deletes.delete(7, lambda: pytest.fail("deleted under the worker")) == "deferred"
+    assert deletes.delete(7, lambda: pytest.fail("deleted twice")) == "deferred"
+    assert deletes.asked(7) and not deletes.asked(8)
+    deletes.release(7, lambda: removed.append(7))
+    assert removed == [7] and not deletes.asked(7)
+    assert deletes.claim(8)
+    deletes.release(8, lambda: pytest.fail("no delete was asked"))
 
 
 # --- StopRequest -------------------------------------------------------------------------------

@@ -108,9 +108,11 @@ class FakeBuild:
     calls: list = field(default_factory=list)      # (cfg, page_url, pages_off), one per attempt
     workers: list = field(default_factory=list)
     errors: list = field(default_factory=list)     # one is raised per attempt while any are left
+    deletes: list = field(default_factory=list)    # the DeleteRequest each attempt was given
 
-    def __call__(self, cfg, index, *, state, stop, page_url, pages_off):
+    def __call__(self, cfg, index, *, state, stop, deletes, page_url, pages_off):
         self.calls.append((cfg, page_url, pages_off))
+        self.deletes.append(deletes)
         if self.errors:
             raise self.errors.pop(0)
         worker = FakeWorker()
@@ -202,6 +204,12 @@ def test_problems_keep_the_worker_from_being_built_or_ticked_and_are_published(w
     assert delay == world.store.current().config.poll_seconds
     assert world.build.calls == []
     assert world.state.snapshot().problems == ("Postgres won't start",)
+
+
+def test_the_worker_is_built_with_the_delete_request_the_status_page_uses(world):
+    world.app.step(world.index)
+    assert len(world.build.deletes) == 1
+    assert world.build.deletes[0] is world.app.deletes
 
 
 def test_a_settings_change_reevaluates_problems_at_once_then_builds_and_ticks_once_clear(world):
@@ -628,6 +636,47 @@ def test_the_set_up_routes_are_answered_by_the_apps_setup(windowed):
 
     assert response.status_code == 202 and windowed.app.setup.starts == 1
     assert client.get("/api/setup", base_url=PC).get_json()["running"] is True
+
+
+def _download(tmp_path):
+    archive = tmp_path / "clips" / "demos" / "1-a.dem.zst"
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    archive.write_bytes(b"x")
+    return archive
+
+
+def test_a_delete_through_the_web_takes_the_demo_and_its_download(windowed, tmp_path):
+    archive = _download(tmp_path)
+    index = Index(tmp_path / "clipper.sqlite")
+    try:
+        demo_id = index.add_demo(archive.name, "a" * 64, archive)
+        windowed.app.start_web()
+        client = windowed.servers[0].flask_app.test_client()
+
+        response = client.post(f"/api/demos/{demo_id}/delete", base_url=PC, headers={web.MARKER_HEADER: "1"})
+
+        assert response.status_code == 200
+        assert index.demo(demo_id) is None
+        assert not archive.exists()
+    finally:
+        index.close()
+
+
+def test_a_delete_through_the_web_waits_while_the_worker_takes_a_step_on_the_demo(windowed, tmp_path):
+    archive = _download(tmp_path)
+    index = Index(tmp_path / "clipper.sqlite")
+    try:
+        demo_id = index.add_demo(archive.name, "a" * 64, archive)
+        windowed.app.start_web()
+        client = windowed.servers[0].flask_app.test_client()
+        assert windowed.app.deletes.claim(demo_id)          # what the worker does before each step
+
+        response = client.post(f"/api/demos/{demo_id}/delete", base_url=PC, headers={web.MARKER_HEADER: "1"})
+
+        assert response.status_code == 202
+        assert index.demo(demo_id) is not None and archive.exists()
+    finally:
+        index.close()
 
 
 def test_close_closes_the_window_and_then_stops_the_web_server(windowed):

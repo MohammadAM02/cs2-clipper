@@ -216,6 +216,28 @@ class Index:
         self._db.execute("COMMIT")
         return state
 
+    def delete_demo(self, demo_id: int) -> sqlite3.Row | None:
+        """Forget a Demo that is not in Reels yet: its Render Jobs and their Clips go with it, and its
+        FACEIT match lets go of it. Returns the row deleted (None when there was none); its files are
+        the caller's. The match and its Highlights stay -- the same Demo taken again saves over them.
+        """
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            demo = self.demo(demo_id)
+            if demo is not None:
+                if demo["state"] in ("joined", "done"):
+                    raise ValueError(f"demo {demo_id} is already in Reels")
+                self._db.execute("DELETE FROM clips WHERE render_job_id IN"
+                                 " (SELECT id FROM render_jobs WHERE demo_id = ?)", (demo_id,))
+                self._db.execute("DELETE FROM render_jobs WHERE demo_id = ?", (demo_id,))
+                self._db.execute("UPDATE faceit_matches SET demo_id = NULL WHERE demo_id = ?", (demo_id,))
+                self._db.execute("DELETE FROM demos WHERE id = ?", (demo_id,))
+        except BaseException:
+            self._db.execute("ROLLBACK")
+            raise
+        self._db.execute("COMMIT")
+        return demo
+
     # --- Matches and Highlights ------------------------------------------------------------------
 
     def save_match(self, info: MatchInfo) -> None:

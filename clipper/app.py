@@ -66,7 +66,7 @@ from clipper.state import AppState
 from clipper.unpack import unpack
 from clipper.web import PAGES  # noqa: F401 - its one home is web.py; cli.py and the tests read it as app.PAGES
 from clipper.window import WindowLauncher
-from clipper.worker import Services, StopRequest, Worker
+from clipper.worker import DeleteRequest, Services, StopRequest, Worker, delete_demo
 
 log = logging.getLogger(__name__)
 
@@ -141,7 +141,7 @@ def start_match_alerts(cfg: Config, index: Index, probe: SystemProbe, *,
                        stopped_playing_minutes=cfg.stopped_playing_minutes)
 
 
-def build_worker(cfg: Config, index: Index, *, state: AppState, stop: StopRequest,
+def build_worker(cfg: Config, index: Index, *, state: AppState, stop: StopRequest, deletes: DeleteRequest,
                  page_url: str | None, pages_off: str | None) -> Worker:
     probe = SystemProbe()
     gate = Gate(probe, cfg.data_root, cfg.min_free_gb)
@@ -164,7 +164,7 @@ def build_worker(cfg: Config, index: Index, *, state: AppState, stop: StopReques
         notify=notify,
         alerts=start_match_alerts(cfg, index, probe, page_url=page_url, pages_off=pages_off),
     )
-    return Worker(cfg, index, services, state=state, stop=stop)
+    return Worker(cfg, index, services, state=state, stop=stop, deletes=deletes)
 
 
 def gate_reasons(cfg: Config, probe: ProcessProbe) -> tuple[str, ...]:
@@ -190,6 +190,7 @@ class App:
         self.settings = settings
         self.state = state if state is not None else AppState()
         self.stop = stop if stop is not None else StopRequest()
+        self.deletes = DeleteRequest()          # the Status page's deletes, shared with every worker built
         self.releases = checks.HlaeReleases()
         self.setup = setup(self._setup_context, after=self._after_setup)
         self.page_port: int | None = None
@@ -239,6 +240,7 @@ class App:
             faceit_lookup=self.faceit_lookup,
             setup_status=self.setup.status,
             start_setup=self.start_setup,
+            delete_demo=self.delete_demo,
         )
         try:
             self._web = web.WebServer(web.create_app(ctx), self.settings.current().config.page_port,
@@ -375,6 +377,18 @@ class App:
             index.close()
         self.state.set_paused_by(None)
 
+    # --- deleting a Demo (the Status page's In progress list) ---------------------------------------
+
+    def delete_demo(self, demo_id: int) -> str | None:
+        """"deleted"; "deferred" while the worker finishes its step on the Demo (a render is aborted)
+        and then deletes it; None for no such Demo. ValueError when it is already in Reels."""
+        index = Index(self._index_path)
+        try:
+            return self.deletes.delete(
+                demo_id, lambda: delete_demo(index, self.settings.current().config, demo_id))
+        finally:
+            index.close()
+
     # --- the worker thread -----------------------------------------------------------------------
 
     def start_worker(self) -> None:
@@ -440,7 +454,7 @@ class App:
                 if self._worker is not None:
                     log.info("settings changed; rebuilding the worker")
                 page_url = f"http://127.0.0.1:{self.page_port}/demos" if self.page_port else None
-                worker = self._build(cfg, index, state=self.state, stop=self.stop,
+                worker = self._build(cfg, index, state=self.state, stop=self.stop, deletes=self.deletes,
                                      page_url=page_url, pages_off=self.state.snapshot().pages_off)
             except Exception as exc:  # noqa: BLE001 - a failed start is a problem to show; the thread goes on
                 log.exception("could not start the worker")

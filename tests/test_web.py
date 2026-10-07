@@ -474,6 +474,46 @@ def test_retry_refuses_a_phone_and_needs_the_marker(tmp_path, index):
     assert phone_post(app.test_client(), f"/api/demos/{demo_id}/retry", headers=MARKED).status_code == 403
 
 
+def test_delete_replies_200_once_the_demo_is_gone(tmp_path):
+    asked = []
+    app = app_for(tmp_path, delete_demo=lambda demo_id: asked.append(demo_id) or "deleted")
+    response = pc_post(app.test_client(), "/api/demos/7/delete", headers=MARKED)
+    assert response.status_code == 200
+    assert response.get_json() == {"result": "deleted"}
+    assert asked == [7]
+
+
+def test_delete_replies_202_while_the_worker_finishes_its_step_on_the_demo(tmp_path):
+    response = pc_post(app_for(tmp_path, delete_demo=lambda demo_id: "deferred").test_client(),
+                       "/api/demos/7/delete", headers=MARKED)
+    assert response.status_code == 202
+    assert response.get_json() == {"result": "deferred"}
+
+
+def test_delete_on_an_unknown_demo_is_404(tmp_path):
+    response = pc_post(app_for(tmp_path, delete_demo=lambda demo_id: None).test_client(),
+                       "/api/demos/999/delete", headers=MARKED)
+    assert response.status_code == 404
+
+
+def test_delete_on_a_demo_in_reels_is_409(tmp_path):
+    def in_reels(demo_id):
+        raise ValueError(f"demo {demo_id} is already in Reels")
+
+    response = pc_post(app_for(tmp_path, delete_demo=in_reels).test_client(), "/api/demos/7/delete",
+                       headers=MARKED)
+    assert response.status_code == 409
+    assert response.get_json() == {"error": "demo 7 is already in Reels"}
+
+
+def test_delete_refuses_a_phone_and_needs_the_marker(tmp_path):
+    asked = []
+    app = app_for(tmp_path, delete_demo=lambda demo_id: asked.append(demo_id) or "deleted")
+    assert pc_post(app.test_client(), "/api/demos/7/delete").status_code == 403
+    assert phone_post(app.test_client(), "/api/demos/7/delete", headers=MARKED).status_code == 403
+    assert asked == []
+
+
 def test_pause_calls_the_context_and_replies_204(tmp_path):
     calls = []
     app = app_for(tmp_path, pause=lambda: calls.append(True))

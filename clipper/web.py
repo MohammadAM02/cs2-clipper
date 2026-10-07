@@ -230,6 +230,7 @@ class WebContext:
     faceit_lookup: Callable[[str], dict] = _faceit_lookup_not_set_up
     setup_status: Callable[[], dict] = _nothing_to_set_up        # provision.Setup.status
     start_setup: Callable[[], str | None] = lambda: None         # why it was not started, or None
+    delete_demo: Callable[[int], str | None] = lambda demo_id: None   # "deleted", "deferred" or None: no such Demo
 
 
 def _client_address() -> str:
@@ -339,6 +340,21 @@ def create_app(ctx: WebContext) -> Flask:
         finally:
             index.close()
         return _no_store(jsonify(state=state))
+
+    @app.post("/api/demos/<int:demo_id>/delete")
+    def api_demo_delete(demo_id: int):
+        """200 once the Demo is gone; 202 while the worker finishes its step on it (a render is aborted)."""
+        try:
+            result = ctx.delete_demo(demo_id)
+        except ValueError as exc:         # already in Reels
+            response = jsonify(error=str(exc))
+            response.status_code = 409
+            return _no_store(response)
+        if result is None:
+            return Response(status=404)
+        response = jsonify(result=result)
+        response.status_code = 202 if result == "deferred" else 200
+        return _no_store(response)
 
     @app.post("/api/pause")
     def api_pause():

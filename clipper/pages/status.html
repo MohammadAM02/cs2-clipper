@@ -188,32 +188,67 @@ function renderNow(data) {
 }
 
 // --- In progress ------------------------------------------------------------------------------------------
+// The Demos whose bin is asking "Delete?", and the ones deleted from here: those say "Deleting…" until they
+// leave the list -- at once, or once the worker lets go of them (a render is aborted first).
+const askingDelete = new Set(), deleted = new Set();
+const demoName = d => `${esc(d.map || "Demo")} #${+d.id}`;
+
 function demoCard(d) {
   const {frac} = progressOf(d);
-  const label = d.state === "failed" ? "Failed" : STAGE_LABEL[STAGES.indexOf(d.state)] || d.state;
-  const color = d.state === "failed" ? "#FF8A3D" : d.state === "rendering" ? "#FFB27A" : "#D6D3CE";
-  const bar = d.state === "failed" ? "pbar fail" : d.state === "rendering" ? "pbar live" : "pbar";
+  const going = deleted.has(d.id), asking = askingDelete.has(d.id) && !going;
+  const label = going ? "Deleting…" : d.state === "failed" ? "Failed" : STAGE_LABEL[STAGES.indexOf(d.state)] || d.state;
+  const color = going ? "#8F8F8F" : d.state === "failed" ? "#FF8A3D" : d.state === "rendering" ? "#FFB27A" : "#D6D3CE";
+  const bar = d.state === "failed" ? "pbar fail" : d.state === "rendering" && !going ? "pbar live" : "pbar";
+  // A joined Demo is in Reels already, past deleting from here.
+  const bin = going || d.state === "joined" ? '<span class="nobin"></span>' :
+    `<button class="del" data-delete="${+d.id}" aria-expanded="${asking}" aria-label="Delete ${demoName(d)}" title="Delete">${ICON.bin}</button>`;
   return `<div class="dcard">
     <div class="top"><span class="maptile">${mapAbbr(d.map || "?")}</span>
       <span style="flex-grow:1;min-width:0"><span style="display:block;font-weight:600;font-size:14px">${esc(d.map || "Reading the Demo…")} <span style="font-weight:400;color:#8F8F8F;font-family:var(--mono);font-size:12px">#${+d.id}</span></span>
         <span class="${bar}" style="display:block;margin-top:6px" aria-hidden="true"><i data-w="${(frac * 100).toFixed(1)}%"></i></span></span>
-      <span style="font-size:13px;font-weight:600;color:${color};width:72px;text-align:right">${esc(label)}</span></div>
-    ${d.error ? `<div class="err"><span>${esc(d.error)}</span>${d.retry ? `<button class="primary sm" data-retry="${+d.id}">Retry</button>` : ""}</div>` : ""}
+      <span style="font-size:13px;font-weight:600;color:${color};width:72px;text-align:right">${esc(label)}</span>${bin}</div>
+    ${asking ? `<div class="ask"><span>Delete ${demoName(d)}? ${d.state === "rendering" ? "Its render stops, and its" : "Its"} download and clips are removed.</span>
+      <div class="acts"><button class="ghost sm" data-delete-no="${+d.id}">Keep</button><button class="primary sm" data-delete-yes="${+d.id}">Delete</button></div></div>` : ""}
+    ${d.error ? `<div class="err"><span>${esc(d.error)}</span>${d.retry && !going ? `<button class="primary sm" data-retry="${+d.id}">Retry</button>` : ""}</div>` : ""}
   </div>`;
 }
 
 function renderDemos(demos) {
   const box = document.getElementById("demos");
   document.getElementById("demo-sum").textContent = demos.length ? `${demos.length} in progress` : "";
-  if (!demos.length) { box.innerHTML = '<p class="empty">Nothing in progress. Finished Demos are in Reels.</p>'; box._ready = false; return; }
-  sync(box, demos, d => d.id, demoCard);
-  // A Demo that left the list without failing has been joined: its Reels are ready.
+  // A Demo that left the list was deleted from here or, unless it failed, joined: its Reels are ready.
   if (prevDemos) {
     const now = new Set(demos.map(d => d.id));
-    prevDemos.filter(d => !now.has(d.id) && d.state !== "failed" && d.map).forEach(d =>
-      toast(`${ICON.check}<span>${esc(d.map)} is ready in Reels</span><a class="primary dark sm" href="/reels">Watch</a>`));
+    prevDemos.filter(d => !now.has(d.id)).forEach(d => {
+      askingDelete.delete(d.id);
+      if (deleted.delete(d.id)) toast(`${ICON.check}<span>Deleted ${demoName(d)}</span>`);
+      else if (d.state !== "failed" && d.map)
+        toast(`${ICON.check}<span>${esc(d.map)} is ready in Reels</span><a class="primary dark sm" href="/reels">Watch</a>`);
+    });
   }
   prevDemos = demos;
+  if (!demos.length) { box.innerHTML = '<p class="empty">Nothing in progress. Finished Demos are in Reels.</p>'; box._ready = false; return; }
+  sync(box, demos, d => d.id, demoCard);
+}
+
+async function deleteDemo(id) {
+  const d = lastStatus.demos.find(x => x.id === id) || {id};
+  askingDelete.delete(id); deleted.add(id);
+  renderDemos(lastStatus.demos);
+  let failure = "";
+  try {
+    // 200 deleted; 202 deleted once the worker lets go of it; 404 gone already.
+    const response = await api(`api/demos/${id}/delete`, {method: "POST"});
+    if (response.status === 409) failure = "is in Reels already, so it stays";
+    else if (!response.ok && response.status !== 404) failure = "couldn't be deleted. Try again.";
+  } catch (err) {
+    failure = "couldn't be deleted. Is CS2 Clipper running?";
+  }
+  if (failure) {
+    deleted.delete(id);
+    toast(`${ICON.info}<span>${demoName(d)} ${failure}</span>`);
+  }
+  loadStatus();
 }
 
 // --- Checks -----------------------------------------------------------------------------------------------
@@ -470,11 +505,24 @@ document.getElementById("quit").addEventListener("click", () => {
 document.getElementById("quit-now").addEventListener("click", () => sendQuit("now"));
 document.getElementById("quit-after").addEventListener("click", () => sendQuit("after_render"));
 document.getElementById("demos").addEventListener("click", async e => {
-  const button = e.target.closest("button[data-retry]");
+  const button = e.target.closest("button");
   if (!button) return;
-  button.disabled = true;
-  await api(`api/demos/${button.dataset.retry}/retry`, {method: "POST"});
-  loadStatus();
+  const {retry, delete: bin, deleteNo, deleteYes} = button.dataset;
+  if (retry) {
+    button.disabled = true;
+    await api(`api/demos/${retry}/retry`, {method: "POST"});
+    loadStatus();
+  } else if (bin || deleteNo) {
+    // The bin asks first; the bin again, or Keep, puts the question away.
+    const id = +(bin || deleteNo);
+    if (!askingDelete.delete(id)) askingDelete.add(id);
+    renderDemos(lastStatus.demos);
+    const focus = askingDelete.has(id) ? `[data-delete-no="${id}"]` : `[data-delete="${id}"]`;
+    document.querySelector(`#demos ${focus}`)?.focus();
+  } else if (deleteYes) {
+    button.disabled = true;
+    deleteDemo(+deleteYes);
+  }
 });
 document.getElementById("setup-go").addEventListener("click", async e => {
   const button = e.currentTarget;

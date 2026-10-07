@@ -592,6 +592,13 @@ def test_the_status_page_carries_the_set_up_card(client):
     assert 'id="setup"' in page and 'api("api/setup"' in page
 
 
+def test_the_status_page_deletes_a_demo_after_asking(client):
+    page = pc_get(client, "/status").get_data(as_text=True)
+
+    assert "data-delete=" in page and "data-delete-yes=" in page and "data-delete-no=" in page
+    assert "api(`api/demos/${id}/delete`" in page
+
+
 def test_quit_passes_the_mode_through_and_returns_the_result(tmp_path):
     calls = []
     app = app_for(tmp_path, quit=lambda mode: calls.append(mode) or "ask")

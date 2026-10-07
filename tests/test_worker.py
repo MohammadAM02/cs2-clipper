@@ -1,3 +1,4 @@
+import logging
 import sys
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -198,6 +199,19 @@ def test_three_failed_renders_fail_the_demo_and_pause_rendering(world):
     assert world.index.get_flag("paused") == "1"
     assert world.index.paused_by() == "failures"
     assert "Rendering paused" in world.titles()
+
+
+def test_every_failed_render_attempt_gets_its_own_log_line(world, caplog):
+    world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran"),
+                            RenderResult(ok=False, failure="csdm reported: Game error")]
+    demo_id = world.add_demo()
+    with caplog.at_level(logging.WARNING, logger="clipper.worker"):
+        world.ticks(6)
+    assert [r.getMessage() for r in caplog.records if r.name == "clipper.worker"] == [
+        f"demo #{demo_id} (de_inferno): player render attempt 1 of 3 failed: "
+        "stalled: no ffmpeg for 180s while CS2 ran",
+        f"demo #{demo_id} (de_inferno): player render attempt 2 of 3 failed: csdm reported: Game error",
+    ]
 
 
 def test_an_aborted_render_is_tried_again_without_counting(world):

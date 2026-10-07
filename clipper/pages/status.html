@@ -82,6 +82,7 @@
       <h2 id="h-log" class="h2" style="margin-right:10px">Log</h2>
       <span id="log-filters" role="group" aria-label="Show" style="display:flex;gap:8px"></span>
       <span class="spacer"></span>
+      <button class="chip" id="copy-log" disabled><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy</button>
       <button class="chip on" id="follow" aria-pressed="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>Follow new lines</button>
     </div>
     <div class="cut" id="log" role="log" aria-label="Log"></div>
@@ -94,7 +95,7 @@ const STAGES = ["spotted", "unpacked", "analyzed", "scored", "rendering", "joine
 const STAGE_LABEL = ["Spotted", "Unpacked", "Analyzed", "Scored", "Rendering", "Joined", "Done"];
 const PERSPECTIVE = {player: "Player view", enemy: "Enemy view"};
 let quitRequested = false, pauseRoute = false, nickname = "", lastStatus = null, grabRows = [], prevDemos = null;
-let logFilter = "all", follow = true, logLines = [];
+let logFilter = "all", follow = true, logLines = [], shownLog = [];
 let setupWasRunning = false, setupUpdates = null;
 const opened = new Set(JSON.parse(sessionStorage.getItem("opened") || "[]"));
 
@@ -283,9 +284,27 @@ function renderLog() {
   document.getElementById("log-filters").innerHTML = [["all", "All", lines.length], ["issues", "Warnings and errors", issues.length]]
     .map(([id, label, n]) => `<button class="chip${logFilter === id ? " on" : ""}" data-filter="${id}" aria-pressed="${logFilter === id}">${label}<span class="n">${n}</span></button>`).join("");
   const name = {WARNING: "Warning", ERROR: "Error", CRITICAL: "Error", INFO: "Info", DEBUG: "Debug"};
-  sync(box, logFilter === "issues" ? issues : lines, l => l.key, l =>
+  shownLog = logFilter === "issues" ? issues : lines;
+  sync(box, shownLog, l => l.key, l =>
     `<div class="logline"><span class="t">${esc(l.t)}</span><span class="lv ${esc(l.lv)}">${esc(name[l.lv] || l.lv)}</span><span class="s">${esc(l.src)}</span><span class="m">${esc(l.msg)}</span></div>`);
+  document.getElementById("copy-log").disabled = !shownLog.length;
   if (follow) box.scrollTop = box.scrollHeight;
+}
+
+// Copy takes what the Log shows (the filter applies), as the raw lines with their full timestamps.
+async function copyLog() {
+  const count = shownLog.length, text = shownLog.map(l => l.text).join("\n");
+  let copied = false;
+  try { await navigator.clipboard.writeText(text); copied = true; } catch (e) {
+    const area = Object.assign(document.createElement("textarea"), {value: text});
+    area.style.cssText = "position:fixed;top:0;left:0;opacity:0;user-select:text";
+    document.body.appendChild(area);
+    area.select();
+    try { copied = document.execCommand("copy"); } catch (err) { /* said below */ }
+    area.remove();
+  }
+  toast(copied ? `${ICON.check}<span>Copied ${count} log ${count === 1 ? "line" : "lines"}</span>`
+    : `${ICON.info}<span>Couldn't copy. Select the lines and press Ctrl+C.</span>`);
 }
 
 // --- Set up: what this PC still lacks, and the run that installs it -----------------------------------------
@@ -480,6 +499,7 @@ document.getElementById("log-filters").addEventListener("click", e => {
   document.getElementById("log").innerHTML = ""; document.getElementById("log")._ready = false;
   renderLog();
 });
+document.getElementById("copy-log").addEventListener("click", copyLog);
 const followButton = document.getElementById("follow");
 const setFollow = on => { follow = on; followButton.classList.toggle("on", on); followButton.setAttribute("aria-pressed", on); };
 followButton.addEventListener("click", () => { setFollow(!follow); if (follow) renderLog(); });

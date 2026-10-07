@@ -78,6 +78,9 @@ def setup(logs_dir: Path) -> list[logging.Handler]:
         handler.setFormatter(formatter)
         root.addHandler(handler)
     root.setLevel(logging.INFO)
+    # "Task queue depth is 1" every time the Status page's requests briefly outnumber waitress's
+    # threads: harmless, and it buried real warnings under the Log's "Warnings and errors" filter.
+    logging.getLogger("waitress.queue").setLevel(logging.ERROR)
 
     _added.extend(handlers)
     return list(_added)

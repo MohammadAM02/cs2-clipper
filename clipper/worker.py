@@ -316,6 +316,8 @@ class Worker:
                 self.index.set_flag("consecutive_failures", "0")
                 return
         self.index.finish_render(job["id"], "failed", result.failure)
+        log.warning("demo #%s (%s): %s render attempt %s of %s failed: %s", demo["id"], match["map"],
+                    job["perspective"], job["attempt"], MAX_RENDER_ATTEMPTS, result.failure)
         failures = int(self.index.get_flag("consecutive_failures", "0")) + 1
         self.index.set_flag("consecutive_failures", str(failures))
         if failures >= PAUSE_AFTER_FAILURES:

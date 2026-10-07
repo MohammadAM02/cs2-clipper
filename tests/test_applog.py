@@ -41,6 +41,15 @@ def test_a_logged_line_reaches_recent_formatted(tmp_path):
     assert lines[-1].endswith("INFO clipper.test: hello world")
 
 
+def test_waitress_queue_depth_warnings_stay_out_of_the_log(tmp_path):
+    applog.setup(tmp_path)
+    logging.getLogger("waitress.queue").warning("Task queue depth is %d", 1)
+    logging.getLogger("waitress").warning("Serving on http://127.0.0.1:8765")
+    assert [line.split(" ", 2)[2] for line in applog.recent()] == [
+        "WARNING waitress: Serving on http://127.0.0.1:8765",
+    ]
+
+
 def test_recent_returns_the_newest_limit_lines_oldest_first(tmp_path):
     applog.setup(tmp_path)
     log = logging.getLogger("clipper.test")

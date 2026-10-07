@@ -243,11 +243,13 @@ h1.title{margin:0;font:800 italic 58px/.98 var(--display);font-stretch:70%}
 #log{background:rgba(7,7,7,.9);border:1px solid #1A1A1A;padding:10px 0;height:240px;overflow-y:auto}
 .logline{display:grid;grid-template-columns:96px 70px 130px minmax(0,1fr);gap:14px;padding:4px 18px;font:12.5px/1.55 var(--mono)}
 .logline:hover{background:#121212}
-.logline .t{color:var(--dim)}.logline .s{color:#8F8F8F;overflow:hidden;text-overflow:ellipsis}.logline .m{color:var(--ink2);word-break:break-word}
+.logline .t{color:var(--dim)}.logline .s{color:#8F8F8F;overflow:hidden;text-overflow:ellipsis}.logline .m{color:var(--ink2);word-break:break-word;white-space:pre-wrap}
+/* pywebview makes the window's body user-select:none; the text worth copying opts back in. */
+#log,.dcard .err span,.ck .d,.ck .h,#setup-error{-webkit-user-select:text;user-select:text;cursor:text}
 .logline.enter{animation:rise .4s cubic-bezier(.2,.9,.3,1.15) both;background:#140B05}
 .lv{font-weight:600;color:#8F8F8F}
 .lv.WARNING{color:var(--accent2)}
-.lv.ERROR,.lv.CRITICAL{color:#000;background:var(--accent);padding:0 6px;border-radius:3px;justify-self:start}
+.lv.ERROR,.lv.CRITICAL{color:#000;background:var(--accent);padding:0 6px;border-radius:3px;justify-self:start;align-self:start}
 
 /* --- Demos to grab --------------------------------------------------------------------------------- */
 .dgrid{display:grid;grid-template-columns:minmax(150px,1.4fr) 84px minmax(110px,1fr) 96px 64px 56px 130px 186px;gap:14px;align-items:center}

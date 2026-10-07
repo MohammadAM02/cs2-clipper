@@ -3,11 +3,13 @@ this file is what changes. It only reads: nothing here writes to CS:DM's tables.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
 
+from clipper.hlae_plan import Kill, Player, RenderInputs, Round
 from clipper.model import MatchInfo, RoundFacts
 
 _FIND_CHECKSUM = """
@@ -45,6 +47,36 @@ WHERE k.match_checksum = %(checksum)s
   AND k.killer_side <> k.victim_side
 GROUP BY k.round_number
 ORDER BY k.round_number
+"""
+
+# What CS:DM 3.20.1 reads for `csdm video`, cut down to what the HLAE plan needs. The Demo's tickrate and
+# tick count (matchRowToMatch), then fetchKills, fetchRounds, and the players as fetchMatchPlayers has
+# them (the name on the death notices, as the user may have overridden it) with the `index` that
+# fetchMatchPlayersSlots calls the slot, which is what `spec_player` takes.
+_RENDER_DEMO = """
+SELECT tickrate, tick_count FROM demos WHERE checksum = %(checksum)s
+"""
+
+_RENDER_KILLS = """
+SELECT round_number, tick, killer_steam_id, victim_steam_id
+FROM kills
+WHERE match_checksum = %(checksum)s
+ORDER BY tick, id
+"""
+
+_RENDER_ROUNDS = """
+SELECT number, end_tick, freeze_time_end_tick
+FROM rounds
+WHERE match_checksum = %(checksum)s
+ORDER BY number
+"""
+
+_RENDER_PLAYERS = """
+SELECT p.steam_id, COALESCE(o.name, p.name) AS name, p."index" AS slot
+FROM players p
+LEFT JOIN steam_account_overrides o ON o.steam_id = p.steam_id
+WHERE p.match_checksum = %(checksum)s
+ORDER BY p.name, p.id
 """
 
 
@@ -96,6 +128,42 @@ def round_facts(conn: psycopg.Connection, checksum: str, steamid: str) -> list[R
         )
         for row in rows
     ]
+
+
+def render_inputs(conn: psycopg.Connection, checksum: str) -> RenderInputs | None:
+    """What the HLAE plan builds its Sequences and cfg files from, read as `csdm video` reads it; None when
+    CS:DM has no Demo with that checksum."""
+    params = {"checksum": checksum}
+    with conn.cursor(row_factory=dict_row) as cur:
+        demo = cur.execute(_RENDER_DEMO, params).fetchone()
+        if demo is None:
+            return None
+        kills = cur.execute(_RENDER_KILLS, params).fetchall()
+        rounds = cur.execute(_RENDER_ROUNDS, params).fetchall()
+        players = cur.execute(_RENDER_PLAYERS, params).fetchall()
+    return render_inputs_from_rows(demo, kills, rounds, players)
+
+
+def render_inputs_from_rows(
+    demo: Mapping[str, Any] | None,
+    kills: Iterable[Mapping[str, Any]],
+    rounds: Iterable[Mapping[str, Any]],
+    players: Iterable[Mapping[str, Any]],
+) -> RenderInputs | None:
+    """The plan's inputs from the rows of the four queries above, or None without the Demo's row. A Kill that
+    nobody made (the world) has no killer: its Steam ID is empty, which is nobody's."""
+    if demo is None:
+        return None
+    return RenderInputs(
+        tickrate=float(demo["tickrate"]),
+        tick_count=demo["tick_count"],
+        kills=tuple(Kill(tick=row["tick"], round_number=row["round_number"],
+                         killer_steam_id=row["killer_steam_id"] or "", victim_steam_id=row["victim_steam_id"] or "")
+                    for row in kills),
+        rounds=tuple(Round(number=row["number"], end_tick=row["end_tick"],
+                           freeze_time_end_tick=row["freeze_time_end_tick"]) for row in rounds),
+        players=tuple(Player(steam_id=row["steam_id"], name=row["name"], slot=row["slot"]) for row in players),
+    )
 
 
 class CsdmFacts:

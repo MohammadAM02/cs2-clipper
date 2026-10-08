@@ -1,10 +1,10 @@
 """A Render Job recorded by starting CS2 through HLAE.exe ourselves, instead of through `csdm video`.
 
 Since a CS2 update CS Demo Manager's plugin no longer hooks in (upstream akiver/cs-demo-manager#1458), so the plan of
-`hlae_plan` goes into CS2's cfg folder as files and HLAE.exe starts CS2 with `+exec cs2clipper`. The plan echoes
-markers into console.log (CS2 starts with `-condebug`); `render` follows them to know where the recording is, closes
-the game when it stalls or never starts, starts it again when that can help, and joins what HLAE recorded into the
-Clips.
+`hlae_plan` goes into CS2's cfg folder as files and HLAE.exe starts CS2 with `+exec cs2clipper`. CS2 names each cfg
+it runs in console.log (it starts with `-condebug`), and the names of the plan's step files are its markers; `render`
+follows them to know where the recording is, closes the game when it stalls or never starts, starts it again when
+that can help, and joins what HLAE recorded into the Clips.
 
 The same contract as `render.render`. It starts only what it is handed -- HLAE.exe (`launch`) and FFmpeg (`run_ffmpeg`)
 -- and the probe, the clock and `sleep` are parameters too, so tests run a whole Render Job against a scripted world."""
@@ -83,7 +83,7 @@ def _tree_size(folder: Path) -> int:
 
 
 class _Console:
-    """console.log, which CS2 writes and the plan echoes its markers into. It is read from where it ended at the
+    """console.log, where CS2 names each cfg of the plan it runs. It is read from where it ended at the
     launch, so what an earlier game wrote is not this one's, and a line still being written waits for its end."""
 
     def __init__(self, path: Path):

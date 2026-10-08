@@ -238,27 +238,32 @@ class World:
         }
 
 
+def ran(cfg: str) -> str:
+    """The line CS2 writes to console.log when it runs the plan's cfg file `cs2clipper_<cfg>`."""
+    return f"10/08 04:38:26 [InputService] execing cs2clipper_{cfg}"
+
+
 def sequence_events(number: int, at: int) -> list[tuple]:
     """Sequence `number` recorded from `at` seconds after the launch, for ten seconds."""
     return [
-        (at, "line", f"CS2CLIPPER ready {number}"),
+        (at, "line", ran(f"s{number}_prepare")),
         (at + 1, "record", number, 1000),
-        (at + 1, "line", f"CS2CLIPPER recording {number}"),
+        (at + 1, "line", ran(f"s{number}_start")),
         (at + 6, "record", number, 3000),
-        (at + 10, "line", f"CS2CLIPPER done {number}"),
+        (at + 10, "line", ran(f"s{number}_end")),
     ]
 
 
 def game(numbers=(1, 2), *, quits=True, closes=True) -> list[tuple]:
     """A game that records the Sequences `numbers`, quits and closes: HLAE.exe exits at 2 s, CS2 is up at 4 s, the demo
     plays at 15 s and the Sequences follow every 15 s."""
-    script = [(2, "hlae_exits", 0), (4, "cs2_up"), (15, "line", "CS2CLIPPER playing")]
+    script = [(2, "hlae_exits", 0), (4, "cs2_up"), (15, "line", ran("go"))]
     at = 17
     for number in numbers:
         script += sequence_events(number, at)
         at += 15
     if quits:
-        script.append((at, "line", "CS2CLIPPER quit"))
+        script.append((at, "line", ran(f"s{numbers[-1]}_quit")))
         at += 2
     if closes:
         script.append((at, "cs2_down"))
@@ -510,7 +515,7 @@ def test_the_log_is_written_as_it_goes(world, req):
 
 def test_a_failure_puts_the_last_40_console_lines_in_the_log(world, req):
     lines = [(5 + i / 100, "line", f"console line {i}") for i in range(1, 61)]
-    world.scripts = [[(2, "hlae_exits", 0), (4, "cs2_up"), (15, "line", "CS2CLIPPER playing"), *lines]]
+    world.scripts = [[(2, "hlae_exits", 0), (4, "cs2_up"), (15, "line", ran("go")), *lines]]
     result = run(world, req)
     assert result.failure.startswith("stalled")
     text = world.log()
@@ -569,7 +574,7 @@ def test_how_many_launches_are_made_is_a_setting(world, req):
 
 def test_console_lines_from_before_the_launch_are_not_this_games(world, req):
     world.console.parent.mkdir(parents=True)
-    world.console.write_text("CS2CLIPPER playing\nCS2CLIPPER done 1\nCS2CLIPPER quit\n", encoding="utf-8")
+    world.console.write_text("".join(ran(cfg) + "\n" for cfg in ("go", "s1_end", "s1_quit")), encoding="utf-8")
     world.scripts = [[(4, "cs2_up")]] * 3
     result = run(world, req)
     assert result.failure.startswith("CS2 never started the demo")
@@ -578,8 +583,8 @@ def test_console_lines_from_before_the_launch_are_not_this_games(world, req):
 
 def test_half_a_line_left_by_one_launch_is_not_joined_to_the_next_launchs_first_line(world, req):
     world.scripts = [
-        [(4, "cs2_up"), (5, "text", "CS2CLIPPER pla")],     # the game is closed in the middle of a line
-        [(4, "cs2_up"), (6, "text", "ying\n")],             # the next game's first bytes
+        [(4, "cs2_up"), (5, "text", ran("g"))],     # the game is closed in the middle of a line
+        [(4, "cs2_up"), (6, "text", "o\n")],             # the next game's first bytes
         [(4, "cs2_up")],
     ]
     result = run(world, req)
@@ -622,8 +627,8 @@ def test_hlae_exiting_with_an_error_after_the_game_quit_does_not_matter(world, r
 
 
 def test_a_recording_that_stops_making_progress_is_closed(world, req):
-    world.scripts = [[(2, "hlae_exits", 0), (4, "cs2_up"), (15, "line", "CS2CLIPPER playing"),
-                      (17, "line", "CS2CLIPPER ready 1")]]
+    world.scripts = [[(2, "hlae_exits", 0), (4, "cs2_up"), (15, "line", ran("go")),
+                      (17, "line", ran("s1_prepare"))]]
     result = run(world, req)
     assert result.failure == "stalled: no progress for 30s after 'ready 1'"
     assert world.now - world.launched_at[0] == 47.0
@@ -634,18 +639,18 @@ def test_a_recording_that_stops_making_progress_is_closed(world, req):
 
 def test_a_recording_that_keeps_writing_is_not_stalled_however_long_it_takes(world, req):
     growth = [(18 + 10 * n, "record", 1, 1000 * (n + 1)) for n in range(1, 8)]        # 28, 38, ... 88
-    world.scripts = [[(2, "hlae_exits", 0), (4, "cs2_up"), (15, "line", "CS2CLIPPER playing"),
-                      (17, "line", "CS2CLIPPER ready 1"), (18, "record", 1, 1000),
-                      (18, "line", "CS2CLIPPER recording 1"), *growth, (100, "line", "CS2CLIPPER done 1"),
-                      (101, "line", "CS2CLIPPER quit"), (103, "cs2_down")]]
+    world.scripts = [[(2, "hlae_exits", 0), (4, "cs2_up"), (15, "line", ran("go")),
+                      (17, "line", ran("s1_prepare")), (18, "record", 1, 1000),
+                      (18, "line", ran("s1_start")), *growth, (100, "line", ran("s1_end")),
+                      (101, "line", ran("s1_quit")), (103, "cs2_down")]]
     result = run(world, replace(req, rounds=(3,)))
     assert result.ok and [clip.path.name for clip in result.clips] == [CLIP_1]
 
 
 def test_a_game_that_closes_while_recording_fails_the_job(world, req):
-    world.scripts = [[(2, "hlae_exits", 0), (4, "cs2_up"), (15, "line", "CS2CLIPPER playing"),
-                      (17, "line", "CS2CLIPPER ready 1"), (18, "record", 1, 1000),
-                      (18, "line", "CS2CLIPPER recording 1"), (25, "cs2_down")]]
+    world.scripts = [[(2, "hlae_exits", 0), (4, "cs2_up"), (15, "line", ran("go")),
+                      (17, "line", ran("s1_prepare")), (18, "record", 1, 1000),
+                      (18, "line", ran("s1_start")), (25, "cs2_down")]]
     result = run(world, req)
     assert result.failure == "CS2 closed before the recording finished (last marker: recording 1)"
     assert len(world.launches) == 1
@@ -664,7 +669,7 @@ def test_a_game_that_finishes_just_before_it_is_looked_at_is_read_to_its_end(wor
     # is read after that answer, not before.
     script = [event for event in game() if event[0] < 42]
     world.scripts = [script]
-    world.before_look = [(45, "line", "CS2CLIPPER done 2"), (45, "line", "CS2CLIPPER quit"), (45, "cs2_down")]
+    world.before_look = [(45, "line", ran("s2_end")), (45, "line", ran("s2_quit")), (45, "cs2_down")]
     result = run(world, req)
     assert result.ok and len(result.clips) == 2
     assert "marker quit, 45.0 s after launch" in world.log()
@@ -698,7 +703,7 @@ def test_hlae_still_running_when_the_game_is_over_is_ended(world, req):
 
 
 def test_an_abort_closes_the_game_and_hlae_and_removes_the_cfgs(world, req):
-    world.scripts = [[(4, "cs2_up"), (15, "line", "CS2CLIPPER playing")]]
+    world.scripts = [[(4, "cs2_up"), (15, "line", ran("go"))]]
     world.abort_at = world.now + 20
     result = run(world, req)
     assert (result.ok, result.aborted, result.failure, result.clips) == (False, True, ABORTED, ())
@@ -733,7 +738,7 @@ def test_an_abort_is_asked_about_at_every_poll(world, req):
 
 def test_a_sequence_without_its_done_marker_fails_the_job(world, req):
     script = game()
-    script.remove((42, "line", "CS2CLIPPER done 2"))
+    script.remove((42, "line", ran("s2_end")))
     world.scripts = [script]
     result = run(world, req)
     assert result.failure == "Sequence 2 never finished recording"
@@ -810,20 +815,20 @@ def test_a_console_log_that_starts_over_is_read_from_its_start(world, req):
 
 
 def test_a_line_that_is_still_being_written_waits_for_its_end(world, req):
-    script = [event for event in game() if event[1:] != ("line", "CS2CLIPPER playing")]
-    world.scripts = [[*script, (15, "text", "CS2CLIPPER pla"), (16, "text", "ying\n"),
-                      (20, "text", "CS2CLIPPER ready 1"), (21, "text", "2\n")]]
+    script = [event for event in game() if event[1:] != ("line", ran("go"))]
+    world.scripts = [[*script, (15, "text", ran("g")), (16, "text", "o\n"),
+                      (20, "text", ran("s12_prepare")), (21, "text", "\n")]]
     result = run(world, req)
     assert result.ok
     text = world.log()
     assert "marker playing, 16.0 s after launch" in text
     assert "marker ready 12, 21.0 s after launch" in text
-    assert "marker ready 1, 20.0" not in text
+    assert "marker ready 12, 20.0" not in text
 
 
 def test_lines_that_end_in_crlf_are_read(world, req):
-    script = [event for event in game() if event[1:] != ("line", "CS2CLIPPER playing")]
-    world.scripts = [[*script, (15, "text", "CS2CLIPPER playing\r\n")]]
+    script = [event for event in game() if event[1:] != ("line", ran("go"))]
+    world.scripts = [[*script, (15, "text", ran("go") + "\r\n")]]
     assert run(world, req).ok
 
 
@@ -831,7 +836,7 @@ def test_lines_that_end_in_crlf_are_read(world, req):
 
 
 def test_an_error_in_the_watch_closes_the_game_and_hlae_and_is_raised_again(world, req):
-    world.scripts = [[(4, "cs2_up"), (15, "line", "CS2CLIPPER playing")]]
+    world.scripts = [[(4, "cs2_up"), (15, "line", ran("go"))]]
     world.abort_at = world.now + 10
     world.abort_raises = RuntimeError("a bug")
     with pytest.raises(RuntimeError, match="a bug"):

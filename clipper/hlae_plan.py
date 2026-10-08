@@ -16,7 +16,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ENTRY = "cs2clipper"        # CS2 starts with `+exec cs2clipper`; every other cfg file is named after it
-MARKER = "CS2CLIPPER"       # what the plan `echo`s so the runner can follow it in the console log
 
 # CS:DM's builders (build-players-event-sequences.ts): Sequences closer than this merge, and a Frag with
 # another this close after it carries on into it.
@@ -112,7 +111,10 @@ class VideoSettings:
     container: str = "mp4"
 
 
-_MARKER = re.compile(rf"{MARKER}\s+(?:(ready|recording|done)\s+(\d+)|(playing|quit))(?!\w)")
+# CS2 writes `[InputService] execing <name>` to console.log for each cfg it runs; what an `echo` prints never gets
+# there. So the runner follows the plan by the names of the step files that mark how far it has got.
+_MARKER = re.compile(rf"execing\s+{ENTRY}_(?:go|s(\d+)_(prepare|start|end|quit))(?!\S)")
+_SEQUENCE_MARKERS = {"prepare": "ready", "start": "recording", "end": "done"}
 _DIGITS = re.compile(r"[0-9]+")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")      # what ends a cfg line or cannot be typed in one
 
@@ -254,11 +256,12 @@ def script(
     """The cfg files (file name -> text) that record `sequences`, one after the other and in the order given,
     from the Demo at `demo_path` into `raw_folder(raw_dir, number)`.
 
-    CS2 starts with `+exec cs2clipper`, which plays the Demo and schedules `cs2clipper_go` for tick 96. That
-    sends CS:DM's settings, echoes `CS2CLIPPER playing` and runs the first Sequence's cfg. Each Sequence's cfg
-    schedules its own steps with `mirv_cmd addAtTick`, every step a cfg of its own, and seeks to its approach
-    when that is worth it: set the recording up (`ready`), aim the camera, start (`recording`), change the
-    camera, end (`done`) and hand over to the next Sequence's cfg, or, after the last, echo `quit` and quit.
+    CS2 starts with `+exec cs2clipper`, which plays the Demo and schedules `cs2clipper_go` for tick 96 (`playing`).
+    That sends CS:DM's settings and runs the first Sequence's cfg. Each Sequence's cfg schedules its own steps with
+    `mirv_cmd addAtTick`, every step a cfg of its own, and seeks to its approach when that is worth it: set the
+    recording up (`ready`), aim the camera, start (`recording`), change the camera, end (`done`) and hand over to the
+    next Sequence's cfg, or, after the last, quit (`quit`). The runner reads those markers from console.log, where
+    CS2 names each cfg it runs (`parse_marker`).
 
     Raises PlanError for no Sequence, two with one number, one that ends when it starts or before, one with
     no room to be set up after the one before it (they overlap, or the first starts within the demo's first
@@ -286,7 +289,6 @@ def script(
         f"{ENTRY}_go.cfg": _cfg(
             *_pinned_lines(settings),
             "demo_ui_mode 0",
-            f"echo {MARKER} playing",
             f"exec {_stem(sequences[0])}",
         ),
     }
@@ -321,12 +323,12 @@ def _sequence_files(
     steps = [_Step(landing + _ticks(tickrate, PREPARE_S), "prepare", _prepare_lines(sequence, folder, settings))]
     if opening is not None:
         steps.append(_Step(landing + _ticks(tickrate, CAMERA_S), "aim", aim))
-    steps.append(_Step(start, "start", (*aim, "mirv_streams record start", f"echo {MARKER} recording {number}")))
+    steps.append(_Step(start, "start", (*aim, "mirv_streams record start")))
     steps += [_Step(tick, f"camera{position}", _camera_lines(slot))
               for position, (tick, slot) in enumerate(changes, start=2)]
-    steps.append(_Step(end, "end", ("mirv_streams record end", f"echo {MARKER} done {number}")))
+    steps.append(_Step(end, "end", ("mirv_streams record end",)))
     if following is None:
-        steps.append(_Step(end + _ticks(tickrate, QUIT_S), "quit", (f"echo {MARKER} quit", "quit")))
+        steps.append(_Step(end + _ticks(tickrate, QUIT_S), "quit", ("quit",)))
     else:
         steps.append(_Step(end + _ticks(tickrate, HANDOFF_S), "next", (f"exec {_stem(following)}",)))
     ticks = [landing, *(step.tick for step in steps)]
@@ -440,16 +442,19 @@ def _prepare_lines(sequence: Sequence, folder: str, settings: VideoSettings) -> 
         lines.append(f'mirv_replace_name byXuid add x{notice.steam_id} "{_name(notice.name)}"')
         lines.append(f"mirv_deathmsg filter add attackerMatch=x{notice.steam_id} "
                      f"attackerIsLocal={_flag(notice.highlight)} block=0")
-    lines.append(f"echo {MARKER} ready {number}")
     return tuple(lines)
 
 
 def parse_marker(line: str) -> tuple[str, int | None] | None:
-    """The marker a console line holds, as (kind, Sequence number or None), or None when it holds none.
-    The kinds are playing, ready, recording, done and quit; all but playing and quit name their Sequence."""
+    """The marker a console line holds, as (kind, Sequence number or None), or None when it holds none. A marker is
+    CS2 saying it runs a step file of the plan: `_go` is playing, and a Sequence's `_prepare`, `_start` and `_end` are
+    ready, recording and done; `_quit` is quit. All but playing and quit name their Sequence."""
     found = _MARKER.search(line)
     if found is None:
         return None
-    if found[1]:
-        return found[1], int(found[2])
-    return found[3], None
+    step = found[2]
+    if step is None:
+        return "playing", None
+    if step == "quit":
+        return "quit", None
+    return _SEQUENCE_MARKERS[step], int(found[1])

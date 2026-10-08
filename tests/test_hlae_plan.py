@@ -43,29 +43,29 @@ def test_raw_folder_is_csdms_name_for_a_sequence_inside_the_raw_dir(tmp_path):
 
 
 @pytest.mark.parametrize("line, expected", [
-    ("CS2CLIPPER playing", ("playing", None)),
-    ("CS2CLIPPER ready 1", ("ready", 1)),
-    ("CS2CLIPPER recording 12", ("recording", 12)),
-    ("CS2CLIPPER done 3", ("done", 3)),
-    ("CS2CLIPPER quit", ("quit", None)),
-    ("[Client] CS2CLIPPER ready 2", ("ready", 2)),           # what the console puts before the text
-    ("10/07 12:00:01.123 CS2CLIPPER done 4\r\n", ("done", 4)),
+    ("[InputService] execing cs2clipper_go", ("playing", None)),
+    ("[InputService] execing cs2clipper_s1_prepare", ("ready", 1)),
+    ("[InputService] execing cs2clipper_s12_start", ("recording", 12)),
+    ("[InputService] execing cs2clipper_s3_end", ("done", 3)),
+    ("[InputService] execing cs2clipper_s2_quit", ("quit", None)),
+    ("10/08 04:38:26 [InputService] execing cs2clipper_s4_end\r\n", ("done", 4)),     # as console.log has it
 ])
-def test_parse_marker_finds_a_marker_anywhere_in_the_line(line, expected):
+def test_parse_marker_reads_the_step_from_the_cfg_cs2_says_it_runs(line, expected):
     assert hlae_plan.parse_marker(line) == expected
 
 
 @pytest.mark.parametrize("line", [
     "",
-    "CS2CLIPPER",
-    "CS2CLIPPER ready",           # these three kinds name their Sequence
-    "CS2CLIPPER done x",
-    "CS2CLIPPER recording 1x",
-    "CS2CLIPPER readyy 1",
-    "CS2CLIPPER playingx",
-    "CS2CLIPPER begun 1",
-    "cs2clipper ready 1",
-    "ready 1",
+    "[InputService] execing cs2clipper",                # the first cfg, before the demo plays
+    "[InputService] execing cs2clipper_s1",             # a Sequence's seek
+    "[InputService] execing cs2clipper_s1_aim",
+    "[InputService] execing cs2clipper_s1_camera2",
+    "[InputService] execing cs2clipper_s1_next",
+    "[InputService] execing cs2clipper_s1_startx",
+    "[InputService] execing cs2clipper_sx_start",
+    "[InputService] execing cs2clipper_gone",
+    "[InputService] execing autoexec",
+    "CS2CLIPPER playing",           # what an `echo` prints, which never reaches console.log
 ])
 def test_parse_marker_ignores_anything_else(line):
     assert hlae_plan.parse_marker(line) is None
@@ -343,7 +343,6 @@ def test_the_go_cfg_sends_csdms_settings_once_and_hands_over_to_the_first_sequen
         "tv_listen_voice_indices -1",
         "tv_listen_voice_indices_h -1",
         "demo_ui_mode 0",
-        "echo CS2CLIPPER playing",
         "exec cs2clipper_s1",
     ]
 
@@ -435,8 +434,7 @@ def test_the_prepare_cfg_sets_up_the_recording_as_csdm_does():
             f"mirv_deathmsg filter add attackerMatch=x{player.steam_id} "
             f"attackerIsLocal={1 if player.steam_id == SUBJECT else 0} block=0",
         ]
-    assert lines[10:-1] == allowed
-    assert lines[-1] == "echo CS2CLIPPER ready 1"
+    assert lines[10:] == allowed
 
 
 def test_every_sequence_gets_its_own_folder_and_preset():
@@ -448,17 +446,17 @@ def test_every_sequence_gets_its_own_folder_and_preset():
 
 def test_a_sequence_with_no_notices_leaves_the_death_notices_alone():
     files = plan_script([Sequence(1, 10000, 12000, ((10000, SUBJECT),))])
-    assert cfg_lines(files, "cs2clipper_s1_prepare")[-2:] == ["mirv_deathmsg filter clear", "echo CS2CLIPPER ready 1"]
+    assert cfg_lines(files, "cs2clipper_s1_prepare")[-1] == "mirv_deathmsg filter clear"
 
 
 def test_the_steps_hold_the_commands_csdm_sends_at_those_ticks():
     files = plan_script(two_sequences())
     assert cfg_lines(files, "cs2clipper_s1_aim") == ["spec_mode 1", "spec_player 3"]
     assert cfg_lines(files, "cs2clipper_s1_start") == [
-        "spec_mode 1", "spec_player 3", "mirv_streams record start", "echo CS2CLIPPER recording 1"]
-    assert cfg_lines(files, "cs2clipper_s1_end") == ["mirv_streams record end", "echo CS2CLIPPER done 1"]
+        "spec_mode 1", "spec_player 3", "mirv_streams record start"]
+    assert cfg_lines(files, "cs2clipper_s1_end") == ["mirv_streams record end"]
     assert cfg_lines(files, "cs2clipper_s1_next") == ["exec cs2clipper_s2"]
-    assert cfg_lines(files, "cs2clipper_s2_quit") == ["echo CS2CLIPPER quit", "quit"]
+    assert cfg_lines(files, "cs2clipper_s2_quit") == ["quit"]
 
 
 @pytest.mark.parametrize("start, landing, seeks", [
@@ -565,7 +563,7 @@ def test_a_camera_at_or_after_the_end_is_dropped():
 def test_a_camera_on_nobody_in_the_demo_is_skipped_as_csdm_skips_it():
     files = camera_plan((10000, "0"), (10700, ENEMY), (11000, "76561198999999999"))
     assert "cs2clipper_s1_aim.cfg" not in files
-    assert cfg_lines(files, "cs2clipper_s1_start") == ["mirv_streams record start", "echo CS2CLIPPER recording 1"]
+    assert cfg_lines(files, "cs2clipper_s1_start") == ["mirv_streams record start"]
     assert [name for _, name in steps(files, "cs2clipper_s1")] == [
         "cs2clipper_s1_prepare", "cs2clipper_s1_start", "cs2clipper_s1_camera2", "cs2clipper_s1_end",
         "cs2clipper_s1_quit"]
@@ -683,7 +681,7 @@ ALLOWED_COMMANDS = {
     "tv_listen_voice_indices", "tv_listen_voice_indices_h", "spec_show_xray", "mp_display_kill_assists",
     "mirv_replace_name", "spec_mode", "spec_player",
     # what the plan adds to drive it
-    "mirv_cmd", "exec", "echo", "demo_gototick", "demo_ui_mode", "playdemo", "quit",
+    "mirv_cmd", "exec", "demo_gototick", "demo_ui_mode", "playdemo", "quit",
 }
 
 
@@ -723,14 +721,13 @@ def test_every_step_is_scheduled_by_one_cfg_and_every_cfg_but_the_entry_is_sched
     assert {name[:-4] for name in planned} == {"cs2clipper"} | set(scheduled) | handed_over
 
 
-def test_every_marker_the_plan_echoes_is_one_the_runner_reads(planned):
-    echoed = [line.removeprefix("echo ") for text in planned.values() for line in text.splitlines()
-              if line.startswith("echo ")]
-    parsed = [hlae_plan.parse_marker(text) for text in echoed]
-    assert None not in parsed
-    count = sum(1 for name in planned if name.endswith("_start.cfg"))
-    assert sorted(kind for kind, _ in parsed) == sorted(
-        ["playing", "quit"] + ["ready"] * count + ["recording"] * count + ["done"] * count)
+def test_the_runner_can_follow_the_plan_by_the_cfg_files_cs2_says_it_runs(planned):
+    logged = [hlae_plan.parse_marker(f"[InputService] execing {name.removesuffix('.cfg')}") for name in planned]
+    markers = [marker for marker in logged if marker is not None]
+    numbers = sorted(int(name.split("_")[1][1:]) for name in planned if name.endswith("_start.cfg"))
+    assert sorted(kind for kind, _ in markers) == sorted(
+        ["playing", "quit"] + ["ready", "recording", "done"] * len(numbers))
+    assert sorted(number for kind, number in markers if kind == "recording") == numbers
 
 
 # What the plan reads from CS:DM's database (clipper/csdm_db.py). Nothing here connects to Postgres: a fake

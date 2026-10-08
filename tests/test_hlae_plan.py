@@ -321,6 +321,7 @@ def test_the_entry_cfg_starts_the_demo_and_schedules_the_first_step():
         "mirv_cmd clear",
         "mirv_cmd enabled 1",
         "mirv_cmd addAtTick 96 exec cs2clipper_go",
+        "demo_ui_mode 0",       # before the playback starts, or CS2 shows its playback bar (CS:DM's plugin-main.cpp)
         r'playdemo "C:\Users\Some One\Demos\match 1.dem"',      # the path as CS:DM passes it, spaces and all
     ]
 
@@ -342,7 +343,6 @@ def test_the_go_cfg_sends_csdms_settings_once_and_hands_over_to_the_first_sequen
         "mirv_deathmsg filter clear",
         "tv_listen_voice_indices -1",
         "tv_listen_voice_indices_h -1",
-        "demo_ui_mode 0",
         "exec cs2clipper_s1",
     ]
 

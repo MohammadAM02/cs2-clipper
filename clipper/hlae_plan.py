@@ -284,11 +284,11 @@ def script(
             "mirv_cmd clear",
             "mirv_cmd enabled 1",
             f"mirv_cmd addAtTick {FIRST_TICK} exec {ENTRY}_go",
+            "demo_ui_mode 0",       # CS2 shows its playback bar unless this comes before the demo plays (CS:DM does the same)
             f'playdemo "{demo}"',
         ),
         f"{ENTRY}_go.cfg": _cfg(
             *_pinned_lines(settings),
-            "demo_ui_mode 0",
             f"exec {_stem(sequences[0])}",
         ),
     }

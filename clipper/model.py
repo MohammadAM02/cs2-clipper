@@ -62,7 +62,7 @@ class MatchInfo:
 
 @dataclass(frozen=True)
 class ClipFile:
-    """One rendered Sequence, named sequence-<n>-tick-<start>-to-<end>.mp4 as CS:DM named it."""
+    """One rendered Sequence, named sequence-<n>-tick-<start>-to-<end>.mp4 (`hlae_plan.clip_name`)."""
 
     sequence: int
     start_tick: int

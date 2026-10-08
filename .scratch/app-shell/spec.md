@@ -11,8 +11,7 @@ thelifeofsuleyman), studied 2026-09-27.
 
 Today the app is a terminal command with no window. What it is doing shows only through
 `clipper status`, the log file and notifications; Retry and Resume are terminal commands; settings
-live in `clipper.toml` and `.env` inside the repo, and so do the index and CS:DM's settings folder
-(`home\`). That rules out an installed `.exe` (piece 2) and a first-run setup (piece 3), and it makes
+live in `clipper.toml` and `.env` inside the repo, and so does the index. That rules out an installed `.exe` (piece 2) and a first-run setup (piece 3), and it makes
 the app awkward to use day to day.
 
 Aegis Clipper already has a working desktop shell: a local web server whose pages show in a native
@@ -30,9 +29,9 @@ window, with a tray icon. We adopt it instead of designing our own.
 | Reach from other devices | **Demos to grab only** (view, Skip, Undo). Everything else answers this PC only, and a new page is PC-only unless deliberately listed |
 | Actions | Need a marker header that other websites cannot add; PC-only pages also check the `Host` header |
 | Quit during a render | Asks: **quit now** (the hooked CS2 closes first; the render is redone) or **when this render finishes** |
-| Crash safety | csdm runs inside a kill-on-close Windows job object (Aegis's `winjob.py`) |
+| Crash safety | HLAE runs inside a kill-on-close Windows job object (Aegis's `winjob.py`) |
 | Start-up problems | Never stop the app: Status and the tray say what is wrong, and it checks again every minute |
-| App data | `%LOCALAPPDATA%\CS2Clipper\`: settings, index, lock, logs and CS:DM's settings folder. `CLIPPER_DATA_DIR` overrides it |
+| App data | `%LOCALAPPDATA%\CS2Clipper\`: settings, index, lock, logs, tools and analyses. `CLIPPER_DATA_DIR` overrides it |
 | Clips folder | Unchanged (`E:\cs2clips` on this PC) |
 | Settings | `settings.json` holds **only changed values**; defaults fill in the rest; the Settings page validates before saving |
 | FACEIT key | **Encrypted** with Windows' per-user protection (DPAPI); never logged, never sent to a page or another device |
@@ -67,8 +66,8 @@ window, with a tray icon. We adopt it instead of designing our own.
 - A second start finds the running copy (Aegis's `/health` check), asks it to show its window (on
   the page given by `--open <page>`, if any), and exits. The lock file stays as the hard guarantee
   that two copies never render.
-- Order: the single-instance check → move in (first start only) → settings → web server → Postgres
-  (as today) → worker. A step that fails does not stop the app (see When something goes wrong).
+- Order: the single-instance check → move in (first start only) → settings → web server → worker.
+  A step that fails does not stop the app (see When something goes wrong).
 
 ### The tray
 
@@ -86,13 +85,13 @@ window, with a tray icon. We adopt it instead of designing our own.
 - Closing the window ends only the window process; the app keeps working in the tray.
 - **Quit** (tray, or the Status page's button): with no Render Job running, the app exits. With
   one running, it asks:
-  - **Quit now**: the render stops the way a FACEIT AC abort stops it (the hooked CS2 is closed
-    first, then csdm), the attempt is recorded `aborted`, and it is redone at the next start.
+  - **Quit now**: the render stops the way a FACEIT AC abort stops it (the hooked CS2 is
+    closed), the attempt is recorded `aborted`, and it is redone at the next start.
   - **Quit when this render finishes**: the worker takes no new step after the render, then the app
     exits. The tray says "Quitting after this render".
-- Every csdm call runs inside a Windows job object that closes its processes when the app's process
-  ends for any reason (a crash, End task). HLAE and the hooked CS2 are csdm's descendants, so they
-  should close too; see To confirm, item 4.
+- Every render runs HLAE inside a Windows job object that closes its processes when the app's
+  process ends for any reason (a crash, End task). The hooked CS2 is HLAE's descendant, so it should
+  close too; see To confirm, item 4.
 
 ### Notifications
 
@@ -117,8 +116,7 @@ strings; piece 2's PyInstaller spec bundles them.
 
 - **Now:** the one-line summary, how long the current render has run, and Resume when paused.
 - **Checks**, each ✓ or ✗ with a one-line hint:
-  - CS Demo Manager: found, and its version;
-  - Postgres: running;
+  - csda: found;
   - HLAE: found, its version (from its `changelog.xml`), and whether a newer advancedfx release is
     out (the failure of 2026-09-27). Checked at start-up and then daily;
   - FFmpeg: found;
@@ -148,7 +146,7 @@ paths, so notifications already sent keep working.
 ### Settings
 
 - Every setting in today's `Config`, grouped: **You** (SteamID, FACEIT nickname, FACEIT key),
-  **Folders** (clips folder, Downloads, CS:DM, Postgres, FFmpeg), **Picture** (aspect ratio,
+  **Folders** (clips folder, Downloads, HLAE, FFmpeg), **Picture** (aspect ratio,
   Sequence event, padding), **Rendering** (top N, stall and launch timeouts, heads-up, minimum free
   space), **Match alerts** (on/off, minutes after playing), **App** (the web server's port, still
   `page_port`).
@@ -183,8 +181,9 @@ databases):
 settings.json    what you changed; defaults fill in the rest
 clipper.sqlite   the index (was data\clipper.sqlite)
 clipper.lock     single instance (was data\clipper.lock)
-logs\            clipper.log and one log per csdm call (were in the clips folder)
-csdm-home\       USERPROFILE for csdm processes, so CS:DM's settings are csdm-home\.csdm\ (was home\)
+logs\            clipper.log and one log per analysis and render (were in the clips folder)
+tools\           the FFmpeg, HLAE and csda that Setup installs
+analyses\        what csda found in each match
 ```
 
 `CLIPPER_DATA_DIR` points it elsewhere, for tests and development. The clips folder (Demos, renders,
@@ -219,8 +218,7 @@ from source), the app copies:
   built-in SteamID (`76561198192858303`) and clips folder (`E:/cs2clips`) are written too, unless
   the file set them, because they are no longer defaults;
 - `.env`: `FACEIT_NICKNAME` → settings, `FACEIT_API_KEY` → encrypted into settings;
-- `data\clipper.sqlite` → `clipper.sqlite`;
-- `home\` → `csdm-home\` (the whole folder).
+- `data\clipper.sqlite` → `clipper.sqlite`.
 
 Copied, never moved: the originals stay until you delete them. One log line lists what was copied.
 It happens once; afterwards only `settings.json` counts. The installed app (piece 2) will find the
@@ -230,10 +228,10 @@ folder already filled on this PC.
 
 | What | Then |
 | --- | --- |
-| Postgres won't start, CS:DM is not found, the clips folder is missing, or a required setting is unset | The app keeps running; the worker skips its ticks; Status and the tray tooltip say what is wrong; checked again every minute; work resumes once fixed |
+| The clips folder is missing, a tool is not found, or a required setting is unset | The app keeps running; the worker skips its ticks; Status and the tray tooltip say what is wrong; checked again every minute; work resumes once fixed |
 | The web server cannot bind port 8765 | The next free port up to 8774, as the Demos page does today; the tray, window and notifications use the port it got. None free: the app runs without pages, the tray says so, and match alerts switch off with the reason (as today) |
 | The window cannot load | A Chromium `--app` window, then the default browser (Aegis's fallback) |
-| The main process crashes or is ended | The job object closes csdm, HLAE, the hooked CS2 and the window; at the next start, the Render Job left `running` is marked interrupted and redone (exists today) |
+| The main process crashes or is ended | The job object closes HLAE, the hooked CS2 and the window; at the next start, the Render Job left `running` is marked interrupted and redone (exists today) |
 | Quit during a render | The choice under Closing and quitting |
 | A setting fails validation on Save | Nothing is saved; each bad field says why |
 | `settings.json` holds a bad value (a hand edit) | That setting uses its default; Status warns |
@@ -261,7 +259,7 @@ Changed:
 
 - `worker.py`: runs on its own thread; publishes to `state`; honours quit-now and
   quit-after-this-render; does nothing while a required setting is unset.
-- `render.py`: csdm runs in the job object; a stop request joins `should_abort`.
+- `render.py`: the render runs in the job object; a stop request joins `should_abort`.
 - `config.py`: `Config` stays the one object modules read; its paths come from `paths.py`, and
   `settings.py` replaces `load_config` and `load_env`.
 - `faceit.py` and `alerts.py`: the key comes from `settings.py` (decrypted), not `.env`.
@@ -269,8 +267,7 @@ Changed:
 - Removed: `page.py` (moved into `web.py`) and `install.py`.
 
 New dependencies: `flask`, `waitress`, `pywebview`, `pythonnet` (Windows only; pywebview's WebView2
-backend), `pystray` and `Pillow` (the tray icon). The orchestrator plan's "runtime dependencies are
-only psycopg, psutil and zstandard" no longer holds.
+backend), `pystray` and `Pillow` (the tray icon).
 
 ## Testing
 
@@ -285,7 +282,7 @@ Written test-first, as before.
 - **protect:** a round trip; the stored text does not contain the key.
 - **Moving in**, from a fake repo layout in a temp folder: every item copied, the originals
   untouched, it runs once, and the old built-in SteamID and clips folder are carried over.
-- **Quit during a render**, with the fake csdm: quit now stops the render like a FACEIT AC abort and
+- **Quit during a render**, with a scripted render: quit now stops the render like a FACEIT AC abort and
   records it `aborted`; quit-after exits once the render returns.
 - **Single instance:** a second start hands over to the first (a fake `/health`).
 - **state:** the one-line summary for idle, waiting (the Gate's reasons), rendering, paused (by you
@@ -300,22 +297,22 @@ Written test-first, as before.
 1. Started with `--background`: only the tray icon, and no WebView2 processes in Task Manager.
 2. Opening and then closing the window: the WebView2 processes go away when it closes.
 3. Quit now during a render: the hooked CS2 closes, and the next start redoes the render.
-4. Ending the main process in Task Manager during a render: csdm, HLAE, the hooked CS2 and the window close.
+4. Ending the main process in Task Manager during a render: HLAE, the hooked CS2 and the window close.
 5. A notification button opens its page (in the browser, until piece 2).
 6. Your phone reaches Demos to grab over Wi-Fi and Tailscale, and gets 403 from Status.
-7. The first start copied the repo's settings, FACEIT key, index and `home\`; the Reels page shows
+7. The first start copied the repo's settings, FACEIT key and index; the Reels page shows
    the Mirage Reels rendered on 2026-09-27.
 
 ## Open
 
-- Whether the hooked CS2 stays inside csdm's job object when HLAE starts it (To confirm, item 4). If
-  it escapes, this spec needs another way to close an orphaned hooked CS2.
+- Whether the hooked CS2 stays inside the render's job object when HLAE starts it (To confirm, item
+  4). If it escapes, this spec needs another way to close an orphaned hooked CS2.
 
 ## Out of scope
 
 - **Piece 2, the release pipeline:** the PyInstaller build, the Inno Setup installer (start at
   sign-in, the `cs2clipper:` link, WebView2), GitHub Actions releases, auto-update.
-- **Piece 3, the fresh-PC setup wizard:** installing CS:DM, Postgres, HLAE and FFmpeg; asking for the
+- **Piece 3, the fresh-PC setup wizard:** installing HLAE, csda and FFmpeg; asking for the
   SteamID and the clips folder; updating HLAE.
 - The Clip library for the phone (feed, thumbnails, POV toggle); Reels stay PC-only until then.
 - The clip selection change (3+ Frags) and any other selection rule.

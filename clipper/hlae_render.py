@@ -1,4 +1,4 @@
-"""A Render Job, recorded by starting CS2 through HLAE.exe (ADR 0004).
+"""A Render Job, recorded by starting CS2 through HLAE.exe (ADR 0002).
 
 The plan of `hlae_plan` goes into CS2's cfg folder as files and HLAE.exe starts CS2 with `+exec cs2clipper`. CS2 names
 each cfg it runs in console.log (it starts with `-condebug`), and the names of the plan's step files are its markers;

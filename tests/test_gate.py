@@ -51,10 +51,6 @@ def test_a_faceit_client_process_blocks():
     assert gate(["FACEIT.exe"]).check().reasons == (FACEIT_REASON,)
 
 
-def test_cs_demo_manager_being_open_does_not_block():
-    assert gate(["cs-demo-manager.exe"]).check() == GateStatus(ok=True)
-
-
 def test_low_disk_space_blocks():
     status = gate(free=4 * GB).check()
     assert not status.ok

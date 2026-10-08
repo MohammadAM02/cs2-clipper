@@ -16,7 +16,7 @@ from clipper.model import FaceitStats
 from clipper.protect import ProtectError
 from clipper.rating import rating
 
-LINK_LIFETIME = timedelta(days=30)   # FACEIT's Demo links expire about 30 days after the match (ADR-0002)
+LINK_LIFETIME = timedelta(days=30)   # FACEIT's Demo links expire about 30 days after the match (ADR 0001)
 REMIND_BEFORE = timedelta(days=3)
 SHOWN_IN_SUMMARY = 3
 _WORDS = (("5k", "Ace"), ("4k", "4K"), ("3k", "3K"))

@@ -135,10 +135,10 @@ def test_known_values_are_applied(tmp_path):
     assert loaded.warnings == ()
 
 
-def test_the_settings_cs_demo_manager_needed_are_ignored_without_a_warning(tmp_path):
+def test_retired_settings_are_ignored_without_a_warning(tmp_path):
     path = tmp_path / "settings.json"
-    path.write_text(json.dumps({"renderer": "hlae", "csdm_app_dir": "C:/csdm", "pg_bin": "C:/pg/bin",
-                                "pg_data": "C:/pg/data", "csdm_home": "C:/home", "top_n": 10}), encoding="utf-8")
+    path.write_text(json.dumps({"renderer": "hlae", "pg_bin": "C:/pg/bin", "pg_data": "C:/pg/data", "top_n": 10}),
+                    encoding="utf-8")
 
     loaded = load(path)
 

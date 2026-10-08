@@ -186,7 +186,7 @@ def test_each_demo_is_analyzed_once(world):
 
 
 def test_a_demo_with_no_analysis_kept_is_analyzed_again_before_it_is_scored(world):
-    """Demos analyzed before the app kept its own analyses had theirs in CS Demo Manager."""
+    """Demos analyzed before the app kept its own analyses have none in its folder."""
     demo_id = world.add_demo()
     world.ticks(2)                                  # analyzed
     world.facts.kept.clear()

@@ -23,7 +23,7 @@ def test_bonuses_other_than_the_knife_need_two_frags():
     assert scored[9].score == 5                                      # one Frag, a headshot
 
 
-def test_a_knife_frag_earns_thirty():   # issue 09
+def test_a_knife_frag_earns_thirty():
     highlight = score_round(RoundFacts(round=7, frag_ticks=(100,), knife_frags=1))
     assert highlight.score == 35
     assert highlight.reasons == ("frag", "knife kill")

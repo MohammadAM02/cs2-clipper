@@ -1,10 +1,9 @@
-"""What happened in each Demo, as cs-demo-analyzer (csda) reads it (ADR 0004). The only code that reads csda's
+"""What happened in each Demo, as cs-demo-analyzer (csda) reads it (ADR 0002). The only code that reads csda's
 output: if csda renames a field, this file is what changes.
 
 csda writes everything it finds in a Demo to one JSON file of a few MB. The app keeps a copy of the parts it
 reads, about a tenth of that, as ``<checksum>.json`` in its own folder, so each Demo is analyzed once: scoring
-and every render read that copy. The functions below read it the way the app read CS Demo Manager's database,
-which filled its tables from the same csda output."""
+and every render read that copy."""
 
 from __future__ import annotations
 

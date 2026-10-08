@@ -21,7 +21,7 @@ def test_clips_group_by_the_round_they_start_in():
     assert [c.sequence for c in groups[12]] == [2, 3]
 
 
-def test_sequence_ten_comes_after_sequence_two():   # issue 10
+def test_sequence_ten_comes_after_sequence_two():
     groups = assign_clips([clip(10, 90000, 90256), clip(2, 80000, 80256)], [(12, 72031)])
     assert [c.sequence for c in groups[12]] == [2, 10]
 

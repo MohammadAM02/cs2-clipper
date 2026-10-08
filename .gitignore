@@ -1,23 +1,28 @@
-# local artefacts — never commit
+# Secrets: never commit
 .env
-home/
-spike/demos/
-spike/out/
-spike/cfg/spike_autoexec.cfg
-demos/
-clips/
+# the FACEIT key a packaged build ships to every install (packaging/make_shipped_env.py)
+packaging/shipped.env
+
+# Demos and video
 *.dem
 *.dem.gz
+*.dem.zst
 *.mp4
 *.avi
 *.tga
+demos/
+clips/
 console.log
+
+# The packaged exe (packaging/build.ps1)
+build/
+dist/
+
+# Local environment
 .venv/
 node_modules/
-data/
 .claude/worktrees/
-# the packaged exe (packaging/build.ps1)
-build/
-# the FACEIT key a packaged build ships to every install (packaging/make_shipped_env.py)
-packaging/shipped.env
-dist/
+
+# Leftovers of the old in-repo setup; the app keeps its data in %LOCALAPPDATA%\CS2Clipper
+home/
+spike/

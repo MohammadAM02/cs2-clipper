@@ -311,8 +311,8 @@ class Worker:
         self.index.advance(demo["id"], "analyzed", match_checksum=checksum)
 
     def _ensure_analysis(self, demo) -> None:
-        """Analyze the Demo again when the app has no analysis of its match: CS Demo Manager kept the
-        analyses of Demos analyzed before the app kept its own."""
+        """Analyze the Demo again when the app has no analysis of its match, as for a Demo analyzed before
+        the app kept its own analyses."""
         checksum = demo["match_checksum"]
         if self.services.facts.has(checksum):
             return

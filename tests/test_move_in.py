@@ -27,16 +27,16 @@ def _read_settings(data_dir: Path) -> dict:
 
 
 def _full_fake_repo(tmp_path: Path) -> Path:
-    """A fake repo (never the real one) holding all three old-setup items, and CS Demo Manager's old
-    settings folder, which is not taken."""
+    """A fake repo (never the real one) holding all three old-setup items, and an old settings file under
+    home/, which is not taken."""
     repo = tmp_path / "repo"
     _write(repo / "clipper.toml",
-           'top_n = 3\npoll_seconds = 5.0\nindex_path = "C:/old/index.sqlite"\ncsdm_home = "C:/old/home"\n')
+           'top_n = 3\npoll_seconds = 5.0\nindex_path = "C:/old/index.sqlite"\n')
     _write(repo / ".env", 'FACEIT_NICKNAME=someplayer\nFACEIT_API_KEY="a-real-faceit-key"\n')
     index_path = repo / "data" / "clipper.sqlite"
     index_path.parent.mkdir(parents=True)
     index_path.write_bytes(b"fake sqlite bytes, just for a byte-identical copy check")
-    home_settings = repo / "home" / ".csdm" / "settings.json"
+    home_settings = repo / "home" / "settings.json"
     _write(home_settings, '{"database": {"password": "hunter2"}}')
     return repo
 
@@ -46,7 +46,7 @@ def _full_fake_repo(tmp_path: Path) -> Path:
 
 def test_needed_is_false_for_a_repo_with_none_of_the_three_items(tmp_path):
     repo = tmp_path / "repo"
-    _write(repo / "home" / ".csdm" / "settings.json", "{}")     # CS Demo Manager's old settings: not one of them
+    _write(repo / "home" / "settings.json", "{}")     # old settings under home/: not one of them
     data_dir = tmp_path / "data"
     data_dir.mkdir()
 
@@ -89,7 +89,6 @@ def test_every_item_is_copied(tmp_path):
     assert values["top_n"] == 3                    # changed from the default: written
     assert "poll_seconds" not in values             # equal to the new default: not written
     assert "index_path" not in values               # old-only key: dropped
-    assert "csdm_home" not in values                 # old-only key: dropped
     assert values["faceit_nickname"] == "someplayer"
     assert values["subject_steamid"] == OLD_STEAMID
     assert values["data_root"] == OLD_CLIPS_FOLDER
@@ -104,7 +103,7 @@ def test_the_originals_are_untouched(tmp_path):
     original_toml = (repo / "clipper.toml").read_text(encoding="utf-8")
     original_env = (repo / ".env").read_text(encoding="utf-8")
     original_index = (repo / "data" / "clipper.sqlite").read_bytes()
-    original_home = (repo / "home" / ".csdm" / "settings.json").read_text(encoding="utf-8")
+    original_home = (repo / "home" / "settings.json").read_text(encoding="utf-8")
     data_dir = tmp_path / "data"
     data_dir.mkdir()
 
@@ -113,7 +112,7 @@ def test_the_originals_are_untouched(tmp_path):
     assert (repo / "clipper.toml").read_text(encoding="utf-8") == original_toml
     assert (repo / ".env").read_text(encoding="utf-8") == original_env
     assert (repo / "data" / "clipper.sqlite").read_bytes() == original_index
-    assert (repo / "home" / ".csdm" / "settings.json").read_text(encoding="utf-8") == original_home
+    assert (repo / "home" / "settings.json").read_text(encoding="utf-8") == original_home
 
 
 def test_it_runs_once(tmp_path):

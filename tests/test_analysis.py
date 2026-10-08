@@ -23,8 +23,8 @@ def test_match_info_is_from_the_subjects_side():
 
 
 def test_the_match_date_is_in_local_time_to_the_second():
-    """The index sorts matches by the date's text, and it has every earlier date in this PC's time zone, without
-    a fraction of a second, as CS Demo Manager gave them."""
+    """The index sorts matches by the date's text, and every earlier date in it is in this PC's time zone,
+    without a fraction of a second."""
     info = analysis.match_info(match(date="2026-10-03T01:00:00.9999999+04:00"), SUBJECT)
     assert info.played_at.isoformat() == datetime(2026, 10, 2, 21, 0, 0, tzinfo=timezone.utc).astimezone().isoformat()
 
@@ -189,8 +189,8 @@ def test_forget_removes_a_kept_analysis(tmp_path, dem):
     assert not store.has(CHECKSUM)
 
 
-def test_checksums_cs_demo_manager_gave_can_be_shorter():
-    """csda writes a checksum without its leading zeros, so CS:DM's database has some 15 characters long."""
+def test_a_checksum_can_be_shorter_than_16_characters():
+    """csda writes a checksum without its leading zeros, so some are 15 characters long."""
     assert analysis.is_checksum("4aaf50216c775f5")
     assert analysis.is_checksum(CHECKSUM)
     assert not analysis.is_checksum("")

@@ -42,7 +42,7 @@ def load_env(path: Path) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
-_AUTH = {"scheme": "raw"}
+_AUTH = {"scheme": "bearer"}     # the Data API rejects a raw key (ADR 0001)
 
 
 def auth_header(key: str, scheme: str | None = None) -> str:
@@ -112,6 +112,8 @@ def main(argv: list[str]) -> int:
     print(f"key loaded: {len(key)} chars (not printed)")
 
     player_id = args.player_id
+    if args.auth_scheme != "auto":
+        _AUTH["scheme"] = args.auth_scheme
 
     # 1 + 2 — auth, identity, SteamID64
     if not player_id:

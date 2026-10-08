@@ -27,9 +27,8 @@ def _free_bytes(path: Path) -> int:
 
 
 class Gate:
-    """Conditions 1 to 3 of the spec. The condition that CS Demo Manager not be open went with CS Demo Manager
-    (ADR 0004). Condition 4 (no other Render Job running) holds by construction: one worker renders at a
-    time, and a lock file keeps a single app instance."""
+    """Conditions 1 to 3 of the spec. Condition 4 (no other Render Job running) holds by construction: one
+    worker renders at a time, and a lock file keeps a single app instance."""
 
     def __init__(self, probe: ProcessProbe, data_root: Path, min_free_gb: float,
                  free_bytes: Callable[[Path], int] = _free_bytes):

@@ -1,5 +1,5 @@
-"""The HLAE plan: the Sequences CS:DM would record for a request, and the console script that records them
-through HLAE instead of CS:DM's server plugin. Everything here is pure: no CS2 and no HLAE."""
+"""The HLAE plan: the Sequences a request records, and the console script that records them through HLAE.
+Everything here is pure: no CS2 and no HLAE."""
 import re
 from pathlib import Path
 
@@ -30,14 +30,14 @@ def inputs(kills=(), rounds=(), tickrate=64.0, tick_count=200_000, players=PLAYE
                         players=players)
 
 
-def test_clip_name_is_what_csdm_calls_a_clip_and_the_renderer_reads():
+def test_clip_name_is_the_name_the_renderer_reads():
     name = hlae_plan.clip_name(Sequence(number=3, start_tick=10235, end_tick=10491, cameras=()))
     assert name == "sequence-3-tick-10235-to-10491.mp4"
     found = render.CLIP_NAME.match(name)
     assert (int(found[1]), int(found[2]), int(found[3])) == (3, 10235, 10491)
 
 
-def test_raw_folder_is_csdms_name_for_a_sequence_inside_the_raw_dir(tmp_path):
+def test_raw_folder_is_named_after_the_sequence_inside_the_raw_dir(tmp_path):
     assert hlae_plan.raw_folder(tmp_path, 2) == tmp_path / "2-sequence"
 
 
@@ -182,7 +182,7 @@ def test_the_enemy_perspective_follows_each_victim():
 
 
 @pytest.mark.parametrize("victim, followed", [
-    ("", SUBJECT),      # nobody to follow: CS:DM keeps the killer
+    ("", SUBJECT),      # nobody to follow: the camera stays on the killer
     ("0", "0"),         # a bot: the id is not empty, and a camera with no slot is skipped later on
 ])
 def test_the_enemy_perspective_keeps_the_killer_only_without_a_victim(victim, followed):
@@ -253,13 +253,13 @@ def test_the_perspective_makes_no_difference_to_whole_rounds():
     assert plan[0].cameras == ((1000 - 128, SUBJECT),)
 
 
-def test_whole_rounds_are_not_clamped_to_the_demo_as_csdm_does_not_either():
+def test_whole_rounds_are_not_clamped_to_the_demo():
     [sequence] = rounds_plan([Round(1, 990, 10)], tick_count=1000)
     assert (sequence.start_tick, sequence.end_tick) == (10 - 128, 990 + 128)
 
 
-def test_a_fraction_of_a_tick_is_rounded_half_up_where_csdm_would_name_a_clip_after_it():
-    # 64 tick * 0.0390625 s is 2.5 ticks; CS:DM leaves 997.5 and 9002.5 in the Clip's name
+def test_a_fraction_of_a_tick_is_rounded_half_up():
+    # 64 tick * 0.0390625 s is 2.5 ticks: 997.5 and 9002.5 go up
     [sequence] = rounds_plan([Round(1, 9000, 1000)], before=0.0390625, after=0.0390625)
     assert (sequence.start_tick, sequence.end_tick) == (998, 9003)
     assert sequence.cameras == ((998, SUBJECT),)
@@ -280,7 +280,7 @@ def test_sequences_come_in_start_order_and_keep_their_numbers():
 
 DEMO = Path(r"C:\Users\Some One\Demos\match 1.dem")
 RAW = Path(r"C:\Users\Some One\AppData\Local\cs2-clipper\raw")
-RAW_1 = "C:/Users/Some One/AppData/Local/cs2-clipper/raw/1-sequence"      # as CS:DM writes it to HLAE
+RAW_1 = "C:/Users/Some One/AppData/Local/cs2-clipper/raw/1-sequence"      # forward slashes, as HLAE gets it
 STEP = re.compile(r"^mirv_cmd addAtTick (\d+) exec (\S+)$")
 
 
@@ -320,12 +320,12 @@ def test_the_entry_cfg_starts_the_demo_and_schedules_the_first_step():
         "mirv_cmd clear",
         "mirv_cmd enabled 1",
         "mirv_cmd addAtTick 96 exec cs2clipper_go",
-        "demo_ui_mode 0",       # before the playback starts, or CS2 shows its playback bar (CS:DM's plugin-main.cpp)
-        r'playdemo "C:\Users\Some One\Demos\match 1.dem"',      # the path as CS:DM passes it, spaces and all
+        "demo_ui_mode 0",       # before the playback starts, or CS2 shows its playback bar
+        r'playdemo "C:\Users\Some One\Demos\match 1.dem"',      # the path as it is, spaces and all
     ]
 
 
-def test_the_go_cfg_sends_csdms_settings_once_and_hands_over_to_the_first_sequence():
+def test_the_go_cfg_sends_the_pinned_settings_once_and_hands_over_to_the_first_sequence():
     assert cfg_lines(plan_script(two_sequences()), "cs2clipper_go") == [
         "sv_cheats 1",
         "volume 1",
@@ -366,14 +366,14 @@ def test_the_video_settings_change_what_is_sent():
                       '{QUOTE}' + RAW_1 + r'\\video.mkv{QUOTE}"')
 
 
-def test_output_parameters_take_the_place_of_the_crf_as_in_csdm():
+def test_output_parameters_take_the_place_of_the_crf():
     files = plan_script(two_sequences(), settings=hlae_plan.VideoSettings(output_parameters="-b:v 8M"))
     [preset] = [line for line in cfg_lines(files, "cs2clipper_s1_prepare") if " settings add ffmpeg " in line]
     assert preset == ('mirv_streams settings add ffmpeg cs2clipperPreset1 "-c:v libx264 -pix_fmt yuv420p -b:v 8M '
                       '{QUOTE}' + RAW_1 + r'\\video.mp4{QUOTE}"')
 
 
-def test_the_video_settings_default_to_the_values_renders_through_csdm_pinned():
+def test_the_video_settings_default_to_what_every_render_records_with():
     settings = hlae_plan.VideoSettings()
     assert (settings.show_xray, settings.show_assists, settings.show_only_death_notices,
             settings.death_notices_duration, settings.player_voices_enabled, settings.record_audio,
@@ -407,7 +407,7 @@ def test_a_sequences_cfg_schedules_its_steps_then_seeks_to_where_it_lands():
     ]
 
 
-def test_the_prepare_cfg_sets_up_the_recording_as_csdm_does():
+def test_the_prepare_cfg_sets_up_the_recording():
     lines = cfg_lines(plan_script(two_sequences()), "cs2clipper_s1_prepare")
     assert lines[:9] == [
         "mirv_streams record startMovieWav 1",
@@ -444,7 +444,7 @@ def test_a_sequence_with_no_notices_leaves_the_death_notices_alone():
     assert cfg_lines(files, "cs2clipper_s1_prepare")[-1] == "mirv_deathmsg filter clear"
 
 
-def test_the_steps_hold_the_commands_csdm_sends_at_those_ticks():
+def test_the_steps_hold_the_commands_for_those_ticks():
     files = plan_script(two_sequences())
     assert cfg_lines(files, "cs2clipper_s1_aim") == ["spec_mode 1", "spec_player 3"]
     assert cfg_lines(files, "cs2clipper_s1_start") == [
@@ -555,7 +555,7 @@ def test_a_camera_at_or_after_the_end_is_dropped():
     assert not any("camera" in name for _, name in steps(files, "cs2clipper_s1"))
 
 
-def test_a_camera_on_nobody_in_the_demo_is_skipped_as_csdm_skips_it():
+def test_a_camera_on_nobody_in_the_demo_is_skipped():
     files = camera_plan((10000, "0"), (10700, ENEMY), (11000, "76561198999999999"))
     assert "cs2clipper_s1_aim.cfg" not in files
     assert cfg_lines(files, "cs2clipper_s1_start") == ["mirv_streams record start"]
@@ -669,7 +669,7 @@ PLANS = {
                                   [kill(15000, victim=SUBJECT, killer=ENEMY, round_number=2)]),
 }
 ALLOWED_COMMANDS = {
-    # what CS:DM sends
+    # the pinned settings, the recording and the camera
     "sv_cheats", "volume", "cl_hud_telemetry_frametime_show", "cl_hud_telemetry_net_misdelivery_show",
     "cl_hud_telemetry_ping_show", "cl_hud_telemetry_serverrecvmargin_graph_show", "cl_trueview_show_status",
     "r_show_build_info", "mirv_streams", "cl_demo_predict", "cl_draw_only_deathnotices", "mirv_deathmsg",
@@ -685,7 +685,7 @@ def planned(request):
     return plan_script(PLANS[request.param]())
 
 
-def test_only_commands_csdm_sends_or_the_plan_needs_are_used(planned):
+def test_only_the_commands_the_plan_needs_are_used(planned):
     verbs = {line.split()[0] for text in planned.values() for line in text.splitlines()}
     assert verbs <= ALLOWED_COMMANDS
 

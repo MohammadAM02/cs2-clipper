@@ -129,7 +129,7 @@ def test_the_ffmpeg_ini_goes_in_the_ffmpeg_folder_next_to_hlae_and_names_ffmpeg(
     hlae_files.ensure_ffmpeg_ini(hlae_exe, FFMPEG)
 
     ini = (tmp_path / "HLAE" / "ffmpeg" / "ffmpeg.ini").read_bytes()
-    assert ini == b"[Ffmpeg]\nPath=" + str(FFMPEG).encode()        # as CS:DM writes it: LF, no line break at the end
+    assert ini == b"[Ffmpeg]\nPath=" + str(FFMPEG).encode()        # LF, no line break at the end
 
 
 def test_an_ffmpeg_ini_that_already_says_so_is_not_written_again(tmp_path):

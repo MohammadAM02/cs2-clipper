@@ -1,9 +1,9 @@
-"""What CS Demo Manager's server plugin did for `csdm video`, as a plan CS2 follows by itself.
+"""A Render Job as a plan CS2 follows by itself, recording through HLAE.
 
-Since a CS2 update the plugin no longer hooks in (upstream akiver/cs-demo-manager#1458), so a Render Job
-records through HLAE alone: CS2 starts with `+exec cs2clipper`, and HLAE's `mirv_cmd addAtTick` runs the
-plan below at the right ticks. `build_sequences` ports CS:DM 3.20.1's two builders, so the same request
-gives the same Sequences and the same Clip names; `script` writes the cfg files that record them.
+CS2 starts with `+exec cs2clipper`, and HLAE's `mirv_cmd addAtTick` runs the plan below at the right ticks.
+`build_sequences` ports the two Sequence builders of CS Demo Manager 3.20.1 (MIT), and `script` sends the
+commands its video export sends, so a request gives the same Sequences, Clip names and look. `script` writes
+the cfg files that record them.
 
 Pure: no file, process or database access. The runner writes the cfg files, launches CS2, reads its
 console for the markers (`parse_marker`) and finds each Clip in `raw_folder`."""
@@ -78,7 +78,7 @@ class NoticePlayer:
 
 @dataclass(frozen=True)
 class Sequence:
-    """One Clip to record, as CS:DM's builders make it."""
+    """One Clip to record, as `build_sequences` makes it."""
 
     number: int
     start_tick: int
@@ -94,8 +94,8 @@ class PlanError(Exception):
 
 @dataclass(frozen=True)
 class VideoSettings:
-    """The video settings of CS:DM that change what it sends to the game. The defaults are the ones a Render
-    Job pinned in CS:DM's settings file when it rendered through CS:DM, so leaving them out records the same."""
+    """The video settings that change what the plan sends to the game. The defaults are the ones every
+    Render Job records with."""
 
     show_xray: bool = True
     show_assists: bool = True
@@ -149,11 +149,9 @@ def build_sequences(
     padding_before_s: float,
     padding_after_s: float,
 ) -> list[Sequence]:
-    """The Sequences `csdm video --mode player --steamids <steamid>` records for the same request, numbered
-    from 1 and in start order. `event` is "kills" (a Sequence per Frag) or "rounds" (a whole round each);
-    `rounds` limits it to those round numbers (none: every round); the padding is in seconds. Raises
-    ValueError for any other event (CS:DM also has "deaths", which a Render Job never asks for) or
-    perspective."""
+    """The Sequences that record `steamid`'s request, numbered from 1 and in start order. `event` is
+    "kills" (a Sequence per Frag) or "rounds" (a whole round each); `rounds` limits it to those round numbers
+    (none: every round); the padding is in seconds. Raises ValueError for any other event or perspective."""
     if perspective not in ("player", "enemy"):
         raise ValueError(f"unknown perspective: {perspective!r}")
     if event == "kills":
@@ -257,7 +255,7 @@ def script(
     from the Demo at `demo_path` into `raw_folder(raw_dir, number)`.
 
     CS2 starts with `+exec cs2clipper`, which plays the Demo and schedules `cs2clipper_go` for tick 96 (`playing`).
-    That sends CS:DM's settings and runs the first Sequence's cfg. Each Sequence's cfg schedules its own steps with
+    That sends the pinned settings and runs the first Sequence's cfg. Each Sequence's cfg schedules its own steps with
     `mirv_cmd addAtTick`, every step a cfg of its own, and seeks to its approach when that is worth it: set the
     recording up (`ready`), aim the camera, start (`recording`), change the camera, end (`done`) and hand over to the
     next Sequence's cfg, or, after the last, quit (`quit`). The runner reads those markers from console.log, where
@@ -284,7 +282,7 @@ def script(
             "mirv_cmd clear",
             "mirv_cmd enabled 1",
             f"mirv_cmd addAtTick {FIRST_TICK} exec {ENTRY}_go",
-            "demo_ui_mode 0",       # CS2 shows its playback bar unless this comes before the demo plays (CS:DM does the same)
+            "demo_ui_mode 0",       # CS2 shows its playback bar unless this comes before the demo plays
             f'playdemo "{demo}"',
         ),
         f"{ENTRY}_go.cfg": _cfg(
@@ -365,9 +363,9 @@ def _quotable(text: str, what: str) -> str:
 
 
 def _name(text: str) -> str:
-    """A player's name for the inside of quotes. CS:DM sends names as they are and CS2 has no way to quote a
-    `"` in one, so a name could end its quotes and start commands of its own; here `"` becomes `'`, `;` becomes
-    `,` and control characters become spaces."""
+    """A player's name for the inside of quotes. CS2 has no way to quote a `"` in one, so a name could end its
+    quotes and start commands of its own; here `"` becomes `'`, `;` becomes `,` and control characters become
+    spaces."""
     return _CONTROL.sub(" ", text.replace('"', "'").replace(";", ","))
 
 
@@ -378,7 +376,7 @@ def _camera_lines(slot: int) -> tuple[str, ...]:
 
 def _cameras(sequence: Sequence, slots: dict[str, int]) -> tuple[int | None, list[tuple[int, int]]]:
     """(the slot the camera follows as the Sequence starts, or None; the (tick, slot) of each later change).
-    CS:DM sends nothing for a camera on a player the demo does not list. The cameras up to the start fold into
+    Nothing is sent for a camera on a player the demo does not list. The cameras up to the start fold into
     one, the last of them; two on one tick are one too, the last; one at or after the end is left out."""
     located = sorted(((tick, slots[steam_id]) for tick, steam_id in sequence.cameras if steam_id in slots),
                      key=lambda camera: camera[0])
@@ -418,15 +416,15 @@ def _pinned_lines(settings: VideoSettings) -> list[str]:
 def _prepare_lines(sequence: Sequence, folder: str, settings: VideoSettings) -> tuple[str, ...]:
     """What CS:DM sends at a Sequence's setup tick, in its order, then the marker that says it is done."""
     number = sequence.number
-    preset = f"{ENTRY}Preset{number}"       # CS:DM: csdmPreset<n>; one per Sequence, as it names its own folder
-    quality = settings.output_parameters or f"-crf {settings.constant_rate_factor:g}"      # CS:DM: either, not both
+    preset = f"{ENTRY}Preset{number}"       # one per Sequence, as each records into a folder of its own
+    quality = settings.output_parameters or f"-crf {settings.constant_rate_factor:g}"      # either, not both
     lines = [
         f"mirv_streams record startMovieWav {_flag(settings.record_audio)}",
         f'mirv_streams record name "{folder}"',
         "mirv_deathmsg clear",
         f"spec_show_xray {_flag(settings.show_xray)}",
         f"mp_display_kill_assists {_flag(settings.show_assists)}",
-        # as CS:DM sends it: the quotes inside the preset are {QUOTE}, and two backslashes come before the file
+        # the quotes inside the preset are {QUOTE}, and two backslashes come before the file
         f'mirv_streams settings add ffmpeg {preset} "-c:v {settings.video_codec} -pix_fmt yuv420p {quality} '
         f'{{QUOTE}}{folder}\\\\video.{settings.container}{{QUOTE}}"',
         f"mirv_streams record screen settings {preset}",
@@ -434,7 +432,7 @@ def _prepare_lines(sequence: Sequence, folder: str, settings: VideoSettings) -> 
         "mirv_deathmsg filter clear",
     ]
     # Whoever the Sequence names a notice player for is allowed; the rest is blocked. A player with nothing
-    # to match the Frag's attacker by is left out (CS:DM matches by Steam ID, which is digits).
+    # to match the Frag's attacker by is left out (the filter matches by Steam ID, which is digits).
     notices = [notice for notice in sequence.notices if _DIGITS.fullmatch(notice.steam_id)]
     if notices:
         lines.append("mirv_deathmsg filter add block=1")

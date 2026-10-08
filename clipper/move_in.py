@@ -28,7 +28,7 @@ SHIPPED_ENV = "shipped.env"           # the key a packaged build ships (packagin
 def needed(repo_root: Path, data_dir: Path) -> bool:
     """True when `data_dir` has no settings.json yet and the repo holds an old setup: any of
     clipper.toml, .env, data\\clipper.sqlite exists. A fresh clone has none of them, so nothing is
-    moved in. CS Demo Manager's old settings folder, home\\, is not one: nothing is taken from it."""
+    moved in. The old home\\ folder is not one: nothing is taken from it."""
     if (data_dir / "settings.json").exists():
         return False
     return any((

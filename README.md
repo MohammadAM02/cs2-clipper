@@ -7,6 +7,7 @@
   <img alt="Windows 10 and 11" src="https://img.shields.io/badge/Windows-10%20%7C%2011-FF5500?style=for-the-badge&labelColor=141414">
   <img alt="Python 3.13" src="https://img.shields.io/badge/Python-3.13-FF5500?style=for-the-badge&labelColor=141414&logo=python&logoColor=white">
   <img alt="Records through HLAE" src="https://img.shields.io/badge/records%20with-HLAE-FF5500?style=for-the-badge&labelColor=141414">
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-FF5500?style=for-the-badge&labelColor=141414"></a>
 </p>
 
 <h3 align="center">Play FACEIT. Download the Demo. Come back to your Highlights.</h3>
@@ -188,5 +189,10 @@ CS2 Clipper is built on open-source work:
   window and installer started from it.
 - [faceitperf](https://github.com/iffypixy/faceitperf) by iffypixy (MIT): the Rating 2.0 estimate.
 - [FFmpeg](https://ffmpeg.org), in [gyan.dev's builds](https://www.gyan.dev/ffmpeg/builds/), joins the Clips.
+
+## License
+
+[MIT](LICENSE). The code adapted from Aegis, CS Demo Manager and faceitperf keeps its authors' MIT notices in
+the files it lives in.
 
 <sub>Not affiliated with Valve or FACEIT. Counter-Strike 2 is a trademark of Valve Corporation.</sub>

@@ -5,6 +5,7 @@ Fakes and tmp folders throughout: no real csdm, CS2, Postgres or network. `step`
 `problems` and a fake `build` so a "clear" pass never touches build_worker's real subsystems."""
 from __future__ import annotations
 
+import json
 import logging
 import socket
 import threading
@@ -15,19 +16,20 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from clipper import checks, paths, web
+from clipper import app as app_module, checks, cs2_paths, hlae_render, paths, web
 from clipper.app import (
-    PAGES, AlreadyRunning, App, ask_to_quit, find_running, gate_reasons, hand_over, quit_running, run, run_headless,
-    single_instance, start_match_alerts,
+    PAGES, AlreadyRunning, App, ask_to_quit, build_worker, find_running, gate_reasons, hand_over, quit_running, run,
+    run_headless, single_instance, start_match_alerts,
 )
 from clipper.config import Config
 from clipper.faceit import FaceitError, Player
 from clipper.faceit_oauth import OAuthError
 from clipper.index import Index
+from clipper.render import RenderRequest, RenderResult
 from clipper.settings import KEY_FIELD, SECRET_FIELD, SettingsStore
 from clipper.state import AppState, Rendering
 from clipper.web import WebContext, WebServer, create_app
-from clipper.worker import StopRequest
+from clipper.worker import DeleteRequest, StopRequest
 
 
 def _free_port() -> int:
@@ -86,6 +88,128 @@ def test_match_alerts_stay_off_when_the_page_could_not_start(tmp_path):
 
 def test_gate_reasons_names_the_missing_clips_folder_when_none_is_set():
     assert gate_reasons(Config(), probe=None) == ("no clips folder is set",)
+
+
+# --- build_worker: which renderer a Render Job goes to ----------------------------------------------
+
+
+class Renderers:
+    """Stands in for both renderers and for the search for cs2.exe (the real one reads the registry), and keeps
+    what each was called with."""
+
+    def __init__(self):
+        self.result = RenderResult(ok=False, failure="from a fake renderer")
+        self.csdm_calls: list[tuple] = []       # (request, keyword arguments)
+        self.hlae_calls: list[tuple] = []
+        self.cs2_exes: list = []                # what the search finds, one answer per search
+        self.searched_in: list = []
+
+    def csdm(self, request, **kwargs):
+        self.csdm_calls.append((request, kwargs))
+        return self.result
+
+    def hlae(self, request, **kwargs):
+        self.hlae_calls.append((request, kwargs))
+        return self.result
+
+    def find_cs2_exe(self, csdm_home):
+        self.searched_in.append(csdm_home)
+        return self.cs2_exes.pop(0)
+
+
+@pytest.fixture
+def renderers(monkeypatch):
+    renderers = Renderers()
+    monkeypatch.setattr(app_module, "render", renderers.csdm)
+    monkeypatch.setattr(hlae_render, "render", renderers.hlae)
+    monkeypatch.setattr(cs2_paths, "find_cs2_exe", renderers.find_cs2_exe)
+    return renderers
+
+
+@pytest.fixture
+def built(tmp_path, renderers):
+    """`built(**settings)` is the Worker `build_worker` gives for a Config in `tmp_path`: a CS:DM home whose settings
+    name a database, HLAE and FFmpeg, and no match alerts. Nothing connects, runs or looks at the PC."""
+    home = tmp_path / "home"
+    (home / ".csdm").mkdir(parents=True)
+    (home / ".csdm" / "settings.json").write_text(json.dumps({
+        "database": {"hostname": "localhost", "port": 5432, "username": "csdm", "password": "p", "database": "csdm"},
+        "video": {
+            "hlae": {"customLocationEnabled": True, "customExecutableLocation": str(tmp_path / "hlae" / "HLAE.exe")},
+            "ffmpegSettings": {"customLocationEnabled": True,
+                               "customExecutableLocation": str(tmp_path / "ffmpeg" / "ffmpeg.exe")},
+        },
+    }), encoding="utf-8")
+    indexes = []
+
+    def build(**settings):
+        cfg = Config(downloads_dir=tmp_path / "downloads", data_root=tmp_path / "clips",
+                     index_path=tmp_path / "clipper.sqlite", csdm_home=home, match_alerts=False, **settings)
+        indexes.append(Index(cfg.index_path))
+        return build_worker(cfg, indexes[-1], state=AppState(), stop=StopRequest(), deletes=DeleteRequest(),
+                            page_url=None, pages_off=None)
+
+    yield build
+    for index in indexes:
+        index.close()
+
+
+def _render_request(tmp_path) -> RenderRequest:
+    return RenderRequest(
+        demo_path=tmp_path / "match.dem", perspective="player", rounds=(3, 12), output_dir=tmp_path / "out",
+        log_path=tmp_path / "render.log", steamid="76561198192858303", padding_before_s=4.0, padding_after_s=2.0,
+        checksum="aea4e59ccfc6c962",
+    )
+
+
+def test_a_render_job_goes_to_csdm_unless_the_setting_says_hlae(built, renderers, tmp_path):
+    worker = built()
+    request, abort = _render_request(tmp_path), lambda: False
+    assert worker.services.render(request, abort) is renderers.result
+    assert renderers.hlae_calls == [] and renderers.searched_in == []       # CS2 is not looked for
+    [(given, kwargs)] = renderers.csdm_calls
+    assert given is request
+    assert set(kwargs) == {"csdm", "probe", "should_abort", "stall_seconds", "launch_timeout_seconds", "duration_of"}
+    assert kwargs["should_abort"] is abort
+    assert kwargs["csdm"].home == worker.cfg.csdm_home
+    assert (kwargs["stall_seconds"], kwargs["launch_timeout_seconds"]) == (180.0, 300.0)
+
+
+def test_with_the_hlae_renderer_a_render_job_gets_what_it_drives_cs2_with(built, renderers, tmp_path):
+    cs2_exe = tmp_path / "steam" / "game" / "bin" / "win64" / "cs2.exe"
+    renderers.cs2_exes = [cs2_exe]
+    worker = built(renderer="hlae", stall_seconds=90.0, launch_timeout_seconds=240.0, ffmpeg="the-ffmpeg")
+    request, abort = _render_request(tmp_path), lambda: False
+    assert worker.services.render(request, abort) is renderers.result
+    assert renderers.csdm_calls == []
+    assert renderers.searched_in == [worker.cfg.csdm_home]
+    [(given, kwargs)] = renderers.hlae_calls
+    assert given is request
+    assert set(kwargs) == {"probe", "should_abort", "stall_seconds", "launch_timeout_seconds", "duration_of",
+                           "load_inputs", "cs2_exe", "hlae_exe", "hlae_ffmpeg", "ffmpeg"}
+    assert kwargs["should_abort"] is abort
+    assert (kwargs["stall_seconds"], kwargs["launch_timeout_seconds"]) == (90.0, 240.0)
+    assert kwargs["cs2_exe"] == cs2_exe
+    assert kwargs["hlae_exe"] == tmp_path / "hlae" / "HLAE.exe"             # the one CS:DM's settings name
+    assert kwargs["hlae_ffmpeg"] == tmp_path / "ffmpeg" / "ffmpeg.exe"      # CS:DM's FFmpeg, the one HLAE records with
+    assert kwargs["ffmpeg"] == "the-ffmpeg"                                 # ours, for the mux
+
+
+def test_the_hlae_renderer_reads_its_plan_through_the_same_facts_as_the_worker(built, renderers, tmp_path):
+    renderers.cs2_exes = [None]
+    worker = built(renderer="hlae")
+    worker.services.render(_render_request(tmp_path), lambda: False)
+    [(_, kwargs)] = renderers.hlae_calls
+    assert kwargs["load_inputs"] == worker.services.facts.render_inputs     # a method of the one instance
+
+
+def test_cs2_is_looked_for_again_for_every_render_job(built, renderers, tmp_path):
+    cs2_exe = tmp_path / "cs2.exe"
+    renderers.cs2_exes = [None, cs2_exe]
+    worker = built(renderer="hlae")
+    worker.services.render(_render_request(tmp_path), lambda: False)
+    worker.services.render(_render_request(tmp_path), lambda: False)
+    assert [kwargs["cs2_exe"] for _, kwargs in renderers.hlae_calls] == [None, cs2_exe]
 
 
 # --- App.step: fakes for problems and build --------------------------------------------------------
@@ -246,6 +370,16 @@ def test_a_changed_setting_rebuilds_the_worker(world):
     world.app.step(world.index)
     assert len(world.build.calls) == 2
     assert world.build.workers[-1] is not first_worker
+
+
+def test_a_changed_renderer_is_in_the_config_of_the_rebuilt_worker(world):
+    world.app.step(world.index)
+    assert world.build.calls[-1][0].renderer == "csdm"
+
+    assert world.store.save({"renderer": "hlae"}) == {}
+    world.app.step(world.index)
+    assert len(world.build.calls) == 2
+    assert world.build.calls[-1][0].renderer == "hlae"
 
 
 def test_a_tick_that_raises_is_logged_and_the_next_pass_still_ticks(world, caplog):

@@ -41,6 +41,7 @@ class RenderRequest:
     event: str = "kills"        # "kills" (a Sequence per Frag) or "rounds" (whole rounds)
     width: int = 1920
     height: int = 1080
+    checksum: str = ""          # the Demo's checksum in CS:DM's database, which the HLAE renderer reads its plan by
 
 
 @dataclass(frozen=True)

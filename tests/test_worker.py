@@ -152,6 +152,16 @@ def test_one_demo_renders_both_views_before_the_next_demo_starts(world):
     assert world.index.demo(first)["state"] == world.index.demo(second)["state"] == "done"
 
 
+def test_each_render_is_given_the_checksum_csdm_gave_its_demo(world):
+    world.add_demo()
+    world.add_demo(SECOND_DEMO, "1" * 64)
+    world.ticks(12)
+    assert [(call.demo_path.name, call.checksum) for call in world.render.calls] == [
+        (f"{DEMO_NAME}.dem", MATCH_CHECKSUM), (f"{DEMO_NAME}.dem", MATCH_CHECKSUM),
+        (f"{SECOND_DEMO}.dem", SECOND_CHECKSUM), (f"{SECOND_DEMO}.dem", SECOND_CHECKSUM),
+    ]
+
+
 def test_the_next_demo_waits_while_the_first_retries_a_failed_view(world):
     world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran")]
     world.add_demo()

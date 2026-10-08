@@ -386,6 +386,7 @@ class Worker:
             event=self.cfg.sequence_event,
             width=self.cfg.video_size[0],
             height=self.cfg.video_size[1],
+            checksum=demo["match_checksum"],
         )
         try:
             result = self.services.render(

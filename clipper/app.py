@@ -45,7 +45,8 @@ from functools import partial
 from pathlib import Path
 
 from clipper import (
-    applog, checks, csdm_db, faceit_oauth, move_in, packaged, paths, protect, provision, settings, tray, web,
+    applog, checks, cs2_paths, csdm_db, csdm_settings, faceit_oauth, hlae_render, move_in, packaged, paths, protect,
+    provision, settings, tray, web,
 )
 from clipper.alerts import MatchAlerts
 from clipper.config import Config
@@ -146,9 +147,17 @@ def build_worker(cfg: Config, index: Index, *, state: AppState, stop: StopReques
     probe = SystemProbe()
     gate = Gate(probe, cfg.data_root, cfg.min_free_gb)
     csdm = CsdmCli(prefix=(str(cfg.csdm_exe), str(cfg.csdm_cli_js)), home=cfg.csdm_home, pg_bin=cfg.pg_bin)
+    facts = csdm_db.CsdmFacts(cfg.database_conninfo())
     duration_of = partial(probe_duration, ffprobe=cfg.ffprobe)
 
     def render_job(request, should_abort):
+        if cfg.renderer == "hlae":     # CS2, HLAE and CS:DM's FFmpeg are looked for per job: they may have moved
+            return hlae_render.render(
+                request, probe=probe, should_abort=should_abort, stall_seconds=cfg.stall_seconds,
+                launch_timeout_seconds=cfg.launch_timeout_seconds, duration_of=duration_of,
+                load_inputs=facts.render_inputs, cs2_exe=cs2_paths.find_cs2_exe(cfg.csdm_home),
+                hlae_exe=checks.hlae_exe(cfg.csdm_home), hlae_ffmpeg=csdm_settings.ffmpeg_exe(cfg.csdm_home),
+                ffmpeg=cfg.ffmpeg)
         return render(request, csdm=csdm, probe=probe, should_abort=should_abort,
                       stall_seconds=cfg.stall_seconds, launch_timeout_seconds=cfg.launch_timeout_seconds,
                       duration_of=duration_of)
@@ -157,7 +166,7 @@ def build_worker(cfg: Config, index: Index, *, state: AppState, stop: StopReques
         intake=Intake(cfg.downloads_dir, cfg.demos_dir),
         unpack=unpack,
         analyze=csdm.analyze,
-        facts=csdm_db.CsdmFacts(cfg.database_conninfo()),
+        facts=facts,
         gate=gate,
         render=render_job,
         join=partial(join_reel, ffmpeg=cfg.ffmpeg, duration_of=duration_of, stretch=cfg.stretch),

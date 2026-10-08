@@ -1,6 +1,7 @@
 """The HLAE plan: the Sequences CS:DM would record for a request, and the console script that records them
 through HLAE instead of CS:DM's server plugin. Everything here is pure: no CS2, no HLAE, no Postgres."""
 import re
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -855,3 +856,30 @@ def test_inputs_from_the_database_make_the_sequences_csdm_makes():
     assert [notice.name for notice in sequence.notices] == ["Subject", "Enemy One"]
     files = hlae_plan.script([sequence], inputs_, demo_path=DEMO, raw_dir=RAW)
     assert cfg_lines(files, "cs2clipper_s1_aim") == ["spec_mode 1", "spec_player 3"]
+
+
+def test_the_facts_read_the_render_inputs_on_a_connection_of_their_own(monkeypatch):
+    opened = []
+
+    @contextmanager
+    def connect(conninfo):
+        opened.append((conninfo, csdm_conn()))
+        yield opened[-1][1]
+
+    monkeypatch.setattr(csdm_db, "connect", connect)
+    facts = csdm_db.CsdmFacts({"host": "localhost", "dbname": "csdm"})
+    assert facts.render_inputs(CHECKSUM) == FROM_ROWS
+    assert facts.render_inputs(CHECKSUM) == FROM_ROWS
+    assert [conninfo for conninfo, _ in opened] == [{"host": "localhost", "dbname": "csdm"}] * 2
+    assert opened[0][1] is not opened[1][1]
+    for _, conn in opened:
+        assert [params for _, params in conn.queries] == [{"checksum": CHECKSUM}] * 4
+
+
+def test_the_facts_have_no_inputs_for_a_demo_csdm_does_not_know(monkeypatch):
+    @contextmanager
+    def connect(conninfo):
+        yield csdm_conn(demos=[])
+
+    monkeypatch.setattr(csdm_db, "connect", connect)
+    assert csdm_db.CsdmFacts({}).render_inputs(CHECKSUM) is None

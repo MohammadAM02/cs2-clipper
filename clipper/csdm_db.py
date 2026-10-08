@@ -167,7 +167,7 @@ def render_inputs_from_rows(
 
 
 class CsdmFacts:
-    """The three lookups the worker needs, each on its own short-lived connection."""
+    """The lookups the worker and the HLAE renderer need, each on its own short-lived connection."""
 
     def __init__(self, conninfo: Mapping[str, object]):
         self._conninfo = dict(conninfo)
@@ -183,3 +183,7 @@ class CsdmFacts:
     def round_facts(self, checksum: str, steamid: str) -> list[RoundFacts]:
         with connect(self._conninfo) as conn:
             return round_facts(conn, checksum, steamid)
+
+    def render_inputs(self, checksum: str) -> RenderInputs | None:
+        with connect(self._conninfo) as conn:
+            return render_inputs(conn, checksum)

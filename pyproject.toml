@@ -1,6 +1,6 @@
 [project]
 name = "cs2-clipper"
-version = "0.1.0"
+version = "0.2.0"
 description = "Hands-off CS2 highlight clipper: a FACEIT Demo in, Reels out."
 requires-python = ">=3.13"
 dependencies = [

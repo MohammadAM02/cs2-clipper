@@ -21,7 +21,7 @@ KILL_RULES: dict[int, tuple[str, int]] = {
 
 def _base_rules(facts: RoundFacts) -> list[tuple[str, int]]:
     """Every base rule that matches; the highest-scoring one names the Type. Clutch rules join
-    here once issue 07 validates CS:DM's clutches table."""
+    here once issue 07 validates the analysis's clutches."""
     return [KILL_RULES[min(facts.frags, 5)]]
 
 

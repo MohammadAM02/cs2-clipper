@@ -16,7 +16,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 
 from clipper import paths, protect
-from clipper.config import RATIOS, RENDERERS, SEQUENCE_EVENTS, Config
+from clipper.config import RATIOS, SEQUENCE_EVENTS, Config
 from clipper.faceit_oauth import RELAY_URL
 
 KEY_FIELD = "faceit_api_key"                  # write-only: never stored or read back under this name
@@ -25,8 +25,8 @@ SECRET_FIELD = "faceit_client_secret"         # the OAuth client secret, write-o
 STORED_SECRET = "faceit_client_secret_protected"
 SECRETS = {KEY_FIELD: STORED_KEY, SECRET_FIELD: STORED_SECRET}   # write-only name -> stored blob
 
-_APP_DATA_FIELDS = frozenset({"index_path", "csdm_home", "logs_dir"})    # live in the app data folder, not here
-_FOLDER_FIELDS = frozenset({"data_root", "downloads_dir", "csdm_app_dir", "pg_bin", "pg_data"})
+_APP_DATA_FIELDS = frozenset({"index_path", "logs_dir", "tools_dir", "analyses_dir"})   # in the app data folder
+_FOLDER_FIELDS = frozenset({"data_root", "downloads_dir"})
 
 
 @dataclass(frozen=True)
@@ -57,16 +57,13 @@ FIELDS: tuple[Field, ...] = (
           help="Your FACEIT OAuth2 client's secret, for the sign-in above. Stored encrypted."),
     Field("data_root", "Folders", "Clips folder", "folder", help="Where Demos, renders and Reels go."),
     Field("downloads_dir", "Folders", "Downloads", "folder"),
-    Field("csdm_app_dir", "Folders", "CS Demo Manager", "folder"),
-    Field("pg_bin", "Folders", "Postgres programs", "folder"),
-    Field("pg_data", "Folders", "Postgres data", "folder"),
     Field("ffmpeg", "Folders", "FFmpeg", "program", help="A program on PATH or a full path."),
     Field("ffprobe", "Folders", "FFprobe", "program", help="A program on PATH or a full path."),
+    Field("hlae_exe", "Folders", "HLAE", "program", help="Full path to HLAE.exe. Blank uses the one Setup installs."),
     Field("aspect_ratio", "Picture", "Aspect ratio", "choice", choices=tuple(RATIOS)),
     Field("sequence_event", "Picture", "One Clip per", "choice", choices=SEQUENCE_EVENTS),
     Field("padding_before_s", "Picture", "Seconds before each Frag", "number", minimum=0, maximum=30),
     Field("padding_after_s", "Picture", "Seconds after each Frag", "number", minimum=0, maximum=30),
-    Field("renderer", "Rendering", "Renderer", "choice", choices=RENDERERS),
     Field("top_n", "Rendering", "Highlights per match", "int", minimum=1, maximum=50),
     Field("stall_seconds", "Rendering", "Stall timeout (s)", "number", minimum=30, maximum=3600),
     Field("launch_timeout_seconds", "Rendering", "Launch timeout (s)", "number", minimum=30, maximum=3600),
@@ -150,7 +147,7 @@ def _validate_one(name: str, value: object, *, check_exists: bool) -> str | None
     if kind == "folder":
         return _validate_folder(spec, value, check_exists=check_exists)
     if kind == "program":
-        return _validate_program(value, check_exists=check_exists)
+        return _validate_program(spec, value, check_exists=check_exists)
     if kind == "choice":
         return _validate_choice(spec, value)
     if kind == "int":
@@ -231,9 +228,11 @@ def _validate_folder(spec: Field, value: object, *, check_exists: bool) -> str |
     return None
 
 
-def _validate_program(value: object, *, check_exists: bool) -> str | None:
-    if not isinstance(value, str) or value == "":
+def _validate_program(spec: Field, value: object, *, check_exists: bool) -> str | None:
+    if not isinstance(value, str):
         return "must be set"
+    if value == "":
+        return None if spec.name == "hlae_exe" else "must be set"
     if check_exists and not (shutil.which(value) or Path(value).is_file()):
         return "no such program"
     return None

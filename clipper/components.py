@@ -1,9 +1,9 @@
 """What setup downloads.
 
-CS Demo Manager, Postgres and FFmpeg are pinned: one known file each, checked against the SHA-256
-written here, so a changed or tampered download is refused. HLAE is not pinned, because an HLAE older
-than the CS2 build cannot record: setup takes the newest release and checks it against the SHA-256
-GitHub publishes for that file, and refuses a release that publishes none."""
+csda and FFmpeg are pinned: one known file each, checked against the SHA-256 written here, so a
+changed or tampered download is refused. HLAE is not pinned, because an HLAE older than the CS2 build
+cannot record: setup takes the newest release and checks it against the SHA-256 GitHub publishes for
+that file, and refuses a release that publishes none."""
 from __future__ import annotations
 
 import re
@@ -23,19 +23,11 @@ class Asset:
     size: int        # bytes
 
 
-CSDM_VERSION = "3.20.1"
-CSDM = Asset(
-    name="CS-Demo-Manager-Setup-3.20.1.exe",
-    url="https://github.com/akiver/cs-demo-manager/releases/download/v3.20.1/CS-Demo-Manager-Setup-3.20.1.exe",
-    sha256="eedda43b67bb079be4ffdf3e5fc3b114d07163bf2aa13eeed3d25d1c3563de3a",
-    size=176_575_309,
-)
-POSTGRES = Asset(
-    name="postgresql-17.11.0-x86_64-pc-windows-msvc.zip",
-    url="https://github.com/theseus-rs/postgresql-binaries/releases/download/17.11.0/"
-        "postgresql-17.11.0-x86_64-pc-windows-msvc.zip",
-    sha256="85829f743e2697c55f1a5e8b210c53b90dd1f578448fc01cb9c4dc9e0a8e3827",
-    size=51_450_889,
+CSDA = Asset(          # cs-demo-analyzer: the zip holds csda.exe alone, which reads each Demo
+    name="csda-1.11.0-windows-x64.zip",
+    url="https://github.com/akiver/cs-demo-analyzer/releases/download/v1.11.0/windows-x64.zip",
+    sha256="c1c897d304e6247f850f3164343092bee3f760472d6f1bb53144cd2f296aabb1",
+    size=3_709_408,
 )
 FFMPEG = Asset(
     name="ffmpeg-9.0.2-essentials_build.zip",

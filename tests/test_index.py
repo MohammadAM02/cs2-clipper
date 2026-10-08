@@ -59,7 +59,7 @@ def test_fail_remembers_the_step_and_retry_returns_to_it(index):
     demo_id = add(index)
     index.advance(demo_id, "rendering")
     job = index.queue_render(demo_id, "player", attempt=3)
-    index.finish_render(job, "failed", "csdm reported: Game error")
+    index.finish_render(job, "failed", "HLAE error: HLAE.exe exited with code 1")
     index.fail(demo_id, "player render failed 3 times")
     demo = index.demo(demo_id)
     assert (demo["state"], demo["resume_state"]) == ("failed", "rendering")
@@ -75,7 +75,7 @@ def test_a_retry_that_fails_midway_changes_nothing(index, monkeypatch):
     demo_id = add(index)
     index.advance(demo_id, "rendering")
     job = index.queue_render(demo_id, "player", attempt=3)
-    index.finish_render(job, "failed", "csdm reported: Game error")
+    index.finish_render(job, "failed", "HLAE error: HLAE.exe exited with code 1")
     index.fail(demo_id, "player render failed 3 times")
 
     # Monkeypatch queue_render to raise an error

@@ -15,8 +15,8 @@ _ES_SYSTEM_REQUIRED = 0x00000001
 
 
 def downloads_dir() -> Path:
-    """The user's Downloads folder as Windows knows it. Never derived from USERPROFILE, which the
-    csdm child processes override."""
+    """The user's Downloads folder as Windows knows it. Never derived from USERPROFILE, which a child
+    process can be given another of."""
     guid = ctypes.create_string_buffer(_FOLDERID_DOWNLOADS.bytes_le, 16)
     path_ptr = ctypes.c_wchar_p()
     result = ctypes.windll.shell32.SHGetKnownFolderPath(guid, 0, None, ctypes.byref(path_ptr))

@@ -1,6 +1,6 @@
 # Adopt CS Demo Manager as the render engine
 
-**Status**: accepted
+**Status**: superseded by [0004](0004-analyze-with-csda-render-with-hlae.md)
 
 Turning a Demo into Clips requires driving CS2 through HLAE and executing console commands at exact
 Ticks — CS2 dropped `.vdm` scripting, so this is not a small piece of work. `akiver/cs-demo-manager`

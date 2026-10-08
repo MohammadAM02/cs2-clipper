@@ -33,9 +33,8 @@ const BLURB = {"You": "Who the Highlights are for", "Folders": "Where things liv
   "Rendering": "How hard it tries, and when it waits", "Match alerts": "Notifications when a FACEIT match has Highlights", "App": "The pages and the worker"};
 const RATIO = {"16:9": ["16:9", "1920×1080", 64, 36], "4:3": ["4:3", "1280×960", 48, 36], "4:3-hd": ["4:3 HD", "1440×1080", 48, 36],
   "4:3-stretched": ["4:3 stretched", "1280×960 shown at 1920×1080", 64, 36]};
-const CHOICE_LABEL = {kills: "Kill", rounds: "Round", csdm: "CS Demo Manager", hlae: "HLAE"};
-const CHOICE_HELP = {kills: "Each Frag starts its own Sequence.", rounds: "A whole round of Frags becomes one Sequence.",
-  csdm: "CS Demo Manager plays the Demo and records each Sequence.", hlae: "This app starts CS2 through HLAE and records each Sequence itself."};
+const CHOICE_LABEL = {kills: "Kill", rounds: "Round"};
+const CHOICE_HELP = {kills: "Each Frag starts its own Sequence.", rounds: "A whole round of Frags becomes one Sequence."};
 const MONO = new Set(["steamid", "folder", "program", "url"]);
 const PAD = ["padding_before_s", "padding_after_s"];
 let fields = [], values = {}, secretsSet = {}, removedSecrets = new Set(), loginUrl = "", signInNote = "", warnings = [];

@@ -12,7 +12,6 @@ from clipper.procs import ProcessProbe
 
 CS2_REASON = "CS2 is running"
 FACEIT_REASON = "FACEIT AC is running"
-GUI_REASON = "CS Demo Manager is open"
 FACEIT_SERVICE = "FACEITService"
 GB = 1024**3
 
@@ -28,8 +27,9 @@ def _free_bytes(path: Path) -> int:
 
 
 class Gate:
-    """Conditions 1–4 of the spec. Condition 5 (no other Render Job running) holds by construction:
-    one worker renders at a time, and a lock file keeps a single app instance."""
+    """Conditions 1, 2 and 4 of the spec; condition 3 (CS Demo Manager not open) went with CS Demo Manager
+    (ADR 0004). Condition 5 (no other Render Job running) holds by construction: one worker renders at a
+    time, and a lock file keeps a single app instance."""
 
     def __init__(self, probe: ProcessProbe, data_root: Path, min_free_gb: float,
                  free_bytes: Callable[[Path], int] = _free_bytes):
@@ -51,8 +51,6 @@ class Gate:
             reasons.append(CS2_REASON)
         if self._faceit_running(names):
             reasons.append(FACEIT_REASON)
-        if "cs-demo-manager.exe" in names:
-            reasons.append(GUI_REASON)
         drive = self._data_root.anchor or str(self._data_root)
         try:
             if self._free_bytes(self._data_root) < self._min_free_gb * GB:

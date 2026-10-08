@@ -1,15 +1,12 @@
 """clipper.checks: Status's checks and the start-up problems (spec: Pages -> Status (Checks); When
 something goes wrong; Code units).
 
-No network, and no real CS:DM/HLAE paths: everything lives under tmp_path, and every collaborator
-that would touch the network or the real machine (pg_running, which, free_bytes, version_of,
-HlaeReleases' own fetch) is a fake.
+No network, and no real HLAE or csda: everything lives under tmp_path, and every collaborator that
+would touch the network or the real machine (which, free_bytes, HlaeReleases' own fetch) is a fake.
 """
 
 from __future__ import annotations
 
-import json
-import os
 from pathlib import Path
 
 import pytest
@@ -18,10 +15,6 @@ from clipper import checks
 from clipper.config import Config
 
 GB = 1024**3
-# A file every Windows install carries, always with a version resource -- unlike a venv's own
-# python.exe, which on this machine is a small launcher stub with no PE version resource at all
-# (confirmed directly: GetFileVersionInfoSizeW returns 0, last-error 1813 RESOURCE_TYPE_NOT_FOUND).
-KNOWN_VERSIONED_FILE = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "kernel32.dll"
 
 
 def _cfg(tmp_path, **overrides) -> Config:
@@ -29,11 +22,9 @@ def _cfg(tmp_path, **overrides) -> Config:
         downloads_dir=tmp_path / "downloads",
         data_root=None,
         index_path=tmp_path / "clipper.sqlite",
-        csdm_home=tmp_path / "csdm-home",
         logs_dir=tmp_path / "logs",
-        csdm_app_dir=tmp_path / "csdm-app",
-        pg_bin=tmp_path / "pg" / "bin",
-        pg_data=tmp_path / "pg" / "data",
+        tools_dir=tmp_path / "tools",
+        analyses_dir=tmp_path / "analyses",
         ffmpeg="ffmpeg-missing-xyz",
         ffprobe="ffprobe-missing-xyz",
         min_free_gb=5.0,
@@ -42,66 +33,31 @@ def _cfg(tmp_path, **overrides) -> Config:
     return Config(**fields)
 
 
-# --- file_version --------------------------------------------------------------------------------
-
-
-def test_file_version_of_a_real_exe_is_a_dotted_version_string():
-    version = checks.file_version(KNOWN_VERSIONED_FILE)
-    assert version is not None
-    parts = version.split(".")
-    assert 3 <= len(parts) <= 4
-    assert all(part.isdigit() for part in parts)
-
-
-def test_file_version_of_a_non_exe_is_none(tmp_path):
-    text = tmp_path / "not-an-exe.txt"
-    text.write_text("hello", encoding="utf-8")
-    assert checks.file_version(text) is None
+def _touch(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"")
+    return path
 
 
 # --- hlae_exe --------------------------------------------------------------------------------------
 
 
-def _write_csdm_settings(csdm_home: Path, hlae: dict) -> None:
-    settings_dir = csdm_home / ".csdm"
-    settings_dir.mkdir(parents=True)
-    (settings_dir / "settings.json").write_text(
-        json.dumps({"video": {"hlae": hlae}, "database": {"password": "super-secret-pw"}}),
-        encoding="utf-8",
-    )
+def test_hlae_exe_is_the_one_setup_installs_when_no_path_is_set(tmp_path):
+    cfg = _cfg(tmp_path)
+    exe = _touch(tmp_path / "tools" / "hlae" / "HLAE.exe")
+    assert checks.hlae_exe(cfg) == exe
 
 
-def test_hlae_exe_uses_the_custom_location_when_enabled_and_leaks_no_other_setting(tmp_path, caplog):
-    csdm_home = tmp_path / "csdm-home"
-    custom = tmp_path / "HLAE" / "hlae.exe"
-    _write_csdm_settings(csdm_home, {"customLocationEnabled": True, "customExecutableLocation": str(custom)})
-    exe = checks.hlae_exe(csdm_home)
-    assert exe == custom
-    assert "super-secret-pw" not in str(exe)
-    assert "super-secret-pw" not in caplog.text
+def test_hlae_exe_is_the_path_set_in_settings(tmp_path):
+    exe = _touch(tmp_path / "HLAE" / "hlae.exe")
+    _touch(tmp_path / "tools" / "hlae" / "HLAE.exe")
+    assert checks.hlae_exe(_cfg(tmp_path, hlae_exe=str(exe))) == exe
 
 
-def test_hlae_exe_falls_back_to_csdms_own_copy_when_the_custom_location_is_off(tmp_path):
-    csdm_home = tmp_path / "csdm-home"
-    _write_csdm_settings(csdm_home, {"customLocationEnabled": False, "customExecutableLocation": ""})
-    assert checks.hlae_exe(csdm_home) == csdm_home / ".csdm" / "hlae" / "HLAE.exe"
-
-
-def test_hlae_exe_falls_back_when_the_custom_location_key_is_absent(tmp_path):
-    csdm_home = tmp_path / "csdm-home"
-    _write_csdm_settings(csdm_home, {})
-    assert checks.hlae_exe(csdm_home) == csdm_home / ".csdm" / "hlae" / "HLAE.exe"
-
-
-def test_hlae_exe_is_none_when_settings_cannot_be_read(tmp_path):
-    assert checks.hlae_exe(tmp_path / "no-such-csdm-home") is None
-
-
-def test_hlae_exe_is_none_when_settings_is_malformed_json(tmp_path):
-    csdm_home = tmp_path / "csdm-home"
-    (csdm_home / ".csdm").mkdir(parents=True)
-    (csdm_home / ".csdm" / "settings.json").write_text("{not json", encoding="utf-8")
-    assert checks.hlae_exe(csdm_home) is None
+def test_hlae_exe_is_none_when_there_is_no_such_file(tmp_path):
+    _touch(tmp_path / "tools" / "hlae" / "HLAE.exe")      # a path that is set is not swapped for this one
+    assert checks.hlae_exe(_cfg(tmp_path, hlae_exe=str(tmp_path / "gone" / "hlae.exe"))) is None
+    assert checks.hlae_exe(_cfg(tmp_path / "nothing installed")) is None
 
 
 # --- hlae_version ------------------------------------------------------------------------------
@@ -230,71 +186,31 @@ def _get(cfg, **overrides):
     kwargs = dict(
         alerts_status="on",
         releases=_FakeReleases("9.9.9"),
-        pg_running=lambda pg_bin, pg_data: True,
         which=lambda name: None,
         free_bytes=lambda path: 999 * GB,
-        version_of=lambda path: None,
     )
     kwargs.update(overrides)
     results = checks.run_checks(cfg, **kwargs)
-    assert [c.name for c in results] == [
-        "CS Demo Manager", "Postgres", "HLAE", "FFmpeg", "Clips folder", "Match alerts",
-    ]
+    assert [c.name for c in results] == ["csda", "HLAE", "FFmpeg", "Clips folder", "Match alerts"]
     return {c.name: c for c in results}
 
 
-def test_run_checks_cs_demo_manager_missing(tmp_path):
-    cfg = _cfg(tmp_path)
-    result = _get(cfg)["CS Demo Manager"]
+def test_run_checks_csda_missing(tmp_path):
+    result = _get(_cfg(tmp_path))["csda"]
     assert (result.ok, result.detail) == (False, "not found")
-    assert result.hint == "Install CS Demo Manager, or set its folder in Settings"
+    assert "Set up" in result.hint
 
 
-def test_run_checks_cs_demo_manager_found_with_a_version(tmp_path):
+def test_run_checks_csda_found(tmp_path):
     cfg = _cfg(tmp_path)
-    cfg.csdm_app_dir.mkdir(parents=True)
-    cfg.csdm_exe.write_bytes(b"")
-    result = _get(cfg, version_of=lambda path: "3.20.1")["CS Demo Manager"]
-    assert (result.ok, result.detail, result.hint) == (True, "3.20.1", "")
-
-
-def test_run_checks_cs_demo_manager_found_without_a_readable_version(tmp_path):
-    cfg = _cfg(tmp_path)
-    cfg.csdm_app_dir.mkdir(parents=True)
-    cfg.csdm_exe.write_bytes(b"")
-    result = _get(cfg, version_of=lambda path: None)["CS Demo Manager"]
-    assert (result.ok, result.detail) == (True, "found")
-
-
-def test_run_checks_postgres_running(tmp_path):
-    cfg = _cfg(tmp_path)
-    result = _get(cfg, pg_running=lambda a, b: True)["Postgres"]
-    assert (result.ok, result.detail) == (True, "running")
-
-
-def test_run_checks_postgres_not_running(tmp_path):
-    cfg = _cfg(tmp_path)
-    result = _get(cfg, pg_running=lambda a, b: False)["Postgres"]
-    assert (result.ok, result.detail) == (False, "not running")
-    assert "Settings" in result.hint
-
-
-def test_run_checks_postgres_that_raises_counts_as_not_running(tmp_path):
-    cfg = _cfg(tmp_path)
-
-    def boom(pg_bin, pg_data):
-        raise RuntimeError("pg_ctl exploded")
-
-    result = _get(cfg, pg_running=boom)["Postgres"]
-    assert (result.ok, result.detail) == (False, "not running")
+    _touch(cfg.csda_exe)
+    result = _get(cfg)["csda"]
+    assert (result.ok, result.detail, result.hint) == (True, "found", "")
 
 
 def _install_hlae(cfg: Config, changelog_xml: str) -> Path:
-    """CS:DM's own bundled HLAE (the custom location off), with a changelog.xml beside it."""
-    _write_csdm_settings(cfg.csdm_home, {"customLocationEnabled": False, "customExecutableLocation": ""})
-    exe = cfg.csdm_home / ".csdm" / "hlae" / "HLAE.exe"
-    exe.parent.mkdir(parents=True)
-    exe.write_bytes(b"")
+    """The HLAE Setup installs, with a changelog.xml beside it."""
+    exe = _touch(cfg.hlae_path)
     exe.with_name("changelog.xml").write_text(changelog_xml, encoding="utf-8")
     return exe
 
@@ -307,7 +223,7 @@ def test_run_checks_hlae_not_found(tmp_path):
     cfg = _cfg(tmp_path)
     result = _get(cfg)["HLAE"]
     assert (result.ok, result.detail) == (False, "not found")
-    assert "video settings" in result.hint
+    assert "Set up" in result.hint and "Settings" in result.hint
 
 
 def test_run_checks_hlae_is_the_latest(tmp_path):
@@ -334,10 +250,7 @@ def test_run_checks_hlae_release_check_unavailable(tmp_path):
 
 def test_run_checks_hlae_unreadable_version_skips_the_comparison(tmp_path):
     cfg = _cfg(tmp_path)
-    _write_csdm_settings(cfg.csdm_home, {"customLocationEnabled": False, "customExecutableLocation": ""})
-    exe = cfg.csdm_home / ".csdm" / "hlae" / "HLAE.exe"
-    exe.parent.mkdir(parents=True)
-    exe.write_bytes(b"")   # no changelog.xml beside it
+    _touch(cfg.hlae_path)   # no changelog.xml beside it
     result = _get(cfg, releases=_FakeReleases("2.192.6"))["HLAE"]
     assert (result.ok, result.detail) == (None, "unknown version")
 
@@ -420,60 +333,28 @@ def test_run_checks_match_alerts_off_shows_the_reason(tmp_path):
 
 def test_startup_problems_lists_each_message_in_order(tmp_path):
     cfg = _cfg(tmp_path, subject_steamid="", data_root=None)
-
-    def failing_ensure(pg_bin, pg_data, port):
-        raise RuntimeError("pg_ctl exploded")
-
-    problems = checks.startup_problems(cfg, ensure_postgres=failing_ensure)
-    assert problems == [
+    assert checks.startup_problems(cfg) == [
         "Set your SteamID in Settings",
         "Choose a clips folder in Settings",
-        f"CS Demo Manager was not found in {cfg.csdm_app_dir}",
-        f"CS Demo Manager's settings are missing from {cfg.csdm_home}",
-        "Postgres won't start: pg_ctl exploded",
+        f"csda was not found in {cfg.csda_exe.parent}",
     ]
 
 
 def test_startup_problems_a_set_but_missing_clips_folder_names_the_path_instead_of_unset(tmp_path):
-    cfg = _cfg(tmp_path, subject_steamid="76561198192858303", data_root=tmp_path / "gone")
-    problems = checks.startup_problems(cfg, ensure_postgres=lambda a, b, port: None)
+    cfg = _cfg(tmp_path, subject_steamid="76561190000000001", data_root=tmp_path / "gone")
+    problems = checks.startup_problems(cfg)
     assert f"The clips folder {cfg.data_root} is missing" in problems
     assert not any("Choose a clips folder" in p for p in problems)
 
 
-def test_startup_problems_empty_when_all_is_well(tmp_path):
+def test_startup_problems_empty_when_all_is_well_even_without_hlae(tmp_path):
+    """Without HLAE the app still downloads, analyzes and scores; each render says HLAE is missing."""
     clips = tmp_path / "clips"
     clips.mkdir()
-    cfg = _cfg(tmp_path, subject_steamid="76561198192858303", data_root=clips)
-    cfg.csdm_app_dir.mkdir(parents=True)
-    cfg.csdm_exe.write_bytes(b"")
-    (cfg.csdm_home / ".csdm").mkdir(parents=True)
-    (cfg.csdm_home / ".csdm" / "settings.json").write_text("{}", encoding="utf-8")
-    problems = checks.startup_problems(cfg, ensure_postgres=lambda pg_bin, pg_data, port: None)
-    assert problems == []
-
-
-def test_startup_problems_always_attempts_postgres_even_with_earlier_problems(tmp_path):
-    cfg = _cfg(tmp_path, subject_steamid="", data_root=None)
-    calls = []
-
-    def ensure(pg_bin, pg_data, port):
-        calls.append((pg_bin, pg_data, port))
-
-    checks.startup_problems(cfg, ensure_postgres=ensure)
-    assert calls == [(cfg.pg_bin, cfg.pg_data, 5432)]      # no CS:DM settings: Postgres's usual port
-
-
-def test_startup_problems_starts_postgres_on_the_port_cs_demo_managers_settings_name(tmp_path):
-    cfg = _cfg(tmp_path)
-    (cfg.csdm_home / ".csdm").mkdir(parents=True)
-    (cfg.csdm_home / ".csdm" / "settings.json").write_text(
-        json.dumps({"database": {"port": 5433, "password": "hunter2"}}), encoding="utf-8")
-    ports = []
-
-    checks.startup_problems(cfg, ensure_postgres=lambda pg_bin, pg_data, port: ports.append(port))
-
-    assert ports == [5433]
+    cfg = _cfg(tmp_path, subject_steamid="76561190000000001", data_root=clips)
+    _touch(cfg.csda_exe)
+    assert checks.hlae_exe(cfg) is None
+    assert checks.startup_problems(cfg) == []
 
 
 # --- hlae_behind ---------------------------------------------------------------------------------
@@ -481,10 +362,10 @@ def test_startup_problems_starts_postgres_on_the_port_cs_demo_managers_settings_
 
 def test_hlae_is_behind_only_when_both_versions_are_known_and_the_release_is_newer(tmp_path):
     cfg = _cfg(tmp_path)
-    assert checks.hlae_behind(cfg.csdm_home, "2.192.7") is False       # no HLAE at all: nothing to be behind
+    assert checks.hlae_behind(cfg, "2.192.7") is False       # no HLAE at all: nothing to be behind
 
-    _install_hlae(cfg, CHANGELOG_TWO_RELEASES)                         # 2.192.6
+    _install_hlae(cfg, CHANGELOG_TWO_RELEASES)              # 2.192.6
 
-    assert checks.hlae_behind(cfg.csdm_home, "2.192.7") is True
-    assert checks.hlae_behind(cfg.csdm_home, "2.192.6") is False
-    assert checks.hlae_behind(cfg.csdm_home, None) is False            # the release check has not answered
+    assert checks.hlae_behind(cfg, "2.192.7") is True
+    assert checks.hlae_behind(cfg, "2.192.6") is False
+    assert checks.hlae_behind(cfg, None) is False            # the release check has not answered

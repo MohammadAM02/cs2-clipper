@@ -25,7 +25,7 @@ class JoinError(Exception):
 def assign_clips(clips: Sequence[ClipFile], rounds: Sequence[tuple[int, int]]) -> dict[int, list[ClipFile]]:
     """Group Clips by selected round. `rounds` holds (round, round_start_tick) per selected
     Highlight. A Clip belongs to the latest selected round that starts at or before its middle Tick:
-    CS:DM only renders the rounds it was given, so that is always the Clip's own round — even for a
+    a Render Job only records the rounds it was given, so that is always the Clip's own round — even for a
     whole-round Sequence that begins a little before the round's start Tick."""
     ordered = sorted(rounds, key=lambda pair: pair[1])
     starts = [start for _, start in ordered]

@@ -53,12 +53,12 @@ class Round:
 class Player:
     steam_id: str
     name: str
-    slot: int       # `players.index`, which `spec_player` takes
+    slot: int       # what `spec_player` takes: csda's userId plus 1
 
 
 @dataclass(frozen=True)
 class RenderInputs:
-    """What the builders read from CS:DM's database for one Demo."""
+    """What the builders read from the analysis of one Demo's match (`analysis.render_inputs`)."""
 
     tickrate: float
     tick_count: int
@@ -95,7 +95,7 @@ class PlanError(Exception):
 @dataclass(frozen=True)
 class VideoSettings:
     """The video settings of CS:DM that change what it sends to the game. The defaults are the ones a Render
-    Job pins in CS:DM's settings file (`csdm_settings.TEMPLATE`), so leaving them out records the same."""
+    Job pinned in CS:DM's settings file when it rendered through CS:DM, so leaving them out records the same."""
 
     show_xray: bool = True
     show_assists: bool = True

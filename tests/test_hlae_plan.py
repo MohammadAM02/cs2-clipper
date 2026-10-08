@@ -1,14 +1,13 @@
 """The HLAE plan: the Sequences CS:DM would record for a request, and the console script that records them
-through HLAE instead of CS:DM's server plugin. Everything here is pure: no CS2, no HLAE, no Postgres."""
+through HLAE instead of CS:DM's server plugin. Everything here is pure: no CS2 and no HLAE."""
 import re
-from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
-from psycopg.rows import dict_row
 
-from clipper import csdm_db, csdm_settings, hlae_plan, render
+from clipper import analysis, hlae_plan, render
 from clipper.hlae_plan import Kill, NoticePlayer, Player, RenderInputs, Round, Sequence, build_sequences
+from tests import csda_json
 from tests.fixtures import SUBJECT
 
 ENEMY = "76561198000000011"
@@ -374,17 +373,13 @@ def test_output_parameters_take_the_place_of_the_crf_as_in_csdm():
                       '{QUOTE}' + RAW_1 + r'\\video.mp4{QUOTE}"')
 
 
-def test_the_video_settings_default_to_the_values_the_render_pins_in_csdm():
-    video = csdm_settings.TEMPLATE["video"]
-    ffmpeg = video["ffmpegSettings"]
+def test_the_video_settings_default_to_the_values_renders_through_csdm_pinned():
     settings = hlae_plan.VideoSettings()
     assert (settings.show_xray, settings.show_assists, settings.show_only_death_notices,
             settings.death_notices_duration, settings.player_voices_enabled, settings.record_audio,
             settings.true_view, settings.framerate, settings.video_codec, settings.constant_rate_factor,
             settings.output_parameters, settings.container) == (
-        video["showXRay"], video["showAssists"], video["showOnlyDeathNotices"], video["deathNoticesDuration"],
-        video["playerVoicesEnabled"], video["recordAudio"], video["trueView"], video["framerate"],
-        ffmpeg["videoCodec"], ffmpeg["constantRateFactor"], ffmpeg["outputParameters"], ffmpeg["videoContainer"])
+        True, True, True, 5, True, True, False, 60, "libx264", 23, "", "mp4")
 
 
 def test_a_sequences_cfg_schedules_its_steps_then_seeks_to_where_it_lands():
@@ -730,153 +725,12 @@ def test_the_runner_can_follow_the_plan_by_the_cfg_files_cs2_says_it_runs(planne
     assert sorted(number for kind, number in markers if kind == "recording") == numbers
 
 
-# What the plan reads from CS:DM's database (clipper/csdm_db.py). Nothing here connects to Postgres: a fake
-# connection answers each query with the rows of the table it reads.
-
-CHECKSUM = "aea4e59ccfc6c962"
-DEMO_ROW = {"tickrate": 64.0, "tick_count": 195_123}
-KILL_ROWS = (
-    {"round_number": 1, "tick": 10363, "killer_steam_id": SUBJECT, "victim_steam_id": ENEMY},
-    {"round_number": 2, "tick": 12000, "killer_steam_id": None, "victim_steam_id": SUBJECT},        # the world
-)
-ROUND_ROWS = (
-    {"number": 1, "end_tick": 11000, "freeze_time_end_tick": 9000},
-    {"number": 2, "end_tick": 20000, "freeze_time_end_tick": 12500},
-)
-PLAYER_ROWS = (
-    {"steam_id": SUBJECT, "name": "Subject", "slot": 3},
-    {"steam_id": ENEMY, "name": "Enemy One", "slot": 7},
-)
-FROM_ROWS = RenderInputs(
-    tickrate=64.0,
-    tick_count=195_123,
-    kills=(Kill(10363, 1, SUBJECT, ENEMY), Kill(12000, 2, "", SUBJECT)),
-    rounds=(Round(1, 11000, 9000), Round(2, 20000, 12500)),
-    players=(Player(SUBJECT, "Subject", 3), Player(ENEMY, "Enemy One", 7)),
-)
+# What the plan reads from csda's analysis of a match (clipper/analysis.py, tested in test_analysis.py)
 
 
-class FakeCursor:
-    def __init__(self, connection):
-        self.connection = connection
-        self.rows = []
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-    def execute(self, query, params=None):
-        self.connection.queries.append((query, params))
-        self.rows = list(self.connection.tables.get(re.search(r"\bFROM\s+(\w+)", query)[1], ()))
-        return self
-
-    def fetchone(self):
-        return self.rows[0] if self.rows else None
-
-    def fetchall(self):
-        return self.rows
-
-
-class FakeConnection:
-    """Stands in for a psycopg connection and keeps every query it is given."""
-
-    def __init__(self, **tables):
-        self.tables = tables
-        self.queries = []
-
-    def cursor(self, row_factory=None):
-        assert row_factory is dict_row          # the rows are read by column name
-        return FakeCursor(self)
-
-
-def csdm_conn(**tables):
-    return FakeConnection(**{"demos": [DEMO_ROW], "kills": KILL_ROWS, "rounds": ROUND_ROWS,
-                             "players": PLAYER_ROWS, **tables})
-
-
-def test_csdms_rows_become_the_inputs_of_the_plan():
-    assert csdm_db.render_inputs_from_rows(DEMO_ROW, KILL_ROWS, ROUND_ROWS, PLAYER_ROWS) == FROM_ROWS
-
-
-def test_a_kill_with_no_killer_has_an_empty_steam_id_that_matches_nobody():
-    [kill_] = csdm_db.render_inputs_from_rows(DEMO_ROW, KILL_ROWS[1:], (), ()).kills
-    assert kill_.killer_steam_id == ""
-    assert build_sequences(csdm_db.render_inputs_from_rows(DEMO_ROW, KILL_ROWS[1:], (), ()), SUBJECT,
-                           padding_before_s=2, padding_after_s=2) == []
-
-
-def test_no_demo_row_means_no_inputs():
-    assert csdm_db.render_inputs_from_rows(None, KILL_ROWS, ROUND_ROWS, PLAYER_ROWS) is None
-    assert csdm_db.render_inputs(csdm_conn(demos=[]), CHECKSUM) is None
-
-
-def test_render_inputs_reads_the_demo_its_kills_its_rounds_and_its_players():
-    conn = csdm_conn()
-    assert csdm_db.render_inputs(conn, CHECKSUM) == FROM_ROWS
-    assert [re.search(r"\bFROM\s+(\w+)", query)[1] for query, _ in conn.queries] == [
-        "demos", "kills", "rounds", "players"]
-
-
-def test_render_inputs_only_selects_and_never_puts_the_checksum_in_the_sql():
-    conn = csdm_conn()
-    csdm_db.render_inputs(conn, CHECKSUM)
-    for query, params in conn.queries:
-        assert re.match(r"\s*SELECT\b", query)
-        assert not re.search(r"\b(INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|TRUNCATE|GRANT)\b", query, re.IGNORECASE)
-        assert "%(checksum)s" in query and CHECKSUM not in query
-        assert params == {"checksum": CHECKSUM}
-
-
-def test_kills_and_rounds_are_read_in_the_order_the_builders_expect():
-    conn = csdm_conn()
-    csdm_db.render_inputs(conn, CHECKSUM)
-    queries = {re.search(r"\bFROM\s+(\w+)", query)[1]: query for query, _ in conn.queries}
-    assert re.search(r"ORDER BY\s+tick\b", queries["kills"])        # CS:DM's fetchKills
-    assert re.search(r"ORDER BY\s+number\b", queries["rounds"])     # CS:DM's fetchRounds
-
-
-def test_the_slot_a_player_is_spectated_by_is_the_index_of_its_row_as_in_csdms_slots_fetcher():
-    conn = csdm_conn()
-    csdm_db.render_inputs(conn, CHECKSUM)
-    [players] = [query for query, _ in conn.queries if re.search(r"\bFROM\s+players\b", query)]
-    assert re.search(r'\bp\."index"\s+AS\s+slot\b', players)
-    assert re.search(r"\bsteam_account_overrides\b", players)       # a name the user overrode shows as that
-
-
-def test_inputs_from_the_database_make_the_sequences_csdm_makes():
-    inputs_ = csdm_db.render_inputs(csdm_conn(), CHECKSUM)
-    [sequence] = build_sequences(inputs_, SUBJECT, padding_before_s=2, padding_after_s=2)
-    assert (sequence.number, sequence.start_tick, sequence.end_tick) == (1, 10363 - 128, 10363 + 128)
-    assert sequence.cameras == ((10363 - 128, SUBJECT),)
-    assert [notice.name for notice in sequence.notices] == ["Subject", "Enemy One"]
-    files = hlae_plan.script([sequence], inputs_, demo_path=DEMO, raw_dir=RAW)
-    assert cfg_lines(files, "cs2clipper_s1_aim") == ["spec_mode 1", "spec_player 3"]
-
-
-def test_the_facts_read_the_render_inputs_on_a_connection_of_their_own(monkeypatch):
-    opened = []
-
-    @contextmanager
-    def connect(conninfo):
-        opened.append((conninfo, csdm_conn()))
-        yield opened[-1][1]
-
-    monkeypatch.setattr(csdm_db, "connect", connect)
-    facts = csdm_db.CsdmFacts({"host": "localhost", "dbname": "csdm"})
-    assert facts.render_inputs(CHECKSUM) == FROM_ROWS
-    assert facts.render_inputs(CHECKSUM) == FROM_ROWS
-    assert [conninfo for conninfo, _ in opened] == [{"host": "localhost", "dbname": "csdm"}] * 2
-    assert opened[0][1] is not opened[1][1]
-    for _, conn in opened:
-        assert [params for _, params in conn.queries] == [{"checksum": CHECKSUM}] * 4
-
-
-def test_the_facts_have_no_inputs_for_a_demo_csdm_does_not_know(monkeypatch):
-    @contextmanager
-    def connect(conninfo):
-        yield csdm_conn(demos=[])
-
-    monkeypatch.setattr(csdm_db, "connect", connect)
-    assert csdm_db.CsdmFacts({}).render_inputs(CHECKSUM) is None
+def test_the_analysis_of_a_match_makes_the_plan_aim_at_the_subject():
+    inputs_ = analysis.render_inputs(csda_json.MATCH)
+    [first, *_] = build_sequences(inputs_, csda_json.SUBJECT, padding_before_s=2, padding_after_s=2)
+    assert first.cameras[0][1] == csda_json.SUBJECT
+    files = hlae_plan.script([first], inputs_, demo_path=DEMO, raw_dir=RAW)
+    assert cfg_lines(files, "cs2clipper_s1_aim") == ["spec_mode 1", "spec_player 4"]     # csda's userId 3, plus 1

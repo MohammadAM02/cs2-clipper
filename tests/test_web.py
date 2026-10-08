@@ -11,6 +11,7 @@ import shutil
 import socket
 import subprocess
 import urllib.request
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -354,7 +355,7 @@ def test_api_status_shape_and_values(tmp_path, index):
 
     snapshot = Snapshot(problems=(), paused_by=None, rendering=Rendering("de_mirage", "player", 1790000000.0),
                         quitting=None, pages_off=None)
-    checks = [Check("HLAE", True, "2.192.6 (latest)"), Check("Postgres", False, "not running", "start it")]
+    checks = [Check("HLAE", True, "2.192.6 (latest)"), Check("csda", False, "not installed", "run Setup")]
     app = app_for(tmp_path, snapshot=lambda: snapshot, warnings=lambda: ("settings.json: top_n bad",),
                  checks=lambda: checks)
     data = pc_get(app.test_client(), "/api/status").get_json()
@@ -366,7 +367,7 @@ def test_api_status_shape_and_values(tmp_path, index):
     assert data["warnings"] == ["settings.json: top_n bad"]
     assert data["checks"] == [
         {"name": "HLAE", "ok": True, "detail": "2.192.6 (latest)", "hint": ""},
-        {"name": "Postgres", "ok": False, "detail": "not running", "hint": "start it"},
+        {"name": "csda", "ok": False, "detail": "not installed", "hint": "run Setup"},
     ]
     demo = next(d for d in data["demos"] if d["id"] == demo_id)
     assert demo == {
@@ -425,9 +426,9 @@ def test_api_summary_says_idle_paused_and_the_start_up_problems(tmp_path):
     assert summary_of(Snapshot()) == {"summary": "Idle", "rendering": False, "paused_by": None, "problems": []}
     assert summary_of(Snapshot(paused_by="you")) == {"summary": "Paused by you", "rendering": False,
                                                      "paused_by": "you", "problems": []}
-    assert summary_of(Snapshot(problems=("HLAE is missing", "Postgres is off"))) == {
+    assert summary_of(Snapshot(problems=("HLAE is missing", "csda is missing"))) == {
         "summary": "HLAE is missing (+1 more)", "rendering": False, "paused_by": None,
-        "problems": ["HLAE is missing", "Postgres is off"]}
+        "problems": ["HLAE is missing", "csda is missing"]}
 
 
 def test_api_summary_refuses_a_phone(client):
@@ -543,7 +544,7 @@ def test_resume_refuses_a_phone_and_needs_the_marker(client):
 # --- Set up: what a fresh PC lacks, and the button that installs it ---------------------------------
 
 SETUP_STATUS = {"running": False, "needed": True, "download_bytes": 300_000_000, "progress": None, "error": None,
-                "steps": [{"id": "csdm", "name": "CS Demo Manager", "state": "needed"}]}
+                "steps": [{"id": "csda", "name": "csda", "state": "needed"}]}
 RENDERING = "A Reel is rendering. Set up once it is done."
 
 
@@ -671,16 +672,16 @@ REEL_MATCH = MatchInfo(checksum="c0ffee00c0ffee00", map_name="de_mirage",
                        team_score=13, opponent_score=5)
 
 
-def _reels_index(index) -> int:
-    """A done Demo for REEL_MATCH with one selected Highlight (round 8, 4K). Returns its highlight id;
+def _reels_index(index, match: MatchInfo = REEL_MATCH) -> int:
+    """A done Demo for `match` with one selected Highlight (round 8, 4K). Returns its highlight id;
     the caller adds the Reel(s) it needs."""
-    index.save_match(REEL_MATCH)
+    index.save_match(match)
     demo_id = _add_demo(index, name="1-reel.dem.zst", sha="b" * 64)
-    index.advance(demo_id, "done", match_checksum=REEL_MATCH.checksum)
+    index.advance(demo_id, "done", match_checksum=match.checksum)
     hl = Highlight(round=8, type="4K", score=40, reasons=("4k",), frag_ticks=(100,),
                    round_start_tick=0, round_end_tick=5000)
-    index.save_highlights(REEL_MATCH.checksum, [hl], {8})
-    return index.selected_highlights(REEL_MATCH.checksum)[0]["id"]
+    index.save_highlights(match.checksum, [hl], {8})
+    return index.selected_highlights(match.checksum)[0]["id"]
 
 
 def test_reels_page_is_served(client):
@@ -949,8 +950,23 @@ def test_open_folder_404_when_the_match_has_no_reels(tmp_path):
     assert response.status_code == 404
 
 
-def test_open_folder_404_for_a_malformed_checksum(tmp_path):
-    response = pc_post(app_for(tmp_path).test_client(), "/api/reels/not-hex/open-folder", headers=MARKED)
+def test_open_folder_takes_a_checksum_without_its_leading_zeros(tmp_path, index):
+    # csda writes a match's checksum as hex without its leading zeros: some are shorter than 16 digits.
+    match = replace(REEL_MATCH, checksum="ffee00c0ffee00")
+    highlight_id = _reels_index(index, match)
+    index.save_reel(highlight_id, "player", tmp_path / "videos" / "clip.mp4", 1.0)
+    calls = []
+    app = app_for(tmp_path, open_folder=lambda folder: calls.append(folder))
+
+    response = pc_post(app.test_client(), f"/api/reels/{match.checksum}/open-folder", headers=MARKED)
+
+    assert response.status_code == 204
+    assert calls == [tmp_path / "videos"]
+
+
+@pytest.mark.parametrize("checksum", ["not-hex", "a" * 17, "AEA4E59CCFC6C962"])
+def test_open_folder_404_for_a_malformed_checksum(tmp_path, checksum):
+    response = pc_post(app_for(tmp_path).test_client(), f"/api/reels/{checksum}/open-folder", headers=MARKED)
     assert response.status_code == 404
 
 

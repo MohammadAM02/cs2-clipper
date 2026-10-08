@@ -36,6 +36,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import sys
 import threading
 import time
@@ -45,12 +46,11 @@ from functools import partial
 from pathlib import Path
 
 from clipper import (
-    applog, checks, cs2_paths, csdm_db, csdm_settings, faceit_oauth, hlae_render, move_in, packaged, paths, protect,
-    provision, settings, tray, web,
+    analysis, applog, checks, cs2_paths, faceit_oauth, hlae_render, move_in, packaged, paths, protect, provision,
+    settings, tray, web,
 )
 from clipper.alerts import MatchAlerts
 from clipper.config import Config
-from clipper.csdm_cli import CsdmCli
 from clipper.faceit import FaceitClient, FaceitError
 from clipper.faceit_oauth import OAuthError
 from clipper.gate import Gate
@@ -61,7 +61,6 @@ from clipper.lock import AlreadyRunning, single_instance
 from clipper.media import probe_duration
 from clipper.notify import notify
 from clipper.procs import ProcessProbe, SystemProbe
-from clipper.render import render
 from clipper.settings import SettingsStore
 from clipper.state import AppState
 from clipper.unpack import unpack
@@ -142,31 +141,31 @@ def start_match_alerts(cfg: Config, index: Index, probe: SystemProbe, *,
                        stopped_playing_minutes=cfg.stopped_playing_minutes)
 
 
+def _program(name: str) -> Path | None:
+    """Where `name`, a program on PATH or a full path to one, is; None: nowhere."""
+    found = shutil.which(name)
+    return Path(found) if found else None
+
+
 def build_worker(cfg: Config, index: Index, *, state: AppState, stop: StopRequest, deletes: DeleteRequest,
                  page_url: str | None, pages_off: str | None) -> Worker:
     probe = SystemProbe()
     gate = Gate(probe, cfg.data_root, cfg.min_free_gb)
-    csdm = CsdmCli(prefix=(str(cfg.csdm_exe), str(cfg.csdm_cli_js)), home=cfg.csdm_home, pg_bin=cfg.pg_bin)
-    facts = csdm_db.CsdmFacts(cfg.database_conninfo())
+    analyses = analysis.Analyses(cfg.analyses_dir, cfg.csda_exe)
     duration_of = partial(probe_duration, ffprobe=cfg.ffprobe)
 
-    def render_job(request, should_abort):
-        if cfg.renderer == "hlae":     # CS2, HLAE and CS:DM's FFmpeg are looked for per job: they may have moved
-            return hlae_render.render(
-                request, probe=probe, should_abort=should_abort, stall_seconds=cfg.stall_seconds,
-                launch_timeout_seconds=cfg.launch_timeout_seconds, duration_of=duration_of,
-                load_inputs=facts.render_inputs, cs2_exe=cs2_paths.find_cs2_exe(cfg.csdm_home),
-                hlae_exe=checks.hlae_exe(cfg.csdm_home), hlae_ffmpeg=csdm_settings.ffmpeg_exe(cfg.csdm_home),
-                ffmpeg=cfg.ffmpeg)
-        return render(request, csdm=csdm, probe=probe, should_abort=should_abort,
-                      stall_seconds=cfg.stall_seconds, launch_timeout_seconds=cfg.launch_timeout_seconds,
-                      duration_of=duration_of)
+    def render_job(request, should_abort):     # CS2, HLAE and FFmpeg are looked for per job: they may have moved
+        return hlae_render.render(
+            request, probe=probe, should_abort=should_abort, stall_seconds=cfg.stall_seconds,
+            launch_timeout_seconds=cfg.launch_timeout_seconds, duration_of=duration_of,
+            load_inputs=analyses.render_inputs, cs2_exe=cs2_paths.find_cs2_exe(), hlae_exe=checks.hlae_exe(cfg),
+            hlae_ffmpeg=_program(cfg.ffmpeg), ffmpeg=cfg.ffmpeg)
 
     services = Services(
         intake=Intake(cfg.downloads_dir, cfg.demos_dir),
         unpack=unpack,
-        analyze=csdm.analyze,
-        facts=facts,
+        analyze=analyses.analyze,
+        facts=analyses,
         gate=gate,
         render=render_job,
         join=partial(join_reel, ffmpeg=cfg.ffmpeg, duration_of=duration_of, stretch=cfg.stretch),
@@ -187,7 +186,7 @@ def gate_reasons(cfg: Config, probe: ProcessProbe) -> tuple[str, ...]:
 class App:
     """One running copy: its settings, what it is doing (`state`), the web server, the window, the
     worker thread and Setup. `problems`, `build`, `launcher` (given the web server's base URL) and
-    `setup` are swappable so tests never touch real csdm/CS2/Postgres, open a window or install anything."""
+    `setup` are swappable so tests never touch real csda/HLAE/CS2, open a window or install anything."""
 
     def __init__(self, settings: SettingsStore, *, index_path: Path, state: AppState | None = None,
                  stop: StopRequest | None = None,
@@ -429,13 +428,13 @@ class App:
         return not self._worker_thread.is_alive()
 
     def step(self, index: Index) -> float:
-        """One pass: start-up problems first (cheap, checked every pass; the expensive parts -- e.g.
-        Postgres -- only every `recheck_seconds`), then a rebuild when settings changed, then a tick.
+        """One pass: start-up problems first (checked again every `recheck_seconds`, and as soon as the
+        settings change or a Setup ends), then a rebuild when settings changed, then a tick.
         A rebuild that fails is logged and published as a problem, and tried again at the next recheck
         (which replaces the problem with the real start-up problems); a tick that raises is logged and
         the next pass still runs. Anything else it raises is `run_worker`'s to catch."""
         cfg = self.settings.current().config
-        if self.setup.running:      # it stops and starts Postgres and replaces what a tick would run
+        if self.setup.running:      # it replaces the tools a tick would run
             return cfg.poll_seconds
         now = self._clock()
         setups = self._setups_ended
@@ -496,7 +495,7 @@ class App:
 
     def checks(self) -> list[checks.Check]:
         """`checks.run_checks`, cached for `CHECKS_CACHE_SECONDS` -- the Status page polls every 2 s,
-        and some checks (a `pg_ctl status`, file-version reads) are not free. Never calls
+        and some checks (HLAE's changelog, a drive's free space) are not free. Never calls
         `self.releases.refresh_if_due` itself: that thread is the release check's only writer."""
         now = self._clock()
         setups = self._setups_ended

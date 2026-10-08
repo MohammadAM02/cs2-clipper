@@ -29,9 +29,9 @@ def frozen() -> bool:
 
 def release_dll_directory() -> None:
     """In the exe, takes its unpacked bundle back off the DLL search path. PyInstaller's bootloader puts
-    it there (SetDllDirectoryW) and every process the app starts inherits it, so csdm, HLAE, CS2,
-    Postgres and ffmpeg would load the bundle's copies of DLLs such as vcruntime140.dll before their
-    own. The window process keeps it: pywebview loads .NET and WebView2 from the bundle."""
+    it there (SetDllDirectoryW) and every process the app starts inherits it, so csda, HLAE, CS2 and
+    ffmpeg would load the bundle's copies of DLLs such as vcruntime140.dll before their own. The window
+    process keeps it: pywebview loads .NET and WebView2 from the bundle."""
     if frozen():
         ctypes.windll.kernel32.SetDllDirectoryW(None)
 
@@ -72,15 +72,6 @@ def _tray_icon() -> None:
     from clipper.icon import mark
 
     mark(64).save(io.BytesIO(), format="ICO")
-
-
-def _database() -> None:
-    """CS Demo Manager's Postgres: psycopg must use the libpq it brings along, as the PC may have none."""
-    import psycopg
-
-    if psycopg.pq.__impl__ != "binary":
-        raise RuntimeError(f"psycopg runs on its {psycopg.pq.__impl__} build, not binary")
-    psycopg.pq.version()
 
 
 def _demos() -> None:
@@ -133,7 +124,6 @@ MAIN_CHECKS: tuple[Check, ...] = (
     ("DLL search path", _dll_search_path),
     ("tray", _tray),
     ("tray icon", _tray_icon),
-    ("CS Demo Manager's database", _database),
     ("Demo unpacking", _demos),
     ("HTTPS", _https),
     ("pages", _pages),

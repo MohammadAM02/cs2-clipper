@@ -29,7 +29,7 @@ def bundle_on_dll_path(tmp_path):
 
 
 def test_the_exe_takes_its_bundle_off_the_dll_search_path(bundle_on_dll_path, monkeypatch):
-    # Else csdm, HLAE, CS2, Postgres and ffmpeg would load the bundle's DLLs before their own.
+    # Else csda, HLAE, CS2 and ffmpeg would load the bundle's DLLs before their own.
     monkeypatch.setattr(sys, "frozen", True, raising=False)
 
     packaged.release_dll_directory()

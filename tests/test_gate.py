@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from clipper.gate import CS2_REASON, FACEIT_REASON, GB, GUI_REASON, Gate, GateStatus
+from clipper.gate import CS2_REASON, FACEIT_REASON, GB, Gate, GateStatus
 from clipper.procs import SystemProbe
 
 
@@ -51,8 +51,8 @@ def test_a_faceit_client_process_blocks():
     assert gate(["FACEIT.exe"]).check().reasons == (FACEIT_REASON,)
 
 
-def test_the_csdm_gui_blocks():
-    assert gate(["cs-demo-manager.exe"]).check().reasons == (GUI_REASON,)
+def test_cs_demo_manager_being_open_does_not_block():
+    assert gate(["cs-demo-manager.exe"]).check() == GateStatus(ok=True)
 
 
 def test_low_disk_space_blocks():
@@ -70,8 +70,8 @@ def test_a_missing_drive_blocks():
 
 
 def test_every_reason_is_reported_in_order():
-    status = gate(["cs2.exe", "cs-demo-manager.exe"], ["FACEITService"]).check()
-    assert status.reasons == (CS2_REASON, FACEIT_REASON, GUI_REASON)
+    status = gate(["cs2.exe"], ["FACEITService"], free=4 * GB).check()
+    assert status.reasons == (CS2_REASON, FACEIT_REASON, "less than 5 GB free on E:\\")
 
 
 def test_faceit_running_on_its_own():

@@ -147,21 +147,21 @@ def test_extract_unpacks_an_archive_as_it_is(tmp_path):
 
 
 def test_extract_can_drop_the_archives_one_top_folder(tmp_path):
-    archive = make_zip(tmp_path / "pg.zip", {"postgresql-17/": b"", "postgresql-17/bin/pg_ctl.exe": b"ctl",
-                                             "postgresql-17/LICENSE": b"licence"})
+    archive = make_zip(tmp_path / "ffmpeg.zip", {"ffmpeg-7.1/": b"", "ffmpeg-7.1/bin/ffmpeg.exe": b"exe",
+                                                 "ffmpeg-7.1/LICENSE": b"licence"})
 
-    download.extract(archive, tmp_path / "pgsql", strip_top=True)
+    download.extract(archive, tmp_path / "ffmpeg", strip_top=True)
 
-    assert tree(tmp_path / "pgsql") == {"bin/pg_ctl.exe": b"ctl", "LICENSE": b"licence"}
+    assert tree(tmp_path / "ffmpeg") == {"bin/ffmpeg.exe": b"exe", "LICENSE": b"licence"}
 
 
 def test_extract_refuses_to_drop_a_top_folder_that_is_not_the_only_one(tmp_path):
-    archive = make_zip(tmp_path / "pg.zip", {"one/a.txt": b"a", "two/b.txt": b"b"})
+    archive = make_zip(tmp_path / "ffmpeg.zip", {"one/a.txt": b"a", "two/b.txt": b"b"})
 
-    with pytest.raises(DownloadError, match="pg.zip is not laid out as expected"):
-        download.extract(archive, tmp_path / "pgsql", strip_top=True)
+    with pytest.raises(DownloadError, match="ffmpeg.zip is not laid out as expected"):
+        download.extract(archive, tmp_path / "ffmpeg", strip_top=True)
 
-    assert leftovers(tmp_path) == ["pg.zip"]
+    assert leftovers(tmp_path) == ["ffmpeg.zip"]
 
 
 def test_extract_leaves_out_what_is_not_wanted(tmp_path):

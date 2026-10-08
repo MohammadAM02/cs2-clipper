@@ -233,7 +233,6 @@ class World:
             "cfgs": self.cfgs(),
             "ini": self.ini(),
             "raw_dir": self.raw_dir.exists(),
-            "json": self.req.demo_path.with_name(self.req.demo_path.name + ".json").exists(),
             "cs2": self.cs2,
         }
 
@@ -367,19 +366,15 @@ def test_the_cfg_files_and_the_ffmpeg_ini_are_in_place_when_hlae_is_started(worl
     assert world.cfgs() == []
 
 
-def test_a_leftover_raw_folder_and_actions_file_are_removed_before_the_launch(world, req):
+def test_a_leftover_raw_folder_is_removed_before_the_launch(world, req):
     world.raw_dir.mkdir(parents=True)
     (world.raw_dir / "1-sequence").mkdir()
     (world.raw_dir / "1-sequence" / "video.mp4").write_bytes(b"from an earlier attempt")
-    actions = req.demo_path.with_name("match.dem.json")
-    actions.parent.mkdir(parents=True)
-    actions.write_text("{}", encoding="utf-8")
     world.scripts = [game()]
     result = run(world, req)
     assert result.ok
     [seen] = world.at_launch
-    assert seen["raw_dir"] is False and seen["json"] is False
-    assert not actions.exists()
+    assert seen["raw_dir"] is False
 
 
 def test_a_hooked_cs2_left_over_is_closed_before_the_launch(world, req):
@@ -415,11 +410,15 @@ def test_the_run_is_kept_awake_from_before_the_launch_until_after_the_mux(world,
 
 def test_without_cs2_nothing_is_started(world, req):
     result = run(world, req, cs2_exe=None)
-    assert_not_started(world, result, "CS2 not found: no cs2.exe in CS:DM's custom location or any Steam library")
+    assert_not_started(world, result, "CS2 not found: no cs2.exe in any Steam library")
 
 
 def test_without_hlae_nothing_is_started(world, req):
     assert_not_started(world, run(world, req, hlae_exe=None), "HLAE not found")
+
+
+def test_without_ffmpeg_for_hlae_nothing_is_started(world, req):
+    assert_not_started(world, run(world, req, hlae_ffmpeg=None), "FFmpeg not found")
 
 
 def test_without_steam_nothing_is_started(world, req):
@@ -428,10 +427,10 @@ def test_without_steam_nothing_is_started(world, req):
     assert world.asked_for == []
 
 
-def test_a_demo_csdm_has_not_analysed_is_not_rendered(world, req):
+def test_a_demo_the_app_has_no_analysis_of_is_not_rendered(world, req):
     world.inputs = None
     result = run(world, req)
-    assert_not_started(world, result, "CS:DM's database has no analysis of this Demo")
+    assert_not_started(world, result, "the app has no analysis of this Demo")
     assert world.asked_for == [MATCH_CHECKSUM]
 
 
@@ -457,10 +456,11 @@ def test_the_preconditions_are_checked_in_this_order(world, req):
     world.steam = False
     world.inputs = None
     assert run(world, req, cs2_exe=None, hlae_exe=None).failure.startswith("CS2 not found")
-    assert run(world, req, hlae_exe=None).failure == "HLAE not found"
+    assert run(world, req, hlae_exe=None, hlae_ffmpeg=None).failure == "HLAE not found"
+    assert run(world, req, hlae_ffmpeg=None).failure == "FFmpeg not found"
     assert run(world, req).failure == "Steam is not running"
     world.steam = True
-    assert run(world, req).failure == "CS:DM's database has no analysis of this Demo"
+    assert run(world, req).failure == "the app has no analysis of this Demo"
 
 
 @pytest.mark.parametrize("blocked", ["ini", "cfg"])

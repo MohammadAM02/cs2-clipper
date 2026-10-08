@@ -16,7 +16,7 @@ from clipper.alerts import map_label
 
 @dataclass(frozen=True)
 class Rendering:
-    map_name: str          # CS:DM's map name, e.g. "de_mirage"
+    map_name: str          # the analysis's map name, e.g. "de_mirage"
     perspective: str       # "player" | "enemy"
     started_at: float      # time.time() when the Render Job started
 

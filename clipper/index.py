@@ -1,5 +1,5 @@
 """Our SQLite index — the only code that writes it (spec: Index). The Clip library will read what
-this stores; CS:DM's own database is never written."""
+this stores."""
 
 from __future__ import annotations
 

@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Protocol
 
 from clipper.config import Config
-from clipper.gate import GUI_REASON, GateStatus
+from clipper.gate import GateStatus
 from clipper.index import Index
 from clipper.join import JoinError, assign_clips
 from clipper.model import MatchInfo, RoundFacts
@@ -48,7 +48,7 @@ class IntakeLike(Protocol):
 
 
 class FactsSource(Protocol):
-    def find_checksum(self, demo_name: str) -> str | None: ...
+    def has(self, checksum: str) -> bool: ...
     def match_info(self, checksum: str, steamid: str) -> MatchInfo | None: ...
     def round_facts(self, checksum: str, steamid: str) -> list[RoundFacts]: ...
 
@@ -154,7 +154,7 @@ class Services:
 
     intake: IntakeLike
     unpack: Callable[[Path, Path], Path]
-    analyze: Callable[[Path, Path], str]
+    analyze: Callable[[Path, Path], str]          # (the .dem, its log) -> the match checksum
     facts: FactsSource
     gate: GateLike
     render: Callable[[RenderRequest, Callable[[], bool]], RenderResult]
@@ -174,9 +174,9 @@ def _fresh_dir(path: Path) -> Path:
 
 
 def delete_demo(index: Index, cfg: Config, demo_id: int) -> bool:
-    """Forget a Demo that is not in Reels yet, with its download, its unpacked .dem and its renders;
-    its logs stay. False when there is no such Demo; ValueError when it is already in Reels. A file
-    that cannot go is logged and left."""
+    """Forget a Demo that is not in Reels yet, with its download, its unpacked .dem, its renders and
+    its match's analysis; its logs stay. False when there is no such Demo; ValueError when it is
+    already in Reels. A file that cannot go is logged and left."""
     demo = index.delete_demo(demo_id)
     if demo is None:
         return False
@@ -191,6 +191,11 @@ def delete_demo(index: Index, cfg: Config, demo_id: int) -> bool:
         shutil.rmtree(renders, ignore_errors=True)
         if renders.exists():
             log.warning("demo #%s: could not remove all of %s", demo_id, renders)
+        analysis = cfg.analyses_dir / f"{checksum}.json"
+        try:
+            analysis.unlink(missing_ok=True)
+        except OSError as exc:
+            log.warning("demo #%s: could not remove %s: %s", demo_id, analysis, exc)
     log.info("demo #%s deleted: %s", demo_id, demo["file_name"])
     return True
 
@@ -205,7 +210,6 @@ class Worker:
         self.state = state if state is not None else AppState()
         self.stop = stop if stop is not None else StopRequest()
         self.deletes = deletes if deletes is not None else DeleteRequest()
-        self._told_about_gui = False
         self._waiting_reasons: tuple[str, ...] = ()
 
     # --- the loop --------------------------------------------------------------------------------
@@ -299,19 +303,26 @@ class Worker:
         self.index.advance(demo["id"], "unpacked", dem_path=dem)
 
     def _analyze(self, demo) -> None:
-        dem = Path(demo["dem_path"])
-        self.services.analyze(dem, self._log_path(demo, "analyze"))
-        checksum = self.services.facts.find_checksum(dem.stem)
-        if checksum is None:
-            raise RuntimeError("csdm analyze did not put the match in CS:DM's database")
+        checksum = self.services.analyze(Path(demo["dem_path"]), self._log_path(demo, "analyze"))
         info = self.services.facts.match_info(checksum, self.cfg.subject_steamid)
         if info is None:
             raise Skip("the subject's SteamID is not in this match")
         self.index.save_match(info)
         self.index.advance(demo["id"], "analyzed", match_checksum=checksum)
 
+    def _ensure_analysis(self, demo) -> None:
+        """Analyze the Demo again when the app has no analysis of its match: CS Demo Manager kept the
+        analyses of Demos analyzed before the app kept its own."""
+        checksum = demo["match_checksum"]
+        if self.services.facts.has(checksum):
+            return
+        again = self.services.analyze(Path(demo["dem_path"]), self._log_path(demo, "analyze"))
+        if again != checksum:
+            raise GiveUp(f"analyzing the Demo again gave match {again}, not {checksum}")
+
     def _score(self, demo) -> None:
-        facts = self.services.facts.round_facts(demo["match_checksum"], self.cfg.subject_steamid)
+        self._ensure_analysis(demo)
+        facts =self.services.facts.round_facts(demo["match_checksum"], self.cfg.subject_steamid)
         highlights = score_match(facts)
         chosen = select(highlights, self.cfg.top_n)
         self.index.save_highlights(demo["match_checksum"], highlights, {h.round for h in chosen})
@@ -359,6 +370,7 @@ class Worker:
             return
         if not self._gate_is_clear():
             return
+        self._ensure_analysis(demo)
         highlights = self.index.selected_highlights(demo["match_checksum"])
         match = self.index.match(demo["match_checksum"])
         self.services.notify(
@@ -429,10 +441,6 @@ class Worker:
 
     def _gate_is_clear(self) -> bool:
         status = self.services.gate.check()
-        gui_open = GUI_REASON in status.reasons
-        if gui_open and not self._told_about_gui:
-            self.services.notify("Close CS Demo Manager", "Rendering is waiting for CS Demo Manager to close.")
-        self._told_about_gui = gui_open
         if not status.ok:
             self._waiting_reasons = status.reasons
         return status.ok

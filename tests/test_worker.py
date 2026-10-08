@@ -1,5 +1,4 @@
 import logging
-import sys
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -7,17 +6,14 @@ from pathlib import Path
 import pytest
 
 from clipper.config import Config
-from clipper.csdm_cli import CsdmCli
-from clipper.gate import GUI_REASON, GateStatus
+from clipper.gate import GateStatus
 from clipper.index import Index
 from clipper.model import ClipFile, MatchInfo
-from clipper.render import ABORTED, RenderResult, render as run_render
+from clipper.render import ABORTED, RenderResult
 from clipper.state import AppState
 from clipper.worker import QUIT_ABORT, DeleteRequest, Services, StopRequest, Worker, delete_demo
-from tests.fakes import FakeProbe
 from tests.fixtures import DEMO_NAME, MATCH_CHECKSUM, MATCH_FACTS
 
-FAKE_CSDM = Path(__file__).with_name("fake_csdm.py")
 ROUND_START = {facts.round: facts.round_start_tick for facts in MATCH_FACTS}
 SECOND_DEMO = "1-00000000-0000-4000-8000-000000000002-1-1"
 SECOND_CHECKSUM = "00000000000000b2"
@@ -35,13 +31,23 @@ class FakeIntake:
 
 
 class FakeFacts:
+    """The analyses: `analyze` stands in for csda, which keeps an analysis of the Demo's match."""
+
     def __init__(self):
         self.info = MATCH
         self.facts = MATCH_FACTS
         self.checksums = {SECOND_DEMO: SECOND_CHECKSUM}
+        self.kept: set[str] = set()
+        self.analyzed: list[str] = []
 
-    def find_checksum(self, demo_name):
-        return self.checksums.get(demo_name, MATCH_CHECKSUM)
+    def analyze(self, dem, log_path):
+        self.analyzed.append(dem.name)
+        checksum = self.checksums.get(dem.stem, MATCH_CHECKSUM)
+        self.kept.add(checksum)
+        return checksum
+
+    def has(self, checksum):
+        return checksum in self.kept
 
     def match_info(self, checksum, steamid):
         return None if self.info is None else replace(self.info, checksum=checksum)
@@ -109,14 +115,14 @@ class World:
 @pytest.fixture
 def world(tmp_path):
     cfg = Config(downloads_dir=tmp_path / "downloads", data_root=tmp_path / "clips",
-                 index_path=tmp_path / "clipper.sqlite")
+                 index_path=tmp_path / "clipper.sqlite", analyses_dir=tmp_path / "analyses")
     index = Index(cfg.index_path)
     facts, gate, render, notices = FakeFacts(), FakeGate(), FakeRender(), []
     state, stop, deletes = AppState(), StopRequest(), DeleteRequest()
     services = Services(
         intake=FakeIntake(),
         unpack=lambda archive, out_dir: out_dir / archive.name.removesuffix(".zst"),
-        analyze=lambda dem, log_path: "ok",
+        analyze=facts.analyze,
         facts=facts,
         gate=gate,
         render=render,
@@ -152,7 +158,7 @@ def test_one_demo_renders_both_views_before_the_next_demo_starts(world):
     assert world.index.demo(first)["state"] == world.index.demo(second)["state"] == "done"
 
 
-def test_each_render_is_given_the_checksum_csdm_gave_its_demo(world):
+def test_each_render_is_given_the_checksum_the_analysis_gave_its_demo(world):
     world.add_demo()
     world.add_demo(SECOND_DEMO, "1" * 64)
     world.ticks(12)
@@ -171,6 +177,43 @@ def test_the_next_demo_waits_while_the_first_retries_a_failed_view(world):
         (f"{DEMO_NAME}.dem", "player"), (f"{DEMO_NAME}.dem", "player"), (f"{DEMO_NAME}.dem", "enemy"),
         (f"{SECOND_DEMO}.dem", "player"), (f"{SECOND_DEMO}.dem", "enemy"),
     ]
+
+
+def test_each_demo_is_analyzed_once(world):
+    world.add_demo()
+    world.ticks(8)
+    assert world.facts.analyzed == [f"{DEMO_NAME}.dem"]
+
+
+def test_a_demo_with_no_analysis_kept_is_analyzed_again_before_it_is_scored(world):
+    """Demos analyzed before the app kept its own analyses had theirs in CS Demo Manager."""
+    demo_id = world.add_demo()
+    world.ticks(2)                                  # analyzed
+    world.facts.kept.clear()
+    world.ticks(1)
+    assert world.index.demo(demo_id)["state"] == "scored"
+    assert world.facts.analyzed == [f"{DEMO_NAME}.dem"] * 2
+
+
+def test_a_demo_with_no_analysis_kept_is_analyzed_again_before_it_is_rendered(world):
+    demo_id = world.add_demo()
+    world.ticks(4)                                  # rendering, nothing rendered yet
+    world.facts.kept.clear()
+    world.ticks(1)
+    assert world.facts.analyzed == [f"{DEMO_NAME}.dem"] * 2
+    assert [call.perspective for call in world.render.calls] == ["player"]
+    assert world.index.demo(demo_id)["state"] == "rendering"
+
+
+def test_a_demo_whose_analysis_now_gives_another_match_fails(world):
+    demo_id = world.add_demo()
+    world.ticks(2)
+    world.facts.kept.clear()
+    world.facts.checksums[DEMO_NAME] = "00000000000000c3"
+    world.ticks(1)
+    demo = world.index.demo(demo_id)
+    assert demo["state"] == "failed"
+    assert demo["last_error"] == f"analyzing the Demo again gave match 00000000000000c3, not {MATCH_CHECKSUM}"
 
 
 def test_a_match_without_the_subject_is_skipped(world):
@@ -193,20 +236,13 @@ def test_renders_wait_for_the_gate(world):
     assert world.index.demo(demo_id)["state"] == "done"
 
 
-def test_the_csdm_gui_notice_is_sent_once(world):
-    world.gate.reasons = (GUI_REASON,)
-    world.add_demo()
-    world.ticks(8)
-    assert world.titles().count("Close CS Demo Manager") == 1
-
-
 def test_three_failed_renders_fail_the_demo_and_pause_rendering(world):
-    world.render.results = [RenderResult(ok=False, failure="csdm reported: Game error")] * 3
+    world.render.results = [RenderResult(ok=False, failure="CS2 closed before the render finished")] * 3
     demo_id = world.add_demo()
     world.ticks(8)
     demo = world.index.demo(demo_id)
     assert demo["state"] == "failed"
-    assert demo["last_error"] == "player render failed 3 times: csdm reported: Game error"
+    assert demo["last_error"] == "player render failed 3 times: CS2 closed before the render finished"
     assert world.index.get_flag("paused") == "1"
     assert world.index.paused_by() == "failures"
     assert "Rendering paused" in world.titles()
@@ -214,14 +250,14 @@ def test_three_failed_renders_fail_the_demo_and_pause_rendering(world):
 
 def test_every_failed_render_attempt_gets_its_own_log_line(world, caplog):
     world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran"),
-                            RenderResult(ok=False, failure="csdm reported: Game error")]
+                            RenderResult(ok=False, failure="HLAE error: HLAE.exe exited with code 1")]
     demo_id = world.add_demo()
     with caplog.at_level(logging.WARNING, logger="clipper.worker"):
         world.ticks(6)
     assert [r.getMessage() for r in caplog.records if r.name == "clipper.worker"] == [
         f"demo #{demo_id} (de_inferno): player render attempt 1 of 3 failed: "
         "stalled: no ffmpeg for 180s while CS2 ran",
-        f"demo #{demo_id} (de_inferno): player render attempt 2 of 3 failed: csdm reported: Game error",
+        f"demo #{demo_id} (de_inferno): player render attempt 2 of 3 failed: HLAE error: HLAE.exe exited with code 1",
     ]
 
 
@@ -303,28 +339,30 @@ def _write(path: Path) -> Path:
     return path
 
 
-def test_deleting_a_demo_takes_its_download_its_dem_and_its_renders_but_not_its_logs(world, tmp_path):
+def test_deleting_a_demo_takes_its_download_its_dem_its_renders_and_analysis_but_not_its_logs(world, tmp_path):
     demo_id = world.add_demo()
     world.ticks(3)                                  # unpacked and analyzed: it has a .dem and a match
     cfg = replace(world.cfg, logs_dir=tmp_path / "logs")
     files = [_write(cfg.demos_dir / f"{DEMO_NAME}.dem.zst"), _write(cfg.demos_dir / f"{DEMO_NAME}.dem"),
-             _write(cfg.renders_dir / MATCH_CHECKSUM / "player" / "attempt-1" / "sequence-1.mp4")]
+             _write(cfg.renders_dir / MATCH_CHECKSUM / "player" / "attempt-1" / "sequence-1.mp4"),
+             _write(cfg.analyses_dir / f"{MATCH_CHECKSUM}.json")]
     log_file = _write(cfg.logs_dir / f"demo-{demo_id}-analyze.log")
     assert delete_demo(world.index, cfg, demo_id) is True
     assert world.index.demo(demo_id) is None
-    assert [path.exists() for path in files] == [False, False, False]
+    assert [path.exists() for path in files] == [False, False, False, False]
     assert not (cfg.renders_dir / MATCH_CHECKSUM).exists()
     assert log_file.exists()
     assert delete_demo(world.index, cfg, demo_id) is False      # nothing left to delete
 
 
-def test_deleting_a_demo_leaves_the_renders_another_demo_of_its_match_has(world):
+def test_deleting_a_demo_leaves_the_renders_and_analysis_another_demo_of_its_match_has(world):
     first = world.add_demo()
     world.add_demo("1-00000000-0000-4000-8000-000000000003-1-1", "3" * 64)   # the same match, another file
     world.ticks(3)
     clip = _write(world.cfg.renders_dir / MATCH_CHECKSUM / "player" / "attempt-1" / "sequence-1.mp4")
+    analysis = _write(world.cfg.analyses_dir / f"{MATCH_CHECKSUM}.json")
     assert delete_demo(world.index, world.cfg, first) is True
-    assert clip.exists()
+    assert clip.exists() and analysis.exists()
 
 
 def test_deleting_the_demo_being_rendered_aborts_its_render_then_deletes_it(world):
@@ -523,38 +561,17 @@ def test_quit_after_render_finishes_it_then_takes_no_further_step(world):
     assert alerts.ticks == 4
 
 
-class _QuitsOnFirstAsk(FakeProbe):
-    """Like FakeProbe, with its hooked CS2 already running, but the first hooked_cs2_running() check
-    requests a "now" stop -- simulating Quit now arriving from the tray or the Status page while
-    render.render's watch loop is asking about the game, exactly where a real click would land."""
+def test_quit_now_during_a_render_aborts_it_like_a_faceit_ac_abort(world):
+    """The renderer asks `should_abort` at every poll (test_hlae_render) and stops the way a FACEIT AC
+    abort stops it; here Quit now arrives from the tray or the Status page mid-render."""
 
-    def __init__(self, stopfile: Path, stop: StopRequest):
-        super().__init__(stopfile, cs2=True)
-        self._stop = stop
-        self._asked = False
+    def render_until_quit(request, should_abort):
+        assert not should_abort()
+        world.stop.request("now")
+        assert should_abort()
+        return RenderResult(ok=False, aborted=True, failure=ABORTED)
 
-    def hooked_cs2_running(self):
-        if not self._asked:
-            self._asked = True
-            self._stop.request("now")
-        return super().hooked_cs2_running()
-
-
-def test_quit_now_during_a_render_aborts_it_like_a_faceit_ac_abort(world, tmp_path, monkeypatch):
-    stopfile = tmp_path / "game-died"
-    monkeypatch.setenv("FAKE_CSDM_MODE", "hang")
-    monkeypatch.setenv("FAKE_CSDM_STOPFILE", str(stopfile))
-    csdm = CsdmCli(prefix=(sys.executable, str(FAKE_CSDM)), home=tmp_path / "home", pg_bin=tmp_path / "pgbin")
-    probe = _QuitsOnFirstAsk(stopfile, world.stop)
-
-    def real_render(request, should_abort):
-        return run_render(
-            request, csdm=csdm, probe=probe, should_abort=should_abort,
-            stall_seconds=5.0, launch_timeout_seconds=5.0, duration_of=lambda path: 4.0,
-            poll_seconds=0.05, exit_grace_seconds=0.0, abort_sweep_seconds=0.0,
-        )
-
-    world.services.render = real_render
+    world.services.render = render_until_quit
     alerts = _CountingAlerts()
     world.services.alerts = alerts
     demo_id = world.add_demo()
@@ -563,5 +580,4 @@ def test_quit_now_during_a_render_aborts_it_like_a_faceit_ac_abort(world, tmp_pa
     assert (job["state"], job["failure"]) == ("aborted", QUIT_ABORT)
     assert world.index.demo(demo_id)["state"] == "rendering"
     assert world.index.latest_render(demo_id, "enemy")["state"] == "queued"   # not started
-    assert probe.kills >= 1
     assert alerts.ticks == 4   # this tick's alerts step was skipped once the abort set stop

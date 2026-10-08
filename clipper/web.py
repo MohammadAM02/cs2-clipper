@@ -74,7 +74,7 @@ PERSPECTIVES = ("player", "enemy")
 
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _MATCH_ID_PATTERN = r"1-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-_CHECKSUM_PATTERN = r"[0-9a-f]{16}"
+_CHECKSUM_PATTERN = r"[0-9a-f]{1,16}"         # as csda writes it: hex without its leading zeros
 # Flask endpoint names (not paths) reachable from another device (spec: Reach from other devices).
 _PHONE_ENDPOINTS = frozenset({"demos_page", "demos_json", "demos_action", "app_css", "app_js"})
 
@@ -87,8 +87,8 @@ class _MatchIdConverter(BaseConverter):
 
 
 class _ChecksumConverter(BaseConverter):
-    """Only a real match checksum (16 lowercase hex digits) is a route at all; anything else is a
-    plain 404 (spec: Pages, Reels)."""
+    """Only a real match checksum (up to 16 lowercase hex digits) is a route at all; anything else is
+    a plain 404 (spec: Pages, Reels)."""
 
     regex = _CHECKSUM_PATTERN
 

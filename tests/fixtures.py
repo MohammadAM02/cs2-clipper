@@ -1,5 +1,5 @@
-"""The analyzed FACEIT match (aea4e59ccfc6c962, de_inferno, 13-5) as the round facts CS:DM's
-database holds for the subject. tests/test_csdm_db.py checks the live database still says exactly this."""
+"""The analyzed FACEIT match (aea4e59ccfc6c962, de_inferno, 13-5) as the round facts its analysis
+holds for the subject."""
 
 from clipper.model import RoundFacts
 

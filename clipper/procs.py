@@ -6,7 +6,7 @@ from typing import Protocol
 
 import psutil
 
-HOOKED_FLAG = "-insecure"   # only renders start CS2 with it (CS:DM passes it through HLAE)
+HOOKED_FLAG = "-insecure"   # only renders start CS2 with it (hlae_render passes it through HLAE)
 
 
 class ProcessProbe(Protocol):

@@ -7,13 +7,12 @@ exe (clipper.packaged)."""
 from __future__ import annotations
 
 import argparse
-import re
 import socket
 import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from clipper import app, applog, checks, csdm_db, move_in, packaged, paths, provision, settings, window
+from clipper import analysis, app, applog, checks, move_in, packaged, paths, provision, settings, window
 from clipper.config import REPO_ROOT, Config
 from clipper.gate import Gate, GateStatus
 from clipper.index import Index
@@ -21,8 +20,6 @@ from clipper.procs import SystemProbe
 from clipper.scoring import score_match, select
 from clipper.settings import SettingsStore
 from clipper.worker import PERSPECTIVES
-
-CHECKSUM = re.compile(r"^[0-9a-f]{16}$")
 
 
 def format_status(index: Index, gate: GateStatus, host: str | None = None) -> str:
@@ -83,12 +80,15 @@ def cmd_resume(index: Index) -> int:
 
 def cmd_highlights(cfg: Config, index: Index, key: str) -> int:
     demo = index.find_demo(key)
-    checksum = demo["match_checksum"] if demo is not None else (key if CHECKSUM.match(key) else None)
+    checksum = demo["match_checksum"] if demo is not None else (key if analysis.is_checksum(key) else None)
     if not checksum:
         print(f"no analyzed Demo matches {key!r}")
         return 1
-    with csdm_db.connect(cfg.database_conninfo()) as conn:
-        facts = csdm_db.round_facts(conn, checksum, cfg.subject_steamid)
+    try:
+        facts = analysis.Analyses(cfg.analyses_dir, cfg.csda_exe).round_facts(checksum, cfg.subject_steamid)
+    except analysis.MissingAnalysis:
+        print(f"the app has no analysis of match {checksum}")
+        return 1
     highlights = score_match(facts)
     chosen = {h.round for h in select(highlights, cfg.top_n)}
     print(f"{'round':>6} {'type':<5} {'score':>5}  reasons")
@@ -152,14 +152,14 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--headless", action="store_true",
                             help="no tray or window: the worker and the web server only")
     _add_open_argument(run_parser)
-    commands.add_parser("setup", help="install what this PC lacks: CS Demo Manager, Postgres, FFmpeg and HLAE")
+    commands.add_parser("setup", help="install what this PC lacks: csda, FFmpeg and HLAE")
     commands.add_parser("quit", help="ask the running copy to quit, and wait until it has")
     commands.add_parser("status", help="show every Demo's state and the Gate")
     commands.add_parser("retry", help="send a failed Demo back through").add_argument(
         "demo", help="index id or file name")
     commands.add_parser("resume", help="resume rendering after a pause")
     commands.add_parser("highlights", help="print the scored Highlights of an analyzed Demo").add_argument(
-        "demo", help="index id, file name, or CS:DM match checksum")
+        "demo", help="index id, file name, or match checksum")
     args = parser.parse_args(argv)
 
     if args.window:      # the window process: no lock and no move-in, it only shows a page

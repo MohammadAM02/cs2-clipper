@@ -27,7 +27,8 @@ def _read_settings(data_dir: Path) -> dict:
 
 
 def _full_fake_repo(tmp_path: Path) -> Path:
-    """A fake repo (never the real one) holding all four old-setup items."""
+    """A fake repo (never the real one) holding all three old-setup items, and CS Demo Manager's old
+    settings folder, which is not taken."""
     repo = tmp_path / "repo"
     _write(repo / "clipper.toml",
            'top_n = 3\npoll_seconds = 5.0\nindex_path = "C:/old/index.sqlite"\ncsdm_home = "C:/old/home"\n')
@@ -43,9 +44,9 @@ def _full_fake_repo(tmp_path: Path) -> Path:
 # --- needed() -----------------------------------------------------------------------------------------
 
 
-def test_needed_is_false_for_a_repo_with_none_of_the_four_items(tmp_path):
+def test_needed_is_false_for_a_repo_with_none_of_the_three_items(tmp_path):
     repo = tmp_path / "repo"
-    repo.mkdir()
+    _write(repo / "home" / ".csdm" / "settings.json", "{}")     # CS Demo Manager's old settings: not one of them
     data_dir = tmp_path / "data"
     data_dir.mkdir()
 
@@ -79,11 +80,10 @@ def test_every_item_is_copied(tmp_path):
 
     copied = move_in(repo, data_dir)
 
-    assert copied == ["the index", "CS Demo Manager's settings folder", "the settings", "the FACEIT key"]
+    assert copied == ["the index", "the settings", "the FACEIT key"]
 
     assert (data_dir / "clipper.sqlite").read_bytes() == (repo / "data" / "clipper.sqlite").read_bytes()
-    assert (data_dir / "csdm-home" / ".csdm" / "settings.json").read_text(encoding="utf-8") == \
-        (repo / "home" / ".csdm" / "settings.json").read_text(encoding="utf-8")
+    assert sorted(path.name for path in data_dir.iterdir()) == ["clipper.sqlite", "settings.json"]
 
     values = _read_settings(data_dir)
     assert values["top_n"] == 3                    # changed from the default: written
@@ -163,7 +163,7 @@ def test_the_key_never_appears_in_the_log_line(tmp_path, caplog):
     assert "a-real-faceit-key" not in caplog.text
 
 
-# --- move_in(): the index and csdm-home are only replaced when safe to --------------------------------
+# --- move_in(): the index is only replaced when safe to -------------------------------------------------
 
 
 def test_an_index_with_a_row_is_not_overwritten(tmp_path):
@@ -195,67 +195,7 @@ def test_an_empty_schema_index_is_replaced(tmp_path):
     assert dest.read_bytes() == (repo / "data" / "clipper.sqlite").read_bytes()
 
 
-def test_an_existing_csdm_home_is_not_overwritten(tmp_path):
-    repo = _full_fake_repo(tmp_path)
-    data_dir = tmp_path / "data"
-    marker = data_dir / "csdm-home" / "marker.txt"
-    _write(marker, "already here")
-
-    copied = move_in(repo, data_dir)
-
-    assert "CS Demo Manager's settings folder" not in copied
-    assert marker.read_text(encoding="utf-8") == "already here"
-    assert not (data_dir / "csdm-home" / ".csdm").exists()
-
-
-# --- move_in(): the index and csdm-home copies are all-or-nothing --------------------------------------
-
-
-def test_a_leftover_partial_csdm_home_is_cleaned_up_before_copying(tmp_path):
-    repo = tmp_path / "repo"
-    _write(repo / "home" / ".csdm" / "settings.json", '{"database": {"password": "hunter2"}}')
-    data_dir = tmp_path / "data"
-    _write(data_dir / "csdm-home.partial" / "stray-from-a-crashed-attempt.txt", "leftover")
-
-    copied = move_in(repo, data_dir)
-
-    assert "CS Demo Manager's settings folder" in copied
-    dest = data_dir / "csdm-home"
-    assert (dest / ".csdm" / "settings.json").read_text(encoding="utf-8") == \
-        (repo / "home" / ".csdm" / "settings.json").read_text(encoding="utf-8")
-    assert not (dest / "stray-from-a-crashed-attempt.txt").exists()
-    assert not (data_dir / "csdm-home.partial").exists()
-
-
-def test_a_csdm_home_copy_that_fails_midway_leaves_nothing_and_the_next_move_in_completes_it(
-    tmp_path, monkeypatch,
-):
-    repo = tmp_path / "repo"
-    _write(repo / "home" / ".csdm" / "settings.json", '{"database": {"password": "hunter2"}}')
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    real_copytree = shutil.copytree
-
-    def flaky_copytree(src, dst, *args, **kwargs):
-        Path(dst).mkdir(parents=True, exist_ok=True)
-        (Path(dst) / "only-partly-there.txt").write_text("x", encoding="utf-8")
-        raise OSError("disk full")
-
-    monkeypatch.setattr("clipper.move_in.shutil.copytree", flaky_copytree)
-
-    with pytest.raises(OSError):
-        move_in(repo, data_dir)
-
-    assert not (data_dir / "csdm-home").exists()
-    assert not (data_dir / "settings.json").exists()
-
-    monkeypatch.setattr("clipper.move_in.shutil.copytree", real_copytree)
-
-    copied = move_in(repo, data_dir)
-
-    assert "CS Demo Manager's settings folder" in copied
-    assert (data_dir / "csdm-home" / ".csdm" / "settings.json").exists()
-    assert not (data_dir / "csdm-home.partial").exists()
+# --- move_in(): the index copy is all-or-nothing ---------------------------------------------------------
 
 
 def test_an_index_copy_that_fails_midway_leaves_no_file_under_the_final_name(tmp_path, monkeypatch):
@@ -328,7 +268,7 @@ def test_on_start_moves_in_when_not_overridden(tmp_path, monkeypatch):
 
     copied = on_start(repo)
 
-    assert copied == ["the index", "CS Demo Manager's settings folder", "the settings", "the FACEIT key"]
+    assert copied == ["the index", "the settings", "the FACEIT key"]
     data_dir = local_appdata / paths.APP_FOLDER
     assert (data_dir / "settings.json").exists()
     assert (data_dir / "clipper.sqlite").exists()

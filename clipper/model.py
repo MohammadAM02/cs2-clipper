@@ -9,7 +9,7 @@ from pathlib import Path
 
 @dataclass(frozen=True)
 class RoundFacts:
-    """What the subject did in one round, straight from CS:DM's tables."""
+    """What the subject did in one round, straight from csda's analysis of the match."""
 
     round: int
     frag_ticks: tuple[int, ...]
@@ -62,7 +62,7 @@ class MatchInfo:
 
 @dataclass(frozen=True)
 class ClipFile:
-    """One rendered Sequence. CS:DM names it sequence-<n>-tick-<start>-to-<end>.mp4."""
+    """One rendered Sequence, named sequence-<n>-tick-<start>-to-<end>.mp4 as CS:DM named it."""
 
     sequence: int
     start_tick: int

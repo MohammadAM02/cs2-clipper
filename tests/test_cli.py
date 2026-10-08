@@ -1,13 +1,16 @@
+import json
 from datetime import datetime, timezone
 
 import pytest
 
-from clipper import paths
-from clipper.cli import cmd_resume, cmd_retry, format_status, main
+from clipper import analysis, paths
+from clipper.cli import cmd_highlights, cmd_resume, cmd_retry, format_status, main
 from clipper.config import Config
 from clipper.gate import GateStatus
 from clipper.index import Index
+from clipper.scoring import score_match
 from clipper.settings import Loaded
+from tests import csda_json
 
 
 @pytest.fixture
@@ -60,6 +63,61 @@ def test_retry_sends_a_failed_demo_back(index, tmp_path):
     assert cmd_retry(index, str(demo_id)) == 0
     assert index.demo(demo_id)["state"] == "unpacked"
     assert cmd_retry(index, "nope") == 1
+
+
+# --- highlights: a Demo's scored rounds, read from the app's own analysis of its match --------------
+
+
+def analyzed(tmp_path) -> Config:
+    """Settings whose analyses folder holds tests.csda_json's match, as the app keeps it."""
+    cfg = Config(analyses_dir=tmp_path / "analyses", subject_steamid=csda_json.SUBJECT, top_n=1)
+    cfg.analyses_dir.mkdir()
+    (cfg.analyses_dir / f"{csda_json.CHECKSUM}.json").write_text(
+        json.dumps(analysis.trim(csda_json.match())), encoding="utf-8")
+    return cfg
+
+
+def printed_rounds(out: str) -> list[str]:
+    """The round column of each Highlight line: the round, marked "*" when it is chosen."""
+    return [line.split()[0] for line in out.splitlines()[1:-1]]
+
+
+def test_highlights_scores_an_analyzed_demo(index, tmp_path, capsys):
+    cfg = analyzed(tmp_path)
+    demo_id = index.add_demo("1-a.dem.zst", "a" * 64, tmp_path / "1-a.dem.zst")
+    index.advance(demo_id, "analyzed", match_checksum=csda_json.CHECKSUM)
+    scored = score_match(analysis.round_facts(csda_json.match(), csda_json.SUBJECT))
+    best = max(scored, key=lambda h: h.score)
+
+    assert cmd_highlights(cfg, index, str(demo_id)) == 0
+
+    out = capsys.readouterr().out
+    assert out.splitlines()[0].split() == ["round", "type", "score", "reasons"]
+    assert printed_rounds(out) == [f"{h.round}{'*' if h is best else ''}" for h in scored]
+    assert out.splitlines()[-1] == "* = in the top 1"
+
+
+def test_highlights_takes_a_match_checksum_too(index, tmp_path, capsys):
+    assert cmd_highlights(analyzed(tmp_path), index, csda_json.CHECKSUM) == 0
+
+    assert printed_rounds(capsys.readouterr().out)
+
+
+def test_highlights_of_a_demo_that_was_never_analyzed_says_so(index, tmp_path, capsys):
+    cfg = analyzed(tmp_path)
+    index.add_demo("1-a.dem.zst", "a" * 64, tmp_path / "1-a.dem.zst")
+
+    assert cmd_highlights(cfg, index, "1-a.dem.zst") == 1
+    assert cmd_highlights(cfg, index, "not-a-checksum") == 1
+
+    assert capsys.readouterr().out.splitlines() == ["no analyzed Demo matches '1-a.dem.zst'",
+                                                    "no analyzed Demo matches 'not-a-checksum'"]
+
+
+def test_highlights_of_a_match_the_app_has_no_analysis_of_says_so(index, tmp_path, capsys):
+    assert cmd_highlights(analyzed(tmp_path), index, "fedcba9876543210") == 1
+
+    assert capsys.readouterr().out.strip() == "the app has no analysis of match fedcba9876543210"
 
 
 def test_status_shows_match_alerts_and_the_page(index):
@@ -176,7 +234,7 @@ def events(monkeypatch):
 
 
 def test_the_app_releases_the_dll_search_path_before_it_starts_anything(events):
-    # Its children (csdm, HLAE, CS2, Postgres, ffmpeg) must not inherit the exe's bundle on theirs.
+    # Its children (csda, HLAE, CS2, ffmpeg) must not inherit the exe's bundle on theirs.
     assert main([]) == 0
     assert events == ["release", "app"]
 
@@ -257,7 +315,7 @@ def test_setup_tells_a_download_with_a_line_for_each_tenth(setup_runs, capsys):
 
 
 def test_setup_releases_the_dll_search_path_before_it_starts_anything(events, monkeypatch):
-    # The installer and Postgres it starts must not inherit the exe's bundle on theirs.
+    # Nothing setup starts may inherit the exe's bundle on its DLL search path.
     monkeypatch.setattr("clipper.cli.cmd_setup", lambda: events.append("setup") or 0)
 
     assert main(["setup"]) == 0

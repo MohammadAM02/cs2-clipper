@@ -24,16 +24,12 @@ def release(**zip_overrides):
     ]}
 
 
-@pytest.mark.parametrize("asset", [components.CSDM, components.POSTGRES, components.FFMPEG])
-def test_every_pinned_download_names_an_https_file_a_hash_and_a_size(asset):
+@pytest.mark.parametrize("asset", [components.CSDA, components.FFMPEG])
+def test_every_pinned_download_names_an_https_zip_a_hash_and_a_size(asset):
     assert asset.url.startswith("https://github.com/")
-    assert asset.url.rsplit("/", 1)[1] == asset.name
+    assert asset.name.endswith(asset.url.rsplit("/", 1)[1]) and asset.name.endswith(".zip")     # setup unpacks each
     assert re.fullmatch(r"[0-9a-f]{64}", asset.sha256)
     assert asset.size > 1_000_000
-
-
-def test_the_pinned_cs_demo_manager_is_the_version_the_settings_template_is_for():
-    assert components.CSDM_VERSION in components.CSDM.name
 
 
 def test_latest_hlae_is_the_releases_zip_with_githubs_hash():

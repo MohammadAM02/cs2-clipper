@@ -53,7 +53,7 @@ The unit of work that turns one Highlight into one Clip.
 _Avoid_: Task, encode job, export
 
 **Render Engine**:
-The component that turns a Sequence into a Clip file; currently CS Demo Manager.
+The component that turns a Sequence into a Clip file; currently HLAE, recording CS2 as it plays the Demo.
 _Avoid_: Renderer, encoder (encoding is FFmpeg's job inside the engine)
 
 **POV**:

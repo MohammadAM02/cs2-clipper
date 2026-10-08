@@ -27,15 +27,14 @@ SHIPPED_ENV = "shipped.env"           # the key a packaged build ships (packagin
 
 def needed(repo_root: Path, data_dir: Path) -> bool:
     """True when `data_dir` has no settings.json yet and the repo holds an old setup: any of
-    clipper.toml, .env, data\\clipper.sqlite, home\\ exists. A fresh clone has none of them, so
-    nothing is moved in."""
+    clipper.toml, .env, data\\clipper.sqlite exists. A fresh clone has none of them, so nothing is
+    moved in. CS Demo Manager's old settings folder, home\\, is not one: nothing is taken from it."""
     if (data_dir / "settings.json").exists():
         return False
     return any((
         (repo_root / "clipper.toml").exists(),
         (repo_root / ".env").exists(),
         (repo_root / "data" / "clipper.sqlite").exists(),
-        (repo_root / "home").exists(),
     ))
 
 
@@ -45,8 +44,6 @@ def move_in(repo_root: Path, data_dir: Path) -> list[str]:
     copied: list[str] = []
     if _copy_index(repo_root, data_dir):
         copied.append("the index")
-    if _copy_csdm_home(repo_root, data_dir):
-        copied.append("CS Demo Manager's settings folder")
 
     settings_out, key_copied = _collect_settings(repo_root)
     paths.atomic_write_text(data_dir / "settings.json", json.dumps(settings_out, indent=2, sort_keys=True))
@@ -62,7 +59,7 @@ def move_in(repo_root: Path, data_dir: Path) -> list[str]:
 
 def on_start(repo_root: Path = REPO_ROOT) -> list[str]:
     """The call site: [] when CLIPPER_DATA_DIR is set (tests and development never copy the real
-    .env key, index or home\\), or when there is nothing to move in; else the result of move_in().
+    .env key or index), or when there is nothing to move in; else the result of move_in().
 
     In the packaged exe `repo_root` is the folder the exe unpacked into, which is not a repository: it
     has no old setup to move in, and the only thing it may seed is the key the build shipped -- see
@@ -80,8 +77,8 @@ def on_start(repo_root: Path = REPO_ROOT) -> list[str]:
 def _seed_shipped(repo_root: Path, data_dir: Path) -> list[str]:
     """The packaged app's first run: the FACEIT key the build shipped, written into settings.json for
     the Windows account that runs it on that machine. Nothing else is copied -- the bundle is not a
-    repo, so there is no index and no CS:DM settings folder to take, and no SteamID or clips folder
-    from the machine that built it (`old_defaults=False`)."""
+    repo, so there is no index to take, and no SteamID or clips folder from the machine that built it
+    (`old_defaults=False`)."""
     if (data_dir / "settings.json").exists() or not (repo_root / SHIPPED_ENV).is_file():
         return []
     settings_out, key_copied = _collect_settings(repo_root, old_defaults=False)
@@ -132,27 +129,6 @@ def _index_is_empty(path: Path) -> bool:
         return False
     finally:
         conn.close()
-
-
-# --- CS:DM's settings folder --------------------------------------------------------------------------------
-
-
-def _copy_csdm_home(repo_root: Path, data_dir: Path) -> bool:
-    """All-or-nothing: copies into `csdm-home.partial` (removing any leftover one from an earlier
-    failed attempt first), then renames it onto `csdm-home` only once the whole tree has copied —
-    a crash or a full disk mid-copy can never leave CS:DM's settings half there."""
-    src = repo_root / "home"
-    if not src.is_dir():
-        return False
-    dest = data_dir / "csdm-home"
-    if dest.exists():
-        return False
-    partial = data_dir / "csdm-home.partial"
-    if partial.exists():
-        shutil.rmtree(partial)
-    shutil.copytree(src, partial)
-    os.replace(partial, dest)
-    return True
 
 
 # --- settings.json ------------------------------------------------------------------------------------------

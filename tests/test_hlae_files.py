@@ -1,6 +1,6 @@
 """Tests for clipper.hlae_files: the cfg files, the FFmpeg ini and the join of HLAE's raw recording into Clips.
 Folders are fakes under tmp_path and FFmpeg is a stand-in for subprocess.run: nothing here starts a program or
-touches CS2's, HLAE's or CS:DM's real folders."""
+touches CS2's or HLAE's real folders."""
 from __future__ import annotations
 
 import os
@@ -12,7 +12,7 @@ import pytest
 from clipper import hlae_files, hlae_plan
 from clipper.hlae_plan import RenderInputs, Sequence
 
-FFMPEG = Path(r"C:\Users\someone\.csdm\ffmpeg\bin\ffmpeg.exe")
+FFMPEG = Path(r"C:\Users\someone\AppData\Local\CS2Clipper\tools\ffmpeg\bin\ffmpeg.exe")
 
 
 def sequence(number: int, start: int = 1000, end: int = 2000) -> Sequence:

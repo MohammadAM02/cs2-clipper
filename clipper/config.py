@@ -6,8 +6,6 @@ reads a file."""
 
 from __future__ import annotations
 
-import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -15,9 +13,8 @@ from clipper import paths
 from clipper.windows import downloads_dir
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-_LOCALAPPDATA = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local")))
 
-# aspect_ratio -> (width, height, stretched to 1920x1080 when joining). Mirrors render_reel.sh's REEL_RATIO.
+# aspect_ratio -> (width, height, stretched to 1920x1080 when joining).
 RATIOS: dict[str, tuple[int, int, bool]] = {
     "16:9": (1920, 1080, False),
     "4:3": (1280, 960, False),
@@ -25,7 +22,6 @@ RATIOS: dict[str, tuple[int, int, bool]] = {
     "4:3-stretched": (1280, 960, True),
 }
 SEQUENCE_EVENTS = ("kills", "rounds")
-RENDERERS = ("csdm", "hlae")     # what records a Sequence: CS Demo Manager, or this app through HLAE
 
 
 @dataclass(frozen=True)
@@ -39,13 +35,12 @@ class Config:
     downloads_dir: Path = field(default_factory=downloads_dir)
     data_root: Path | None = None
     index_path: Path = field(default_factory=paths.index_file)
-    csdm_home: Path = field(default_factory=paths.csdm_home)
     logs_dir: Path = field(default_factory=paths.logs_dir)
-    csdm_app_dir: Path = _LOCALAPPDATA / "Programs" / "cs-demo-manager"
-    pg_bin: Path = _LOCALAPPDATA / "pg17" / "pgsql" / "bin"
-    pg_data: Path = _LOCALAPPDATA / "pg17" / "data"
+    tools_dir: Path = field(default_factory=paths.tools_dir)
+    analyses_dir: Path = field(default_factory=paths.analyses_dir)
     ffmpeg: str = "ffmpeg"
     ffprobe: str = "ffprobe"
+    hlae_exe: str = ""              # blank: the HLAE Setup installs
     top_n: int = 5
     padding_before_s: float = 4.0
     padding_after_s: float = 2.0
@@ -56,7 +51,6 @@ class Config:
     poll_seconds: float = 5.0
     aspect_ratio: str = "16:9"
     sequence_event: str = "kills"
-    renderer: str = "csdm"
     match_alerts: bool = True
     stopped_playing_minutes: float = 5.0
     page_port: int = 8765
@@ -68,8 +62,6 @@ class Config:
             raise ValueError(
                 f"sequence_event must be one of {', '.join(SEQUENCE_EVENTS)} (got {self.sequence_event!r})"
             )
-        if self.renderer not in RENDERERS:
-            raise ValueError(f"renderer must be one of {', '.join(RENDERERS)} (got {self.renderer!r})")
 
     @property
     def video_size(self) -> tuple[int, int]:
@@ -110,21 +102,11 @@ class Config:
         return self.data_root / stored
 
     @property
-    def csdm_exe(self) -> Path:
-        return self.csdm_app_dir / "cs-demo-manager.exe"
+    def csda_exe(self) -> Path:
+        """cs-demo-analyzer, which reads each Demo: always the one Setup installs."""
+        return self.tools_dir / "csda" / "csda.exe"
 
     @property
-    def csdm_cli_js(self) -> Path:
-        return self.csdm_app_dir / "resources" / "app.asar" / "cli.js"
-
-    def database_conninfo(self) -> dict[str, object]:
-        """CS:DM's own connection settings. The password lives only in CS:DM's settings file."""
-        settings = json.loads((self.csdm_home / ".csdm" / "settings.json").read_text(encoding="utf-8"))
-        db = settings["database"]
-        return {
-            "host": db["hostname"],
-            "port": db["port"],
-            "user": db["username"],
-            "password": db["password"],
-            "dbname": db["database"],
-        }
+    def hlae_path(self) -> Path:
+        """HLAE.exe, which starts CS2 for each render: the `hlae_exe` setting, else the one Setup installs."""
+        return Path(self.hlae_exe) if self.hlae_exe else self.tools_dir / "hlae" / "HLAE.exe"

@@ -1,12 +1,11 @@
 <#
 Proves the installer on a machine that has never seen the app. It installs dist\CS2Clipper-Setup.exe,
-runs the installed exe's real setup (which downloads and installs CS Demo Manager, Postgres, FFmpeg
-and HLAE), checks what that left, runs setup again, upgrades over a running copy, and uninstalls.
+runs the installed exe's real setup (which downloads and installs csda, FFmpeg and HLAE), checks what
+that left, runs setup again, upgrades over a running copy, and uninstalls.
 
 It is for a throwaway machine, such as the one GitHub lends a release build: it installs for the
-signed-in user, runs CS Demo Manager's installer, and takes the app off again. So it refuses without
--ThrowawayMachine, and on a PC that already has the app, its data folder or CS Demo Manager. There,
-after packaging\build.ps1 -Installer:
+signed-in user and takes the app off again. So it refuses without -ThrowawayMachine, and on a PC that
+already has the app or its data folder. There, after packaging\build.ps1 -Installer:
 
     powershell -ExecutionPolicy Bypass -File packaging\prove.ps1 -ThrowawayMachine
 
@@ -31,7 +30,7 @@ function Start-Program([string]$exe, [string]$arguments) {
 
 function Start-AndWait([string]$exe, [string]$arguments, [int]$seconds) {
     # Waits for that one process, and returns its exit code. Start-Process -Wait would wait for every
-    # process it started as well, and the Postgres that setup starts outlives it.
+    # process it started as well.
     $process = Start-Program $exe $arguments
     if (-not $process.WaitForExit($seconds * 1000)) {
         $process.Kill()
@@ -63,11 +62,7 @@ $appDir = Join-Path $env:LOCALAPPDATA 'Programs\CS2Clipper'
 $exe = Join-Path $appDir 'CS2Clipper.exe'
 $data = Join-Path $env:LOCALAPPDATA 'CS2Clipper'
 $log = Join-Path $data 'logs\clipper.log'
-$csdmDir = Join-Path $env:LOCALAPPDATA 'Programs\cs-demo-manager'
-$csdmHome = Join-Path $data 'csdm-home\.csdm'
-$pgBin = Join-Path $data 'postgres\pgsql\bin'
-$pgData = Join-Path $data 'postgres\data'
-$pgLog = Join-Path $data 'postgres\postgres.log'
+$tools = Join-Path $data 'tools'
 $inStartMenu = Join-Path ([Environment]::GetFolderPath('Programs')) 'CS2 Clipper.lnk'
 $inStartup = Join-Path ([Environment]::GetFolderPath('Startup')) 'CS2 Clipper.lnk'
 $onDesktop = Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'CS2 Clipper.lnk'
@@ -77,13 +72,13 @@ $installerLogs = Join-Path ([IO.Path]::GetTempPath()) "cs2clipper-prove-$PID"
 $silently = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART'
 
 if (-not $ThrowawayMachine) {
-    throw ('This installs the app for you, runs CS Demo Manager''s installer, and takes the app off again. ' +
+    throw ('This installs the app for you and takes it off again. ' +
            'It is for a throwaway machine: pass -ThrowawayMachine there, and nowhere else.')
 }
 if ($env:CLIPPER_DATA_DIR) {
     throw 'CLIPPER_DATA_DIR is set: the proof is of the data folder a customer gets.'
 }
-foreach ($seen in $appDir, $data, $csdmDir) {
+foreach ($seen in $appDir, $data) {
     if (Test-Path -LiteralPath $seen) { throw "$seen exists: this is not a machine that has never seen the app." }
 }
 
@@ -106,46 +101,37 @@ try {
     Write-Host '::endgroup::'
 
     Write-Host '::group::Setup'
+    # Setup installs FFmpeg only on a PC that has none on PATH, and leaves one that is there alone.
+    $hadFfmpeg = [bool](Get-Command ffmpeg -ErrorAction SilentlyContinue) -and
+                 [bool](Get-Command ffprobe -ErrorAction SilentlyContinue)
     $code = Start-AndWait $exe 'setup' 1800
     Show-File $log
     Confirm-That ($code -eq 0) "setup ended with exit code 0 (it gave $code)"
     $said = Get-Content -Encoding UTF8 -LiteralPath $log
-    foreach ($name in 'CS Demo Manager', 'Postgres', 'Database', 'FFmpeg', 'HLAE') {
-        Confirm-That ($said -match "setup: $name is in place") "setup installed $name"
+    foreach ($name in 'csda', 'FFmpeg', 'HLAE') {
+        if ($name -eq 'FFmpeg' -and $hadFfmpeg) {
+            Confirm-That (-not ($said -match 'setup: installing FFmpeg')) 'setup left the FFmpeg on PATH alone'
+        } else {
+            Confirm-That ($said -match "setup: $name is in place") "setup installed $name"
+        }
     }
     Write-Host '::endgroup::'
 
     Write-Host '::group::What setup left'
-    $csdm = Join-Path $csdmDir 'cs-demo-manager.exe'
-    Confirm-That (Test-Path -LiteralPath $csdm) "CS Demo Manager is at $csdm"
-    Write-Host "  its version: $((Get-Item $csdm).VersionInfo.ProductVersion)"
+    $csda = Join-Path $tools 'csda\csda.exe'
+    Confirm-That (Test-Path -LiteralPath $csda) "csda is at $csda"
 
-    # CS Demo Manager's settings hold the database's password: it goes to psql, and nowhere else.
-    $settings = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $csdmHome 'settings.json') | ConvertFrom-Json
-    $database = $settings.database
-    $env:PGPASSWORD = $database.password
-    try {
-        $answer = & (Join-Path $pgBin 'psql.exe') -w -h $database.hostname -p $database.port -U $database.username `
-            -d $database.database -tAc 'select 1'
-        $code = $LASTEXITCODE
-    } finally {
-        Remove-Item Env:PGPASSWORD
-    }
-    Confirm-That ($code -eq 0 -and "$answer".Trim() -eq '1') `
-        "the database that CS Demo Manager's settings name answers, on port $($database.port)"
-    Confirm-That (-not (Select-String -LiteralPath $log, $pgLog -SimpleMatch -Quiet -Pattern $database.password)) `
-        'neither the app''s log nor Postgres''s holds the database''s password'
-
-    $ffmpeg = Join-Path $csdmHome 'ffmpeg\bin\ffmpeg.exe'
-    if ($settings.video.ffmpegSettings.customLocationEnabled) {
-        $ffmpeg = $settings.video.ffmpegSettings.customExecutableLocation
+    $ffmpeg = 'ffmpeg'
+    if (-not $hadFfmpeg) {
+        $ffmpeg = Join-Path $tools 'ffmpeg\bin\ffmpeg.exe'
+        $named = (Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $data 'settings.json') | ConvertFrom-Json).ffmpeg
+        Confirm-That ($named -eq $ffmpeg) "the app's settings name the FFmpeg setup installed, $ffmpeg"
     }
     $answer = & $ffmpeg -version
-    Confirm-That ($LASTEXITCODE -eq 0 -and @($answer)[0] -match '^ffmpeg version') `
-        "FFmpeg runs where CS Demo Manager looks for it, $ffmpeg"
+    Confirm-That ($LASTEXITCODE -eq 0 -and @($answer)[0] -match '^ffmpeg version') "FFmpeg runs, $ffmpeg"
     Write-Host "  $(@($answer)[0])"
 
-    $hlae = Join-Path $csdmHome 'hlae\HLAE.exe'
+    $hlae = Join-Path $tools 'hlae\HLAE.exe'
     Confirm-That (Test-Path -LiteralPath $hlae) "HLAE is at $hlae"
     Write-Host "  its version: $((Get-Item $hlae).VersionInfo.ProductVersion)"
     Write-Host '::endgroup::'
@@ -197,7 +183,7 @@ try {
     Confirm-That (-not (Test-Path -LiteralPath $inStartMenu)) 'the Start Menu shortcut is gone'
     Confirm-That (-not (Test-Path -LiteralPath $inStartup)) 'the sign-in shortcut is gone'
     Confirm-That (-not (Test-Path -LiteralPath $listing)) 'Windows no longer lists the app'
-    Confirm-That (Test-Path -LiteralPath (Join-Path $pgData 'PG_VERSION')) "the data folder is left as it was, $data"
+    Confirm-That (Test-Path -LiteralPath $csda) "the data folder is left as it was, $data"
     Write-Host '::endgroup::'
 
     Write-Host ''
@@ -206,14 +192,9 @@ try {
     Write-Host '::endgroup::'
     Write-Host "::error::$($_.Exception.Message)"
     Show-File $log 80
-    Show-File $pgLog 40
     Get-ChildItem -LiteralPath $installerLogs -Filter *.log | ForEach-Object { Show-File $_.FullName 60 }
     throw
 } finally {
-    # Leave nothing running: a copy of the app that a failed check left, and the Postgres that setup started.
+    # Leave nothing running: a copy of the app that a failed check left.
     Get-Process -Name CS2Clipper -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    if (Test-Path -LiteralPath (Join-Path $pgData 'postmaster.pid')) {
-        $code = Start-AndWait (Join-Path $pgBin 'pg_ctl.exe') "-D `"$pgData`" -m fast -w stop" 120
-        Write-Host "Stopped the Postgres that setup started (pg_ctl gave $code)."
-    }
 }

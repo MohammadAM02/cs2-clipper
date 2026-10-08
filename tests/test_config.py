@@ -18,7 +18,6 @@ def test_defaults_match_the_spec():
     assert cfg.top_n == 5
     assert (cfg.padding_before_s, cfg.padding_after_s) == (4.0, 2.0)
     assert cfg.stall_seconds == 180.0
-    assert cfg.csdm_cli_js.name == "cli.js"
 
 
 def test_dirs_derived_from_the_clips_folder(tmp_path):
@@ -74,18 +73,11 @@ def test_the_faceit_key_is_kept_out_of_repr():
     assert "a-protected-blob" not in repr(cfg)
 
 
-def test_database_conninfo_comes_from_csdm_settings(tmp_path):
-    settings = tmp_path / ".csdm" / "settings.json"
-    settings.parent.mkdir()
-    settings.write_text(
-        '{"database": {"hostname": "127.0.0.1", "port": 5432, "username": "postgres",'
-        ' "password": "pw", "database": "csdm"}}',
-        encoding="utf-8",
-    )
-    cfg = Config(downloads_dir=tmp_path, csdm_home=tmp_path)
-    assert cfg.database_conninfo() == {
-        "host": "127.0.0.1", "port": 5432, "user": "postgres", "password": "pw", "dbname": "csdm",
-    }
+def test_the_tools_are_in_the_tools_folder_unless_hlae_is_set(tmp_path):
+    cfg = Config(tools_dir=tmp_path / "tools")
+    assert cfg.csda_exe == tmp_path / "tools" / "csda" / "csda.exe"
+    assert cfg.hlae_path == tmp_path / "tools" / "hlae" / "HLAE.exe"
+    assert Config(hlae_exe=r"C:\HLAE\hlae.exe").hlae_path == Path(r"C:\HLAE\hlae.exe")
 
 
 def test_picture_and_sequence_settings():
@@ -105,23 +97,14 @@ def test_an_unknown_sequence_event_is_rejected():
         Config(sequence_event="frags")
 
 
-def test_the_renderer_is_csdm_unless_hlae_is_chosen():
-    assert Config().renderer == "csdm"
-    assert Config(renderer="hlae").renderer == "hlae"
-
-
-def test_an_unknown_renderer_is_rejected():
-    with pytest.raises(ValueError, match="renderer"):
-        Config(renderer="obs")
-
-
 def test_match_alert_settings_have_defaults():
     cfg = Config()
     assert (cfg.match_alerts, cfg.stopped_playing_minutes, cfg.page_port) == (True, 5.0, 8765)
 
 
-def test_index_path_csdm_home_and_logs_dir_default_from_the_app_data_folder():
+def test_the_app_data_folders_default_from_the_app_data_folder():
     cfg = Config()
     assert cfg.index_path == paths.index_file()
-    assert cfg.csdm_home == paths.csdm_home()
     assert cfg.logs_dir == paths.logs_dir()
+    assert cfg.tools_dir == paths.tools_dir()
+    assert cfg.analyses_dir == paths.analyses_dir()

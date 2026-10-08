@@ -2,9 +2,8 @@
 """PyInstaller spec for dist\\CS2Clipper.exe: the whole app in one windowed file. Run by build.ps1.
 
 Adapted from thelifeofsuleyman/cs2-clipper's `packaging/aegis.spec` (MIT). What we changed: one file
-instead of a folder; our entry point, name, icon and version; the pages as data; psycopg's binary
-build with the libpq it brings (a delvewheel .libs folder); no obsws_python; and Pillow left to
-PyInstaller's own hooks.
+instead of a folder; our entry point, name, icon and version; the pages as data; no obsws_python;
+and Pillow left to PyInstaller's own hooks.
 
 MIT License
 
@@ -33,7 +32,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all, collect_delvewheel_libs_directory, collect_submodules
+from PyInstaller.utils.hooks import collect_all
 from PyInstaller.utils.win32.versioninfo import (
     FixedFileInfo, StringFileInfo, StringStruct, StringTable, VarFileInfo, VarStruct, VSVersionInfo)
 
@@ -57,15 +56,12 @@ if os.path.isfile(SHIPPED_ENV):
     datas.append((SHIPPED_ENV, "."))
 binaries = []
 hiddenimports = ["clr", "webview.platforms.edgechromium", "webview.platforms.winforms",
-                 "webview.platforms.mshtml"] + collect_submodules("psycopg")
+                 "webview.platforms.mshtml"]
 for package in ("clr_loader", "pythonnet"):
     package_datas, package_binaries, package_imports = collect_all(package)
     datas += package_datas
     binaries += package_binaries
     hiddenimports += package_imports
-# psycopg_binary's modules come in through psycopg's own imports (it cannot be imported on its own, so
-# collect_all cannot scan it); its libpq, libssl and libcrypto sit beside it in psycopg_binary.libs.
-datas, binaries = collect_delvewheel_libs_directory("psycopg_binary", datas=datas, binaries=binaries)
 
 a = Analysis(
     [os.path.join(ROOT, "clipper", "__main__.py")],

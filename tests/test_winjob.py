@@ -5,7 +5,7 @@ runs a helper (tests/winjob_child.py) as a subprocess: it starts a harmless gran
 (`sys.executable -c "import time; time.sleep(60)"`), calls guard() on it, writes its PID, and exits
 without stopping it. The test then watches from outside whether the grandchild is still there.
 
-Never launches CS2, CS Demo Manager, csdm or HLAE — every process started here is `sys.executable`
+Never launches CS2, csda or HLAE — every process started here is `sys.executable`
 itself, and every test cleans up whatever it started, whatever happens.
 """
 from __future__ import annotations

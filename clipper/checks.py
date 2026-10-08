@@ -1,29 +1,21 @@
 """Status's checks and the start-up problems (spec: Pages -> Status (Checks); When something goes
-wrong; Testing, checks and start-up problems).
-
-CS:DM's settings.json holds passwords and API keys (spec: Settings and data): this module reads
-only ``video.hlae`` and the database's port from it, and never logs or returns anything else it
-contains.
-"""
+wrong; Testing, checks and start-up problems)."""
 
 from __future__ import annotations
 
-import ctypes
 import json
 import logging
 import shutil
-import sys
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
-from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
 
 import psutil
 
-from clipper import csdm_settings, download, postgres
+from clipper import download
 from clipper.config import Config
 
 log = logging.getLogger(__name__)
@@ -36,82 +28,20 @@ RETRY_AFTER_FAILURE_SECONDS = 60 * 60.0
 
 @dataclass(frozen=True)
 class Check:
-    name: str            # "CS Demo Manager" | "Postgres" | "HLAE" | "FFmpeg" | "Clips folder" | "Match alerts"
+    name: str            # "csda" | "HLAE" | "FFmpeg" | "Clips folder" | "Match alerts"
     ok: bool | None      # None: could not tell
-    detail: str          # one line, e.g. "3.20.1", "running", "2.192.6 (latest)"
+    detail: str          # one line, e.g. "found", "2.192.6 (latest)"
     hint: str = ""       # one line: how to fix it, when not ok
 
 
-# --- reading version information off disk -------------------------------------------------------
+# --- HLAE: where it is, and whether a newer one is out -------------------------------------------
 
 
-class _FixedFileInfo(ctypes.Structure):
-    _fields_ = [
-        ("signature", wintypes.DWORD),
-        ("struc_version", wintypes.DWORD),
-        ("file_version_ms", wintypes.DWORD),
-        ("file_version_ls", wintypes.DWORD),
-        ("product_version_ms", wintypes.DWORD),
-        ("product_version_ls", wintypes.DWORD),
-        ("file_flags_mask", wintypes.DWORD),
-        ("file_flags", wintypes.DWORD),
-        ("file_os", wintypes.DWORD),
-        ("file_type", wintypes.DWORD),
-        ("file_subtype", wintypes.DWORD),
-        ("file_date_ms", wintypes.DWORD),
-        ("file_date_ls", wintypes.DWORD),
-    ]
-
-
-def file_version(path: Path) -> str | None:
-    """The exe's version resource via ctypes: "major.minor.build", plus ".revision" only when the
-    revision is not 0. None when there is no version resource, the file has none, or it can't be
-    read (a missing file included). No-op off Windows."""
-    if sys.platform != "win32":
-        return None
-    name = str(path)
-    version_dll = ctypes.WinDLL("version", use_last_error=True)
-    version_dll.GetFileVersionInfoSizeW.argtypes = [wintypes.LPCWSTR, wintypes.LPDWORD]
-    version_dll.GetFileVersionInfoSizeW.restype = wintypes.DWORD
-    size = version_dll.GetFileVersionInfoSizeW(name, None)
-    if not size:
-        return None
-    version_dll.GetFileVersionInfoW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID]
-    version_dll.GetFileVersionInfoW.restype = wintypes.BOOL
-    buf = ctypes.create_string_buffer(size)
-    if not version_dll.GetFileVersionInfoW(name, 0, size, buf):
-        return None
-    version_dll.VerQueryValueW.argtypes = [
-        wintypes.LPCVOID, wintypes.LPCWSTR, ctypes.POINTER(wintypes.LPVOID), wintypes.PUINT,
-    ]
-    version_dll.VerQueryValueW.restype = wintypes.BOOL
-    value = wintypes.LPVOID()
-    length = wintypes.UINT()
-    if not version_dll.VerQueryValueW(buf, "\\", ctypes.byref(value), ctypes.byref(length)):
-        return None
-    if not value.value or not length.value:
-        return None
-    info = ctypes.cast(value, ctypes.POINTER(_FixedFileInfo)).contents
-    major, minor = info.file_version_ms >> 16, info.file_version_ms & 0xFFFF
-    build, revision = info.file_version_ls >> 16, info.file_version_ls & 0xFFFF
-    text = f"{major}.{minor}.{build}"
-    return f"{text}.{revision}" if revision else text
-
-
-def hlae_exe(csdm_home: Path) -> Path | None:
-    """Where CS:DM's video.hlae settings say HLAE lives: the custom location when it is enabled and
-    set, else CS:DM's own bundled copy (<csdm_home>/.csdm/hlae/HLAE.exe). None when CS:DM's
-    settings.json is missing or is not readable JSON."""
-    settings_path = csdm_home / ".csdm" / "settings.json"
-    try:
-        settings = json.loads(settings_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    hlae = settings.get("video", {}).get("hlae", {}) if isinstance(settings, dict) else {}
-    custom = hlae.get("customExecutableLocation") if isinstance(hlae, dict) else None
-    if isinstance(hlae, dict) and hlae.get("customLocationEnabled") and custom:
-        return Path(custom)
-    return csdm_home / ".csdm" / "hlae" / "HLAE.exe"
+def hlae_exe(cfg: Config) -> Path | None:
+    """HLAE.exe (the ``hlae_exe`` setting, else the one Setup installs), or None when there is no such
+    file. A path that is set is never swapped for the installed one."""
+    exe = cfg.hlae_path
+    return exe if exe.is_file() else None
 
 
 def hlae_version(exe: Path) -> str | None:
@@ -191,9 +121,9 @@ def _is_newer(candidate: str, than: str) -> bool:
     return _version_tuple(candidate) > _version_tuple(than)
 
 
-def hlae_behind(csdm_home: Path, latest: str | None) -> bool:
-    """Whether the HLAE that CS:DM uses is older than `latest`. False when either version is unknown."""
-    exe = hlae_exe(csdm_home)
+def hlae_behind(cfg: Config, latest: str | None) -> bool:
+    """Whether the HLAE the app uses is older than `latest`. False when either version is unknown."""
+    exe = hlae_exe(cfg)
     installed = hlae_version(exe) if exe is not None else None
     return installed is not None and latest is not None and _is_newer(latest, installed)
 
@@ -202,32 +132,19 @@ def _free_bytes(path: Path) -> int:
     return psutil.disk_usage(str(path)).free
 
 
-# --- the six checks -------------------------------------------------------------------------------
+# --- the five checks ------------------------------------------------------------------------------
 
 
-def _csdm_check(cfg: Config, version_of: Callable[[Path], str | None]) -> Check:
-    if not cfg.csdm_exe.exists():
-        return Check("CS Demo Manager", False, "not found",
-                     "Install CS Demo Manager, or set its folder in Settings")
-    return Check("CS Demo Manager", True, version_of(cfg.csdm_exe) or "found")
-
-
-def _postgres_check(cfg: Config, pg_running: Callable[[Path, Path], bool]) -> Check:
-    try:
-        running = pg_running(cfg.pg_bin, cfg.pg_data)
-    except Exception as exc:  # noqa: BLE001 - a check that raises counts as not running
-        log.warning("could not tell whether Postgres is running (%s)", exc)
-        running = False
-    if running:
-        return Check("Postgres", True, "running")
-    return Check("Postgres", False, "not running",
-                 "The app starts it when it can; check the Postgres folders in Settings")
+def _csda_check(cfg: Config) -> Check:
+    if not cfg.csda_exe.is_file():
+        return Check("csda", False, "not found", "Set up this PC to install it")
+    return Check("csda", True, "found")
 
 
 def _hlae_check(cfg: Config, releases: HlaeReleases) -> Check:
-    exe = hlae_exe(cfg.csdm_home)
-    if exe is None or not exe.exists():
-        return Check("HLAE", False, "not found", "Install HLAE from CS Demo Manager's video settings")
+    exe = hlae_exe(cfg)
+    if exe is None:
+        return Check("HLAE", False, "not found", "Set up this PC to install it, or set its path in Settings")
     installed = hlae_version(exe)
     if installed is None:
         return Check("HLAE", None, "unknown version")
@@ -269,15 +186,12 @@ def _match_alerts_check(alerts_status: str | None) -> Check:
 
 
 def run_checks(cfg: Config, *, alerts_status: str | None, releases: HlaeReleases,
-               pg_running: Callable[[Path, Path], bool] = postgres.is_running,
                which: Callable[[str], str | None] = shutil.which,
-               free_bytes: Callable[[Path], int] = _free_bytes,
-               version_of: Callable[[Path], str | None] = file_version) -> list[Check]:
-    """The six checks Status shows, in order. Does not call `releases.refresh_if_due` — the app
+               free_bytes: Callable[[Path], int] = _free_bytes) -> list[Check]:
+    """The five checks Status shows, in order. Does not call `releases.refresh_if_due` — the app
     does that off the request path, daily."""
     return [
-        _csdm_check(cfg, version_of),
-        _postgres_check(cfg, pg_running),
+        _csda_check(cfg),
         _hlae_check(cfg, releases),
         _ffmpeg_check(cfg, which),
         _clips_folder_check(cfg, free_bytes),
@@ -288,17 +202,9 @@ def run_checks(cfg: Config, *, alerts_status: str | None, releases: HlaeReleases
 # --- start-up problems -----------------------------------------------------------------------------
 
 
-def database_port(cfg: Config) -> int:
-    """The port CS:DM's settings name for its database, which is the port Postgres has to listen on;
-    Postgres's usual one when they name none."""
-    database = csdm_settings.database(cfg.csdm_home)
-    return database["port"] if database else postgres.PORT
-
-
-def startup_problems(cfg: Config, *,
-                     ensure_postgres: Callable[[Path, Path, int], None] = postgres.ensure_running) -> list[str]:
-    """What keeps the worker from doing anything, in order; an empty list means it may run.
-    `ensure_postgres` is always attempted, regardless of earlier problems."""
+def startup_problems(cfg: Config) -> list[str]:
+    """What keeps the worker from doing anything, in order; an empty list means it may run. No HLAE is
+    not one: without it the app still downloads, analyzes and scores, and each render says why it fails."""
     problems = []
     if not cfg.subject_steamid:
         problems.append("Set your SteamID in Settings")
@@ -306,12 +212,6 @@ def startup_problems(cfg: Config, *,
         problems.append("Choose a clips folder in Settings")
     elif not cfg.data_root.is_dir():
         problems.append(f"The clips folder {cfg.data_root} is missing")
-    if not cfg.csdm_exe.exists():
-        problems.append(f"CS Demo Manager was not found in {cfg.csdm_app_dir}")
-    if not (cfg.csdm_home / ".csdm" / "settings.json").exists():
-        problems.append(f"CS Demo Manager's settings are missing from {cfg.csdm_home}")
-    try:
-        ensure_postgres(cfg.pg_bin, cfg.pg_data, database_port(cfg))
-    except Exception as exc:  # noqa: BLE001 - any failure is reported, never crashes the app
-        problems.append(f"Postgres won't start: {exc}")
+    if not cfg.csda_exe.is_file():
+        problems.append(f"csda was not found in {cfg.csda_exe.parent}")
     return problems

@@ -1,13 +1,12 @@
-"""A Render Job recorded by starting CS2 through HLAE.exe ourselves, instead of through `csdm video`.
+"""A Render Job, recorded by starting CS2 through HLAE.exe (ADR 0004).
 
-Since a CS2 update CS Demo Manager's plugin no longer hooks in (upstream akiver/cs-demo-manager#1458), so the plan of
-`hlae_plan` goes into CS2's cfg folder as files and HLAE.exe starts CS2 with `+exec cs2clipper`. CS2 names each cfg
-it runs in console.log (it starts with `-condebug`), and the names of the plan's step files are its markers; `render`
-follows them to know where the recording is, closes the game when it stalls or never starts, starts it again when
-that can help, and joins what HLAE recorded into the Clips.
+The plan of `hlae_plan` goes into CS2's cfg folder as files and HLAE.exe starts CS2 with `+exec cs2clipper`. CS2 names
+each cfg it runs in console.log (it starts with `-condebug`), and the names of the plan's step files are its markers;
+`render` follows them to know where the recording is, closes the game when it stalls or never starts, starts it again
+when that can help, and joins what HLAE recorded into the Clips.
 
-The same contract as `render.render`. It starts only what it is handed -- HLAE.exe (`launch`) and FFmpeg (`run_ffmpeg`)
--- and the probe, the clock and `sleep` are parameters too, so tests run a whole Render Job against a scripted world."""
+It starts only what it is handed -- HLAE.exe (`launch`) and FFmpeg (`run_ffmpeg`) -- and the probe, the clock and
+`sleep` are parameters too, so tests run a whole Render Job against a scripted world."""
 from __future__ import annotations
 
 import shutil
@@ -325,12 +324,11 @@ def _record(env: _Env, command: list[str], max_launches: int) -> _Outcome:
 
 def _prepare(req: RenderRequest, raw_dir: Path, hlae_exe: Path, hlae_ffmpeg: Path, cfgs: Path,
              files: dict[str, str]) -> None:
-    """Gets the PC ready for a launch: no recording or actions file of an earlier attempt, HLAE told where FFmpeg is,
-    the cfg files in CS2's folder."""
+    """Gets the PC ready for a launch: no recording of an earlier attempt, HLAE told where FFmpeg is, the cfg files in
+    CS2's folder."""
     req.output_dir.mkdir(parents=True, exist_ok=True)
     if raw_dir.exists():
         shutil.rmtree(raw_dir)
-    req.demo_path.with_name(req.demo_path.name + ".json").unlink(missing_ok=True)    # CS:DM's file for its own render
     hlae_files.ensure_ffmpeg_ini(hlae_exe, hlae_ffmpeg)
     hlae_files.write_cfgs(cfgs, files)
 
@@ -355,7 +353,7 @@ def render(
     load_inputs: Callable[[str], RenderInputs | None],
     cs2_exe: Path | None,
     hlae_exe: Path | None,
-    hlae_ffmpeg: Path,
+    hlae_ffmpeg: Path | None,
     ffmpeg: str,
     launch: Callable[[list[str], IO[str]], subprocess.Popen] = _launch,
     guard: Callable[[subprocess.Popen], None] = winjob.guard,
@@ -368,10 +366,10 @@ def render(
     abort_sweep_seconds: float = 30.0,
     max_launches: int = 3,
 ) -> RenderResult:
-    """Records the Clips of `req` through HLAE, or says why it could not. `cs2_exe` and `hlae_exe` are where they were
-    found (None: nowhere), `load_inputs` gives what the plan needs from CS:DM's database for a Demo's checksum,
-    `hlae_ffmpeg` is the FFmpeg HLAE records with and `ffmpeg` the one that joins the recordings. What happens goes
-    into `req.log_path` as it happens."""
+    """Records the Clips of `req` through HLAE, or says why it could not. `cs2_exe`, `hlae_exe` and `hlae_ffmpeg`, the
+    FFmpeg HLAE records with, are where they were found (None: nowhere); `load_inputs` gives what the plan needs from the
+    analysis of a Demo's match, by its checksum, and `ffmpeg` is the FFmpeg that joins the recordings. What happens
+    goes into `req.log_path` as it happens."""
     req.log_path.parent.mkdir(parents=True, exist_ok=True)
     with keep_awake(), open(req.log_path, "w", encoding="utf-8", errors="replace", newline="\n") as log_file:
 
@@ -392,14 +390,16 @@ def render(
             return RenderResult(ok=False, failure=text)
 
         if cs2_exe is None:
-            return fail("CS2 not found: no cs2.exe in CS:DM's custom location or any Steam library")
+            return fail("CS2 not found: no cs2.exe in any Steam library")
         if hlae_exe is None:
             return fail("HLAE not found")
+        if hlae_ffmpeg is None:
+            return fail("FFmpeg not found")
         if not probe.running("steam.exe"):
             return fail("Steam is not running")
         inputs = load_inputs(req.checksum)
         if inputs is None:
-            return fail("CS:DM's database has no analysis of this Demo")
+            return fail("the app has no analysis of this Demo")
         raw_dir = req.output_dir / "raw"
         try:
             sequences = hlae_plan.build_sequences(

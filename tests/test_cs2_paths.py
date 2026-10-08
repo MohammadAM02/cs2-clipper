@@ -1,14 +1,13 @@
-"""Tests for clipper.cs2_paths: where CS2 lives. Every Steam library, CS:DM settings file and registry here is
-a fake under tmp_path (or a stand-in winreg): nothing reads the real registry, Steam or CS:DM."""
+"""Tests for clipper.cs2_paths: where CS2 lives. Every Steam library and registry here is a fake under tmp_path
+(or a stand-in winreg): nothing reads the real registry or Steam."""
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
 import pytest
 
-from clipper import cs2_paths, csdm_settings
+from clipper import cs2_paths
 
 CS2 = Path(r"D:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive\game\bin\win64\cs2.exe")
 INSTALL = Path("steamapps") / "common" / "Counter-Strike Global Offensive"
@@ -56,12 +55,6 @@ def write_library_folders(steam: Path, *libraries: Path) -> None:
     vdf.write_text('"libraryfolders"\n{\n' + sections + "}\n", encoding="utf-8")
 
 
-def write_playback(home: Path, playback: dict) -> None:
-    settings = csdm_settings.settings_file(home)
-    settings.parent.mkdir(parents=True, exist_ok=True)
-    settings.write_text(json.dumps({"schemaVersion": 13, "playback": playback}), encoding="utf-8")
-
-
 class FakeKey:
     def __init__(self, values: dict):
         self.values = values
@@ -94,10 +87,6 @@ class FakeWinreg:
 
 def use_registry(monkeypatch, keys: dict) -> None:
     monkeypatch.setitem(sys.modules, "winreg", FakeWinreg(keys))
-
-
-def steam_must_not_be_read():
-    raise AssertionError("Steam was looked up")
 
 
 def test_the_csgo_folder_is_game_csgo_three_folders_up_from_the_executable():
@@ -166,57 +155,11 @@ def test_no_steampath_in_the_registry_is_none(monkeypatch, keys):
     assert cs2_paths.registry_steam_path() is None
 
 
-def test_a_custom_cs2_location_wins_over_steam(tmp_path):
-    home, steam = tmp_path / "csdm", tmp_path / "Steam"
-    make_cs2(steam)
-    custom = tmp_path / "mine" / "cs2.exe"
-    custom.parent.mkdir()
-    custom.write_bytes(b"")
-    write_playback(home, {"customCs2LocationEnabled": True, "cs2ExecutablePath": str(custom)})
-
-    assert cs2_paths.find_cs2_exe(home, steam_folder=lambda: steam) == custom
-
-
-def test_a_custom_cs2_location_is_not_used_unless_it_is_enabled(tmp_path):
-    home, steam = tmp_path / "csdm", tmp_path / "Steam"
-    exe = make_cs2(steam)
-    custom = tmp_path / "mine" / "cs2.exe"
-    custom.parent.mkdir()
-    custom.write_bytes(b"")
-    write_playback(home, {"customCs2LocationEnabled": False, "cs2ExecutablePath": str(custom)})
-
-    assert cs2_paths.find_cs2_exe(home, steam_folder=lambda: steam) == exe
-
-
-@pytest.mark.parametrize("playback", [
-    {"customCs2LocationEnabled": True, "cs2ExecutablePath": "no such folder\\cs2.exe"},
-    {"customCs2LocationEnabled": True, "cs2ExecutablePath": ""},
-    {"customCs2LocationEnabled": True, "cs2ExecutablePath": 5},
-    {"customCs2LocationEnabled": True},
-])
-def test_a_custom_cs2_location_that_is_no_file_leaves_it_to_steam(tmp_path, playback):
-    home, steam = tmp_path / "csdm", tmp_path / "Steam"
-    exe = make_cs2(steam)
-    write_playback(home, playback)
-
-    assert cs2_paths.find_cs2_exe(home, steam_folder=lambda: steam) == exe
-
-
-@pytest.mark.parametrize("text", ["{not json", "[]", '{"schemaVersion": 13, "playback": []}'])
-def test_a_settings_file_that_cannot_be_used_leaves_it_to_steam(tmp_path, text):
-    home, steam = tmp_path / "csdm", tmp_path / "Steam"
-    exe = make_cs2(steam)
-    csdm_settings.settings_file(home).parent.mkdir(parents=True)
-    csdm_settings.settings_file(home).write_text(text, encoding="utf-8")
-
-    assert cs2_paths.find_cs2_exe(home, steam_folder=lambda: steam) == exe
-
-
 def test_cs2_is_found_in_the_steam_folder_when_there_is_no_libraryfolders_vdf(tmp_path):
     steam = tmp_path / "Steam"
     exe = make_cs2(steam)
 
-    assert cs2_paths.find_cs2_exe(tmp_path / "csdm", steam_folder=lambda: steam) == exe
+    assert cs2_paths.find_cs2_exe(steam_folder=lambda: steam) == exe
 
 
 def test_cs2_is_found_in_the_steam_folder_when_the_vdf_does_not_list_it(tmp_path):
@@ -224,7 +167,7 @@ def test_cs2_is_found_in_the_steam_folder_when_the_vdf_does_not_list_it(tmp_path
     exe = make_cs2(steam)
     write_library_folders(steam, elsewhere)
 
-    assert cs2_paths.find_cs2_exe(tmp_path / "csdm", steam_folder=lambda: steam) == exe
+    assert cs2_paths.find_cs2_exe(steam_folder=lambda: steam) == exe
 
 
 def test_cs2_is_found_in_another_library_that_libraryfolders_vdf_lists(tmp_path):
@@ -232,7 +175,7 @@ def test_cs2_is_found_in_another_library_that_libraryfolders_vdf_lists(tmp_path)
     write_library_folders(steam, steam, games)
     exe = make_cs2(games)
 
-    assert cs2_paths.find_cs2_exe(tmp_path / "csdm", steam_folder=lambda: steam) == exe
+    assert cs2_paths.find_cs2_exe(steam_folder=lambda: steam) == exe
 
 
 def test_the_first_library_that_has_cs2_wins_and_the_steam_folder_comes_after_the_vdf(tmp_path):
@@ -242,7 +185,7 @@ def test_the_first_library_that_has_cs2_wins_and_the_steam_folder_comes_after_th
     make_cs2(second)
     first_exe = make_cs2(first)
 
-    assert cs2_paths.find_cs2_exe(tmp_path / "csdm", steam_folder=lambda: steam) == first_exe
+    assert cs2_paths.find_cs2_exe(steam_folder=lambda: steam) == first_exe
 
 
 def test_a_library_that_has_no_cs2_is_skipped(tmp_path):
@@ -251,7 +194,7 @@ def test_a_library_that_has_no_cs2_is_skipped(tmp_path):
     empty.mkdir()
     exe = make_cs2(games)
 
-    assert cs2_paths.find_cs2_exe(tmp_path / "csdm", steam_folder=lambda: steam) == exe
+    assert cs2_paths.find_cs2_exe(steam_folder=lambda: steam) == exe
 
 
 def test_no_cs2_in_any_library_is_none(tmp_path):
@@ -259,20 +202,11 @@ def test_no_cs2_in_any_library_is_none(tmp_path):
     write_library_folders(steam, steam, games)
     games.mkdir()
 
-    assert cs2_paths.find_cs2_exe(tmp_path / "csdm", steam_folder=lambda: steam) is None
+    assert cs2_paths.find_cs2_exe(steam_folder=lambda: steam) is None
 
 
-def test_no_steam_folder_and_no_custom_location_is_none(tmp_path):
-    assert cs2_paths.find_cs2_exe(tmp_path / "csdm", steam_folder=lambda: None) is None
-
-
-def test_steam_is_not_looked_up_for_a_custom_cs2_location(tmp_path):
-    home = tmp_path / "csdm"
-    custom = tmp_path / "cs2.exe"
-    custom.write_bytes(b"")
-    write_playback(home, {"customCs2LocationEnabled": True, "cs2ExecutablePath": str(custom)})
-
-    assert cs2_paths.find_cs2_exe(home, steam_folder=steam_must_not_be_read) == custom
+def test_no_steam_folder_is_none():
+    assert cs2_paths.find_cs2_exe(steam_folder=lambda: None) is None
 
 
 def test_the_default_steam_folder_comes_from_the_registry(tmp_path, monkeypatch):
@@ -283,4 +217,4 @@ def test_the_default_steam_folder_comes_from_the_registry(tmp_path, monkeypatch)
         ("HKCU", r"Software\Valve\Steam"): {"SteamPath": registry_path[0].lower() + registry_path[1:]},
     })
 
-    assert cs2_paths.find_cs2_exe(tmp_path / "csdm") == exe
+    assert cs2_paths.find_cs2_exe() == exe

@@ -1,6 +1,6 @@
 # Derive Highlights from CS:DM's analysis instead of a second parser
 
-**Status**: accepted
+**Status**: superseded by [0004](0004-analyze-with-csda-render-with-hlae.md)
 
 CS:DM's analyzer already persists everything a Highlight needs. Its Postgres database (56 tables on a
 fully analyzed match) contains a `clutches` table with `round_number`, `tick`, `clutcher_name`,

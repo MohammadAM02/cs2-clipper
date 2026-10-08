@@ -1,11 +1,10 @@
 """Tests for clipper.app: start-up order, the worker thread, quit, headless run (spec: How the app
 runs; The terminal; When something goes wrong; Testing).
 
-Fakes and tmp folders throughout: no real csdm, CS2, Postgres or network. `step`'s tests use a fake
+Fakes and tmp folders throughout: no real csda, HLAE, CS2 or network. `step`'s tests use a fake
 `problems` and a fake `build` so a "clear" pass never touches build_worker's real subsystems."""
 from __future__ import annotations
 
-import json
 import logging
 import socket
 import threading
@@ -16,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from clipper import app as app_module, checks, cs2_paths, hlae_render, paths, web
+from clipper import checks, cs2_paths, hlae_render, paths, web
 from clipper.app import (
     PAGES, AlreadyRunning, App, ask_to_quit, build_worker, find_running, gate_reasons, hand_over, quit_running, run,
     run_headless, single_instance, start_match_alerts,
@@ -90,61 +89,44 @@ def test_gate_reasons_names_the_missing_clips_folder_when_none_is_set():
     assert gate_reasons(Config(), probe=None) == ("no clips folder is set",)
 
 
-# --- build_worker: which renderer a Render Job goes to ----------------------------------------------
+# --- build_worker: what a Demo is analyzed and a Render Job recorded with ------------------------------
 
 
-class Renderers:
-    """Stands in for both renderers and for the search for cs2.exe (the real one reads the registry), and keeps
+class Renderer:
+    """Stands in for the HLAE renderer and for the search for cs2.exe (the real one reads the registry), and keeps
     what each was called with."""
 
     def __init__(self):
         self.result = RenderResult(ok=False, failure="from a fake renderer")
-        self.csdm_calls: list[tuple] = []       # (request, keyword arguments)
-        self.hlae_calls: list[tuple] = []
-        self.cs2_exes: list = []                # what the search finds, one answer per search
-        self.searched_in: list = []
+        self.calls: list[tuple] = []        # (request, keyword arguments)
+        self.cs2_exes: list = []            # what the search finds, one answer per search
 
-    def csdm(self, request, **kwargs):
-        self.csdm_calls.append((request, kwargs))
+    def render(self, request, **kwargs):
+        self.calls.append((request, kwargs))
         return self.result
 
-    def hlae(self, request, **kwargs):
-        self.hlae_calls.append((request, kwargs))
-        return self.result
-
-    def find_cs2_exe(self, csdm_home):
-        self.searched_in.append(csdm_home)
+    def find_cs2_exe(self):
         return self.cs2_exes.pop(0)
 
 
 @pytest.fixture
-def renderers(monkeypatch):
-    renderers = Renderers()
-    monkeypatch.setattr(app_module, "render", renderers.csdm)
-    monkeypatch.setattr(hlae_render, "render", renderers.hlae)
-    monkeypatch.setattr(cs2_paths, "find_cs2_exe", renderers.find_cs2_exe)
-    return renderers
+def renderer(monkeypatch):
+    renderer = Renderer()
+    monkeypatch.setattr(hlae_render, "render", renderer.render)
+    monkeypatch.setattr(cs2_paths, "find_cs2_exe", renderer.find_cs2_exe)
+    return renderer
 
 
 @pytest.fixture
-def built(tmp_path, renderers):
-    """`built(**settings)` is the Worker `build_worker` gives for a Config in `tmp_path`: a CS:DM home whose settings
-    name a database, HLAE and FFmpeg, and no match alerts. Nothing connects, runs or looks at the PC."""
-    home = tmp_path / "home"
-    (home / ".csdm").mkdir(parents=True)
-    (home / ".csdm" / "settings.json").write_text(json.dumps({
-        "database": {"hostname": "localhost", "port": 5432, "username": "csdm", "password": "p", "database": "csdm"},
-        "video": {
-            "hlae": {"customLocationEnabled": True, "customExecutableLocation": str(tmp_path / "hlae" / "HLAE.exe")},
-            "ffmpegSettings": {"customLocationEnabled": True,
-                               "customExecutableLocation": str(tmp_path / "ffmpeg" / "ffmpeg.exe")},
-        },
-    }), encoding="utf-8")
+def built(tmp_path, renderer):
+    """`built(**settings)` is the Worker `build_worker` gives for a Config in `tmp_path`, with an empty tools
+    folder and no match alerts. Nothing runs or looks at the PC."""
     indexes = []
 
     def build(**settings):
         cfg = Config(downloads_dir=tmp_path / "downloads", data_root=tmp_path / "clips",
-                     index_path=tmp_path / "clipper.sqlite", csdm_home=home, match_alerts=False, **settings)
+                     index_path=tmp_path / "clipper.sqlite", tools_dir=tmp_path / "tools",
+                     analyses_dir=tmp_path / "analyses", match_alerts=False, **settings)
         indexes.append(Index(cfg.index_path))
         return build_worker(cfg, indexes[-1], state=AppState(), stop=StopRequest(), deletes=DeleteRequest(),
                             page_url=None, pages_off=None)
@@ -152,6 +134,12 @@ def built(tmp_path, renderers):
     yield build
     for index in indexes:
         index.close()
+
+
+def _touch(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.touch()
+    return path
 
 
 def _render_request(tmp_path) -> RenderRequest:
@@ -162,54 +150,57 @@ def _render_request(tmp_path) -> RenderRequest:
     )
 
 
-def test_a_render_job_goes_to_csdm_unless_the_setting_says_hlae(built, renderers, tmp_path):
+def test_demos_are_analyzed_by_the_csda_setup_installs_into_the_apps_analyses(built):
     worker = built()
-    request, abort = _render_request(tmp_path), lambda: False
-    assert worker.services.render(request, abort) is renderers.result
-    assert renderers.hlae_calls == [] and renderers.searched_in == []       # CS2 is not looked for
-    [(given, kwargs)] = renderers.csdm_calls
-    assert given is request
-    assert set(kwargs) == {"csdm", "probe", "should_abort", "stall_seconds", "launch_timeout_seconds", "duration_of"}
-    assert kwargs["should_abort"] is abort
-    assert kwargs["csdm"].home == worker.cfg.csdm_home
-    assert (kwargs["stall_seconds"], kwargs["launch_timeout_seconds"]) == (180.0, 300.0)
+    analyses = worker.services.facts
+    assert (analyses.folder, analyses.csda_exe) == (worker.cfg.analyses_dir, worker.cfg.tools_dir / "csda" / "csda.exe")
+    assert worker.services.analyze == analyses.analyze      # a method of the one instance the facts come from
 
 
-def test_with_the_hlae_renderer_a_render_job_gets_what_it_drives_cs2_with(built, renderers, tmp_path):
+def test_a_render_job_goes_to_hlae_with_what_it_drives_cs2_with(built, renderer, tmp_path):
     cs2_exe = tmp_path / "steam" / "game" / "bin" / "win64" / "cs2.exe"
-    renderers.cs2_exes = [cs2_exe]
-    worker = built(renderer="hlae", stall_seconds=90.0, launch_timeout_seconds=240.0, ffmpeg="the-ffmpeg")
+    renderer.cs2_exes = [cs2_exe]
+    hlae = _touch(tmp_path / "HLAE" / "HLAE.exe")
+    ffmpeg = _touch(tmp_path / "ffmpeg" / "ffmpeg.exe")
+    worker = built(hlae_exe=str(hlae), ffmpeg=str(ffmpeg), stall_seconds=90.0, launch_timeout_seconds=240.0)
     request, abort = _render_request(tmp_path), lambda: False
-    assert worker.services.render(request, abort) is renderers.result
-    assert renderers.csdm_calls == []
-    assert renderers.searched_in == [worker.cfg.csdm_home]
-    [(given, kwargs)] = renderers.hlae_calls
+    assert worker.services.render(request, abort) is renderer.result
+    [(given, kwargs)] = renderer.calls
     assert given is request
     assert set(kwargs) == {"probe", "should_abort", "stall_seconds", "launch_timeout_seconds", "duration_of",
                            "load_inputs", "cs2_exe", "hlae_exe", "hlae_ffmpeg", "ffmpeg"}
     assert kwargs["should_abort"] is abort
     assert (kwargs["stall_seconds"], kwargs["launch_timeout_seconds"]) == (90.0, 240.0)
     assert kwargs["cs2_exe"] == cs2_exe
-    assert kwargs["hlae_exe"] == tmp_path / "hlae" / "HLAE.exe"             # the one CS:DM's settings name
-    assert kwargs["hlae_ffmpeg"] == tmp_path / "ffmpeg" / "ffmpeg.exe"      # CS:DM's FFmpeg, the one HLAE records with
-    assert kwargs["ffmpeg"] == "the-ffmpeg"                                 # ours, for the mux
+    assert kwargs["hlae_exe"] == hlae               # the setting's
+    assert kwargs["hlae_ffmpeg"] == ffmpeg          # the FFmpeg HLAE records with is ours, found
+    assert kwargs["ffmpeg"] == str(ffmpeg)          # and the mux's is the setting as it is
 
 
-def test_the_hlae_renderer_reads_its_plan_through_the_same_facts_as_the_worker(built, renderers, tmp_path):
-    renderers.cs2_exes = [None]
-    worker = built(renderer="hlae")
+def test_hlae_and_ffmpeg_that_are_nowhere_reach_the_renderer_as_none(built, renderer, tmp_path):
+    renderer.cs2_exes = [None]
+    worker = built(ffmpeg=str(tmp_path / "no-ffmpeg" / "ffmpeg.exe"))      # and no HLAE in the tools folder
     worker.services.render(_render_request(tmp_path), lambda: False)
-    [(_, kwargs)] = renderers.hlae_calls
+    [(_, kwargs)] = renderer.calls
+    assert (kwargs["cs2_exe"], kwargs["hlae_exe"], kwargs["hlae_ffmpeg"]) == (None, None, None)
+
+
+def test_the_renderer_reads_its_plan_through_the_same_analyses_as_the_worker(built, renderer, tmp_path):
+    renderer.cs2_exes = [None]
+    worker = built()
+    worker.services.render(_render_request(tmp_path), lambda: False)
+    [(_, kwargs)] = renderer.calls
     assert kwargs["load_inputs"] == worker.services.facts.render_inputs     # a method of the one instance
 
 
-def test_cs2_is_looked_for_again_for_every_render_job(built, renderers, tmp_path):
+def test_cs2_and_hlae_are_looked_for_again_for_every_render_job(built, renderer, tmp_path):
     cs2_exe = tmp_path / "cs2.exe"
-    renderers.cs2_exes = [None, cs2_exe]
-    worker = built(renderer="hlae")
+    renderer.cs2_exes = [None, cs2_exe]
+    worker = built()
     worker.services.render(_render_request(tmp_path), lambda: False)
+    hlae = _touch(worker.cfg.tools_dir / "hlae" / "HLAE.exe")       # Setup installed it in between
     worker.services.render(_render_request(tmp_path), lambda: False)
-    assert [kwargs["cs2_exe"] for _, kwargs in renderers.hlae_calls] == [None, cs2_exe]
+    assert [(kwargs["cs2_exe"], kwargs["hlae_exe"]) for _, kwargs in renderer.calls] == [(None, None), (cs2_exe, hlae)]
 
 
 # --- App.step: fakes for problems and build --------------------------------------------------------
@@ -323,11 +314,11 @@ def world(tmp_path):
 
 
 def test_problems_keep_the_worker_from_being_built_or_ticked_and_are_published(world):
-    world.problems.problems = ["Postgres won't start"]
+    world.problems.problems = ["csda was not found"]
     delay = world.app.step(world.index)
     assert delay == world.store.current().config.poll_seconds
     assert world.build.calls == []
-    assert world.state.snapshot().problems == ("Postgres won't start",)
+    assert world.state.snapshot().problems == ("csda was not found",)
 
 
 def test_the_worker_is_built_with_the_delete_request_the_status_page_uses(world):
@@ -372,14 +363,16 @@ def test_a_changed_setting_rebuilds_the_worker(world):
     assert world.build.workers[-1] is not first_worker
 
 
-def test_a_changed_renderer_is_in_the_config_of_the_rebuilt_worker(world):
+def test_a_changed_hlae_path_is_in_the_config_of_the_rebuilt_worker(world, tmp_path):
     world.app.step(world.index)
-    assert world.build.calls[-1][0].renderer == "csdm"
+    cfg = world.build.calls[-1][0]
+    assert cfg.hlae_path == cfg.tools_dir / "hlae" / "HLAE.exe"        # blank: the one Setup installs
 
-    assert world.store.save({"renderer": "hlae"}) == {}
+    hlae = _touch(tmp_path / "HLAE" / "HLAE.exe")
+    assert world.store.save({"hlae_exe": str(hlae)}) == {}
     world.app.step(world.index)
     assert len(world.build.calls) == 2
-    assert world.build.calls[-1][0].renderer == "hlae"
+    assert world.build.calls[-1][0].hlae_path == hlae
 
 
 def test_a_tick_that_raises_is_logged_and_the_next_pass_still_ticks(world, caplog):
@@ -395,14 +388,14 @@ def test_a_tick_that_raises_is_logged_and_the_next_pass_still_ticks(world, caplo
 
 
 def test_a_build_that_raises_publishes_a_problem_and_is_tried_again_after_the_recheck(world, caplog):
-    world.build.errors.append(RuntimeError("csdm.exe is gone"))
+    world.build.errors.append(RuntimeError("csda.exe is gone"))
 
     with caplog.at_level(logging.ERROR, logger="clipper.app"):
         delay = world.app.step(world.index)              # must not raise
 
     assert delay == world.store.current().config.poll_seconds
     assert "could not start the worker" in caplog.text
-    assert world.state.snapshot().problems == ("Couldn't start the worker: csdm.exe is gone",)
+    assert world.state.snapshot().problems == ("Couldn't start the worker: csda.exe is gone",)
     assert len(world.build.calls) == 1                   # it did try ...
     assert world.build.workers == []                     # ... and there is no worker
 
@@ -433,11 +426,11 @@ def test_the_worker_does_nothing_while_setup_runs(world):
     delay = world.app.step(world.index)
 
     assert delay == world.store.current().config.poll_seconds
-    assert (world.problems.calls, world.build.calls) == (0, [])     # no Postgres is started under setup's feet
+    assert (world.problems.calls, world.build.calls) == (0, [])     # nothing runs what setup is replacing
 
 
 def test_problems_are_looked_at_again_as_soon_as_setup_ends(world):
-    world.problems.problems = ["CS Demo Manager not found"]
+    world.problems.problems = ["csda was not found"]
     world.app.step(world.index)
     world.app.start_setup()
     world.problems.problems = []                 # setup installs it, and changes no setting
@@ -526,7 +519,7 @@ def test_the_worker_thread_outlives_a_pass_that_raises(world, tmp_path, monkeypa
     def problems(cfg):
         published.append(world.state.snapshot().problems)
         if len(published) == 1:
-            raise RuntimeError("pg_ctl vanished")      # the start-up check itself raises, once
+            raise RuntimeError("csda vanished")        # the start-up check itself raises, once
         second_check.set()
         return []
 
@@ -539,7 +532,7 @@ def test_the_worker_thread_outlives_a_pass_that_raises(world, tmp_path, monkeypa
         app.quit("now")
         assert app.wait(timeout=5.0) is True             # and it ended only because it was asked to
 
-    assert published[1] == ("The worker hit an error: pg_ctl vanished",)
+    assert published[1] == ("The worker hit an error: csda vanished",)
     assert "the worker hit an error" in caplog.text
 
 

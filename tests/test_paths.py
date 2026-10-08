@@ -41,9 +41,9 @@ def test_the_file_layout(tmp_path, monkeypatch):
     assert logs == paths.data_dir() / "logs"
     assert logs.is_dir()
 
-    csdm_home = paths.csdm_home()
-    assert csdm_home == paths.data_dir() / "csdm-home"
-    assert not csdm_home.exists()
+    for folder, name in ((paths.tools_dir(), "tools"), (paths.analyses_dir(), "analyses")):
+        assert folder == paths.data_dir() / name
+        assert not folder.exists()          # made when something goes in
 
 
 def test_atomic_write_text_replaces_an_existing_file_and_leaves_no_tmp(tmp_path):

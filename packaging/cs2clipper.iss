@@ -3,9 +3,9 @@
 ;
 ; The installer only puts the app on the PC: the exe under the user's own Programs folder, which takes no
 ; admin prompt, a Start Menu shortcut, and a sign-in shortcut that starts the app in the tray. What the
-; app needs to render (CS Demo Manager, Postgres, FFmpeg, HLAE) is installed by the app itself, from its
-; Status page or with `CS2Clipper.exe setup`. Uninstalling removes the exe and the shortcuts and leaves
-; %LOCALAPPDATA%\CS2Clipper, the user's settings, database and tools, alone.
+; app needs to analyze and render (csda, FFmpeg, HLAE) is installed by the app itself, from its Status
+; page or with `CS2Clipper.exe setup`. Uninstalling removes the exe and the shortcuts and leaves
+; %LOCALAPPDATA%\CS2Clipper, the user's settings, index, analyses and tools, alone.
 ;
 ; Adapted from thelifeofsuleyman/cs2-clipper's `packaging/aegis.iss` (MIT). What we changed: one exe
 ; instead of a folder, an install for this user only with no choice of folder, the version read from the

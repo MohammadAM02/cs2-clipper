@@ -36,12 +36,12 @@ def test_paused_by_failures():
 
 
 def test_a_single_problem():
-    assert summary(Snapshot(problems=("Postgres is not running",))) == "Postgres is not running"
+    assert summary(Snapshot(problems=("csda was not found",))) == "csda was not found"
 
 
 def test_more_than_one_problem_counts_the_rest():
-    snap = Snapshot(problems=("Postgres is not running", "CS Demo Manager not found", "HLAE not found"))
-    assert summary(snap) == "Postgres is not running (+2 more)"
+    snap = Snapshot(problems=("csda was not found", "FFmpeg was not found", "HLAE not found"))
+    assert summary(snap) == "csda was not found (+2 more)"
 
 
 def test_quitting_now():

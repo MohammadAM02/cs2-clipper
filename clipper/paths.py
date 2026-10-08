@@ -2,9 +2,9 @@
 
 ``%LOCALAPPDATA%\\CS2Clipper\\`` holds: ``settings.json`` (what you changed; defaults fill in the
 rest), ``clipper.sqlite`` (the index), ``clipper.lock`` (single instance), ``logs\\`` (clipper.log
-and one log per csdm call) and ``csdm-home\\`` (USERPROFILE for csdm processes, so CS:DM's settings
-are ``csdm-home\\.csdm\\settings.json``). The clips folder (Demos, renders, Reels) is unchanged and
-lives elsewhere.
+and one log per analysis and render), ``tools\\`` (the FFmpeg, HLAE and csda that Setup installs) and
+``analyses\\`` (what csda found in each match). The clips folder (Demos, renders, Reels) is unchanged
+and lives elsewhere.
 
 It is ``%LOCALAPPDATA%``, not Aegis's roaming ``%APPDATA%``, because this folder holds this PC's
 paths and databases, not things that should follow you to another machine. ``CLIPPER_DATA_DIR``
@@ -87,10 +87,15 @@ def logs_dir() -> Path:
     return path
 
 
-def csdm_home() -> Path:
-    """USERPROFILE for csdm processes. Not created here: a missing CS:DM settings folder must stay
-    visible as missing, rather than looking like a fresh empty one."""
-    return data_dir() / "csdm-home"
+def tools_dir() -> Path:
+    """Where Setup installs the programs the app runs. Not created here: Setup makes what it installs."""
+    return data_dir() / "tools"
+
+
+def analyses_dir() -> Path:
+    """One ``<checksum>.json`` per match: the part of csda's analysis the app keeps. Made by the first
+    analysis."""
+    return data_dir() / "analyses"
 
 
 def atomic_write_text(path: Path, text: str) -> None:

@@ -5,10 +5,10 @@ Copied from thelifeofsuleyman/cs2-clipper's `aegis/winjob.py` (MIT), with our ow
 kernel32 call so a 64-bit handle is never silently truncated (Aegis leaves some undeclared), and
 `AssignProcessToJobObject`'s result checked instead of ignored.
 
-Why this exists here: rendering runs `csdm video`, which launches HLAE, which launches a hooked CS2;
-analysis runs `csdm analyze`. On Windows a child does NOT die when its parent is killed — so a crash,
-a Task Manager "End task", or a self-update that exits abruptly would leave csdm (and, we hope, HLAE
-and the hooked CS2 it started) running forever.
+Why this exists here: rendering runs HLAE, which launches a hooked CS2; analysis runs csda. On Windows
+a child does NOT die when its parent is killed — so a crash, a Task Manager "End task", or a
+self-update that exits abruptly would leave HLAE (and, we hope, the hooked CS2 it started) or csda
+running forever.
 
 Assigning a child to a Job Object created with KILL_ON_JOB_CLOSE means the OS terminates it the
 instant our process exits for ANY reason, because closing our last handle to the job triggers the
@@ -125,7 +125,7 @@ def _get_job() -> int | None:
             _job = job
             return _job
         except Exception as e:
-            log.warning("Job object unavailable (%s); csdm won't be auto-killed on crash", e)
+            log.warning("Job object unavailable (%s); HLAE and csda won't be auto-killed on crash", e)
             return None
 
 
@@ -134,7 +134,7 @@ def _warn_no_job_once() -> None:
     with _lock:
         already_warned, _warned_no_job = _warned_no_job, True
     if not already_warned:
-        log.warning("No job object available; csdm processes will not be auto-killed on crash")
+        log.warning("No job object available; HLAE and csda will not be auto-killed on crash")
 
 
 def guard(proc: subprocess.Popen) -> None:

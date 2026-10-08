@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "Hands-off CS2 highlight clipper: a FACEIT Demo in, Reels out."
 requires-python = ">=3.13"
 dependencies = [
-    "psycopg[binary]>=3.2",
     "psutil>=6.0",
     "zstandard>=0.23",
     "flask>=3.1.3",
@@ -34,6 +33,5 @@ packages = ["clipper"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
-    "integration: reads the local CS:DM Postgres (skipped when it is not reachable)",
     "ffmpeg: needs ffmpeg and ffprobe on PATH (skipped when missing)",
 ]

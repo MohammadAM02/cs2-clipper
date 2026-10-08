@@ -1,16 +1,13 @@
 """Where CS2 is, and the folders next to it that a recording through HLAE uses.
 
-Finds cs2.exe the way CS Demo Manager 3.20.1 does on Windows (``get-custom-counter-strike-executable-path.ts``,
-``get-steam-folder-path.ts``, ``get-csgo-folder-path.ts``): the custom location in its settings when that is
-enabled, else Steam's libraries, Steam's own folder from the registry and the others from ``libraryfolders.vdf``.
+Finds cs2.exe in Steam's libraries the way CS Demo Manager 3.20.1 does on Windows (``get-steam-folder-path.ts``,
+``get-csgo-folder-path.ts``): Steam's own folder from the registry and the others from ``libraryfolders.vdf``.
 Only reads: it launches nothing and writes nothing."""
 from __future__ import annotations
 
 import re
 from collections.abc import Callable
 from pathlib import Path
-
-from clipper import csdm_settings
 
 # Where Steam puts CS2 inside a library.
 _CS2_IN_LIBRARY = Path("steamapps/common/Counter-Strike Global Offensive/game/bin/win64/cs2.exe")
@@ -69,29 +66,9 @@ def _libraries(steam: Path) -> list[Path]:
     return libraries if steam in libraries else [*libraries, steam]
 
 
-def _custom_exe(csdm_home: Path) -> Path | None:
-    """The custom CS2 location in CS:DM's settings (``playback.customCs2LocationEnabled`` and
-    ``playback.cs2ExecutablePath``), when it is enabled and names a file."""
-    try:
-        settings = csdm_settings.read(csdm_home)
-    except csdm_settings.SettingsError:
-        return None
-    playback = (settings or {}).get("playback")
-    if not isinstance(playback, dict) or not playback.get("customCs2LocationEnabled"):
-        return None
-    path = playback.get("cs2ExecutablePath")
-    if isinstance(path, str) and path and Path(path).is_file():
-        return Path(path)
-    return None
-
-
-def find_cs2_exe(csdm_home: Path, *, steam_folder: Callable[[], Path | None] = steam_folder) -> Path | None:
-    """cs2.exe, or None when there is none to be found: the custom location in CS:DM's settings (under
-    ``csdm_home``) when it is enabled and the file is there, else the first Steam library that has it.
-    ``steam_folder`` gives Steam's folder, by default as the registry has it."""
-    custom = _custom_exe(csdm_home)
-    if custom is not None:
-        return custom
+def find_cs2_exe(*, steam_folder: Callable[[], Path | None] = steam_folder) -> Path | None:
+    """cs2.exe, or None when there is none to be found: the first Steam library that has it. ``steam_folder``
+    gives Steam's folder, by default as the registry has it."""
     steam = steam_folder()
     if steam is None:
         return None

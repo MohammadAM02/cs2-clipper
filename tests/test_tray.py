@@ -63,9 +63,9 @@ def test_the_tooltip_has_a_second_line_when_the_pages_are_off():
 
 
 def test_the_tooltip_is_cut_to_the_127_characters_windows_shows():
-    text = tray.tooltip(Snapshot(problems=("Postgres won't start: " + "x" * 300,), pages_off="no free port"))
+    text = tray.tooltip(Snapshot(problems=("csda was not found in " + "x" * 300,), pages_off="no free port"))
     assert len(text) == 127
-    assert text.startswith("Postgres won't start: xxx")
+    assert text.startswith("csda was not found in xxx")
     assert text.endswith("…")
 
 

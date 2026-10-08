@@ -74,6 +74,7 @@ class World:
         self.launch_error: Exception | None = None
         self.ffmpeg_failure: str | None = None
         self.makes_clips = True
+        self.ffmpeg_busy = 0                    # how many more times an ffmpeg.exe is seen running when asked
         self.scripts: list[list[tuple]] = []    # the script of the first launch, of the second, ...
         self.before_look: list[tuple] = []      # events that happen just before the probe is next asked, once due
         # what happened
@@ -116,6 +117,9 @@ class World:
         return True
 
     def running(self, name: str) -> bool:
+        if name == "ffmpeg.exe":
+            busy, self.ffmpeg_busy = self.ffmpeg_busy > 0, max(0, self.ffmpeg_busy - 1)
+            return busy
         return self.steam if name == "steam.exe" else False
 
     def hooked_cs2_running(self) -> bool:
@@ -156,7 +160,7 @@ class World:
         return self.error_window
 
     def run_ffmpeg(self, command, **kwargs):
-        self.trace.append("mux")
+        self.trace.append("mux" if not self.ffmpeg_busy else "mux while an ffmpeg.exe ran")
         self.ffmpeg_calls.append(list(command))
         if self.ffmpeg_failure is not None:
             return SimpleNamespace(returncode=1, stderr=self.ffmpeg_failure)
@@ -735,6 +739,25 @@ def test_a_sequence_without_its_done_marker_fails_the_job(world, req):
     assert result.failure == "Sequence 2 never finished recording"
     assert world.ffmpeg_calls == []
     assert_clean(world)
+
+
+def test_the_mux_waits_for_hlaes_ffmpeg_to_finish_the_last_video(world, req):
+    world.scripts = [game()]
+    world.ffmpeg_busy = 3                   # still writing the end of the last video when CS2 has gone
+    result = run(world, req)
+    assert result.ok
+    assert "mux while an ffmpeg.exe ran" not in world.trace
+    assert world.trace.count("mux") == 2
+    assert "waiting for HLAE's FFmpeg to finish the recordings" in world.log()
+
+
+def test_an_ffmpeg_that_does_not_end_holds_the_mux_back_only_so_long(world, req, monkeypatch):
+    monkeypatch.setattr(hlae_render, "FFMPEG_WAIT_S", 5.0)
+    world.scripts = [game()]
+    world.ffmpeg_busy = 10**6               # another program's FFmpeg looks the same
+    result = run(world, req)
+    assert result.ok
+    assert "an ffmpeg.exe was still running after 5 s; joining the recordings anyway" in world.log()
 
 
 def test_a_failed_mux_fails_the_job(world, req):

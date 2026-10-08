@@ -30,6 +30,7 @@ from clipper.windows import keep_awake
 CONSOLE_TAIL_LINES = 40         # how many of console.log's last lines go into the log when a Render Job fails
 LEFTOVER_PAUSE_S = 2.0          # after closing a hooked CS2 an earlier run left, so it lets go of its files
 HLAE_ERROR_TITLE = "Error - AfxHookSource"      # the title of the window HLAE opens when it cannot hook this CS2
+FFMPEG_WAIT_S = 60.0            # the longest the mux waits for HLAE's FFmpeg to finish the videos after the game
 SETTINGS = hlae_plan.VideoSettings()            # what the cfg files record with, which the mux has to expect too
 
 
@@ -273,6 +274,21 @@ def _watch(env: _Env, game: _Launch) -> _Outcome:
         env.sleep(env.poll_seconds)
 
 
+def _wait_for_ffmpeg(env: _Env, seconds: float) -> None:
+    """HLAE's FFmpeg finishes a video file after its recording ends, so it may still be writing the last one when CS2
+    has gone. The mux waits for it, but at most `seconds`: another program's ffmpeg.exe looks the same."""
+    deadline = env.clock() + seconds
+    said = False
+    while env.probe.running("ffmpeg.exe"):
+        if env.clock() >= deadline:
+            env.say(f"an ffmpeg.exe was still running after {seconds:g} s; joining the recordings anyway")
+            return
+        if not said:
+            env.say("waiting for HLAE's FFmpeg to finish the recordings")
+            said = True
+        env.sleep(env.poll_seconds)
+
+
 def _launch_once(env: _Env, command: list[str], number: int, total: int) -> _Outcome:
     """Starts HLAE.exe once and watches the game it starts. Whatever happens, no game or HLAE.exe is left running."""
     if env.probe.hooked_cs2_running():
@@ -427,6 +443,7 @@ def render(
         for sequence in sequences:
             if sequence.number not in outcome.done:
                 return fail(f"Sequence {sequence.number} never finished recording", console)
+        _wait_for_ffmpeg(env, FFMPEG_WAIT_S)
         say(f"mux: joining {_plural(len(sequences), 'Sequence')} into Clips")
         try:
             hlae_files.mux(ffmpeg, raw_dir, sequences, req.output_dir, record_audio=SETTINGS.record_audio,

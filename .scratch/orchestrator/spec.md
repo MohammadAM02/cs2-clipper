@@ -15,7 +15,7 @@ per-match input. CS:DM deliberately does not do this; everything around its CLI 
 | Topic | Decision |
 | --- | --- |
 | Intake | Watch the user's **Downloads** folder for FACEIT Demo files |
-| When to render | **As soon as the Gate is clear**: CS2 closed, FACEIT AC not running, CS:DM GUI closed |
+| When to render | **As soon as the Gate is clear**: CS2 closed, FACEIT AC not running, enough free disk space |
 | What to render | The **top 5 Highlights by Score** per Demo, each in both Perspectives |
 | Run model | A **background app** started at sign-in by Task Scheduler |
 | Who picks Sequences | **CS:DM**, via `--rounds` with the selected rounds (the only verified form) |
@@ -29,7 +29,7 @@ per-match input. CS:DM deliberately does not do this; everything around its CLI 
 
 ## Safety
 
-CS2 is launched only by CS:DM, hooked by HLAE, for offline Demo playback with `-insecure`. New in
+CS2 is launched only by the app, through HLAE, for offline Demo playback with `-insecure`. New in
 this spec: **a hooked CS2 never runs while FACEIT AC is running.** FACEIT AC is installed on this
 machine: its kernel driver (`FACEIT_AC.sys`) loads at boot, and the phase-1 renders succeeded with it
 loaded; its service (`FACEITService`) starts with the FACEIT client. The Gate refuses while that
@@ -67,38 +67,38 @@ processes it starts.
 
 ## The Gate
 
-The Gate is the check that must pass before anything launches CS2. It is evaluated every 15 s while
+The Gate is the check that must pass before anything launches CS2. It is evaluated every 5 s while
 a Render Job waits:
 
 1. no `cs2.exe` is running;
 2. the `FACEITService` service is stopped and no process whose name starts with `faceit`
    (case-insensitive) is running — the exact client process names are confirmed with the FACEIT
    client open during build step 5;
-3. no `cs-demo-manager.exe` is running that the app did not start itself (a GUI breaks headless
-   renders: it runs with the real profile, which cannot hold CS:DM's app folder on this machine, and
-   it holds port 4574, the port `csdm video` uses to talk to CS2). Any `cs-demo-manager.exe` left
-   behind by the app's own csdm calls is stopped after each call;
-4. at least 5 GB is free on E:;
-5. no other Render Job is running.
+3. at least 5 GB (the `min_free_gb` setting) is free on the drive that holds the clips folder (the
+   `data_root` setting);
+4. no other Render Job is running.
 
-When the Gate first blocks on condition 3, the app notifies the user once ("close CS Demo Manager so
-rendering can start"). It never kills a CS:DM instance it did not start.
+An earlier version of this spec had a condition between 2 and 3: no `cs-demo-manager.exe` running that
+the app did not start. A CS:DM GUI broke `csdm video` renders: it held port 4574, the port `csdm video`
+used to talk to CS2. The condition went with CS:DM (ADR 0004): the app renders through HLAE itself, and
+a CS:DM left open no longer matters.
 
 **Heads-up.** When the Gate clears, the app shows a notification ("Rendering 5 Highlights from
 de_inferno, about 5 minutes") and waits 30 s; if the Gate closes during that wait, the launch is
 cancelled.
 
 **While rendering**, condition 2 is re-checked every 5 s. If FACEIT AC appears, the app closes the
-hooked CS2 immediately, stops csdm once no hooked CS2 is left, and keeps closing any hooked CS2 that
-appears for 30 s afterwards (HLAE may still be starting one). The attempt is recorded as `aborted`,
-which does not count as a failure, and the job is queued again. A CS:DM GUI opened mid-render is not
-watched for: if it breaks the attempt, that is an ordinary failure. While a render runs, the app also
-asks Windows not to sleep.
+hooked CS2 immediately, ends HLAE.exe, and keeps closing any hooked CS2 that appears for 30 s
+afterwards (HLAE may still be starting one). The attempt is recorded as `aborted`, which does not
+count as a failure, and the job is queued again. While a render runs, the app also asks Windows not
+to sleep.
 
 **The hooked CS2** is the `cs2.exe` whose command line contains `-insecure`; only renders start CS2
-that way. Every "close CS2" in this spec means closing the hooked CS2 — the app never closes a CS2
-the user started. If csdm exits normally and a hooked CS2 is still running, it is left alone and the
-Gate holds further renders until it has closed.
+that way (the app passes it through HLAE). Every "close CS2" in this spec means closing the hooked
+CS2 — the app never closes a CS2 the user started. A render never leaves a hooked CS2 or HLAE.exe
+running: a hooked CS2 still running 120 s after its last recording is closed, and one an earlier run
+left behind is closed before the next launch. While one runs, the Gate stays closed (condition 1),
+as for any CS2.
 
 ## Rendering
 

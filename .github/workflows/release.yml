@@ -116,14 +116,22 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+
       - uses: actions/download-artifact@v8
         with:
           name: CS2Clipper-Setup
           path: dist
 
+      # The notes are the version's section of CHANGELOG.md, which the app shows when it offers the update
+      # (clipper.update). The tests have checked that the version has one.
       - name: Publish the Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v heading="## $version" '/^## / { if (found) exit; found = ($0 == heading); next } found' \
+            CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "CHANGELOG.md has no '## $version' section" >&2; exit 1; fi
           gh release create "$GITHUB_REF_NAME" dist/CS2Clipper-Setup.exe --repo "$GITHUB_REPOSITORY" \
-            --title "CS2 Clipper ${GITHUB_REF_NAME#v}" --generate-notes --verify-tag
+            --title "CS2 Clipper $version" --notes-file notes.md --verify-tag

@@ -120,6 +120,14 @@ def _window_scripts() -> None:
         raise FileNotFoundError(api)
 
 
+def _version() -> None:
+    """The app reads its version, which its updates compare with GitHub's, from pyproject.toml: in the exe
+    only when the spec brings it."""
+    from clipper import update
+
+    update.running_version()
+
+
 MAIN_CHECKS: tuple[Check, ...] = (
     ("DLL search path", _dll_search_path),
     ("tray", _tray),
@@ -127,6 +135,7 @@ MAIN_CHECKS: tuple[Check, ...] = (
     ("Demo unpacking", _demos),
     ("HTTPS", _https),
     ("pages", _pages),
+    ("version", _version),
 )
 WINDOW_CHECKS: tuple[Check, ...] = (("window", _window), ("window scripts", _window_scripts))
 

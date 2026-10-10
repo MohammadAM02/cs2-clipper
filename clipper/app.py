@@ -47,7 +47,7 @@ from pathlib import Path
 
 from clipper import (
     analysis, applog, checks, cs2_paths, faceit_oauth, hlae_render, move_in, packaged, paths, protect, provision,
-    settings, tray, web,
+    settings, tray, update, web,
 )
 from clipper.alerts import MatchAlerts
 from clipper.config import Config
@@ -71,7 +71,7 @@ from clipper.worker import DeleteRequest, Services, StopRequest, Worker, delete_
 log = logging.getLogger(__name__)
 
 CHECKS_CACHE_SECONDS = 15.0            # the Status page polls every 2 s; some checks are not free
-RELEASES_INTERVAL_SECONDS = 10 * 60.0  # HlaeReleases.refresh_if_due only asks GitHub when it is due
+RELEASES_INTERVAL_SECONDS = 10 * 60.0  # HlaeReleases and Updates only ask GitHub when it is due
 WORKER_ERROR_WAIT_SECONDS = 30.0       # how long the worker thread waits after a pass that raised
 QUIT_WAIT_SECONDS = 60.0               # how long `clipper quit` waits for the running copy to end
 QUIT_LOOK_SECONDS = 0.25               # and how often it looks whether it has
@@ -185,8 +185,9 @@ def gate_reasons(cfg: Config, probe: ProcessProbe) -> tuple[str, ...]:
 
 class App:
     """One running copy: its settings, what it is doing (`state`), the web server, the window, the
-    worker thread and Setup. `problems`, `build`, `launcher` (given the web server's base URL) and
-    `setup` are swappable so tests never touch real csda/HLAE/CS2, open a window or install anything."""
+    worker thread, Setup and the app's own updates. `problems`, `build`, `launcher` (given the web
+    server's base URL), `setup` and `updates` are swappable so tests never touch real csda/HLAE/CS2,
+    open a window, ask GitHub or install anything."""
 
     def __init__(self, settings: SettingsStore, *, index_path: Path, state: AppState | None = None,
                  stop: StopRequest | None = None,
@@ -194,6 +195,7 @@ class App:
                  build: Callable[..., Worker] = build_worker,
                  launcher: Callable[[str], WindowLauncher] = WindowLauncher,
                  setup: Callable[..., provision.Setup] = provision.Setup,
+                 updates: Callable[..., update.Updates] = update.Updates,
                  recheck_seconds: float = 60.0, clock: Callable[[], float] = time.monotonic):
         self.settings = settings
         self.state = state if state is not None else AppState()
@@ -201,6 +203,9 @@ class App:
         self.deletes = DeleteRequest()          # the Status page's deletes, shared with every worker built
         self.releases = checks.HlaeReleases()
         self.setup = setup(self._setup_context, after=self._after_setup)
+        self.updates = updates(current=update.running_version(), enabled=packaged.frozen(),
+                               folder=lambda: paths.data_dir() / "downloads", logs=paths.logs_dir,
+                               busy=self._update_refused, announce=self._announce_update)
         self.page_port: int | None = None
         self._index_path = index_path
         self._problems = problems
@@ -248,6 +253,8 @@ class App:
             faceit_lookup=self.faceit_lookup,
             setup_status=self.setup.status,
             start_setup=self.start_setup,
+            update_status=self.updates.status,
+            start_update=self.start_update,
             delete_demo=self.delete_demo,
         )
         try:
@@ -530,11 +537,32 @@ class App:
         checks look at the PC again, rather than at what they found before."""
         self._setups_ended += 1
 
+    # --- the app's own updates ----------------------------------------------------------------------
+
+    def start_update(self) -> str | None:
+        """Starts the update to the newer version on offer. Returns why not, in words for the user."""
+        return self.updates.start()
+
+    def _update_refused(self) -> str | None:
+        """Why the app cannot be updated now: the installer quits the app, which would stop a render, or Setup
+        halfway through installing the tools."""
+        if self.state.snapshot().rendering is not None:
+            return "A Reel is rendering. Update once it is done."
+        if self.setup.running:
+            return "Set up is running. Update once it is done."
+        return None
+
+    def _announce_update(self, release: update.Release) -> None:
+        """A toast for a newer version: the app mostly runs in the tray, where Status is not seen."""
+        actions = (("Show", f"http://127.0.0.1:{self.page_port}/status"), ("Not now", None)) if self.page_port else ()
+        notify(f"CS2 Clipper {release.version} is out",
+               "Open Status to see what changed, then update with one click.", actions)
+
     # --- the HLAE release check ----------------------------------------------------------------------
 
     def start_releases(self) -> None:
         """Starts the release check's thread, once: `HlaeReleases` has no lock, so it is safe only with a
-        single writer, and a second call starts nothing."""
+        single writer, and a second call starts nothing. It looks for the app's own updates too."""
         if self._releases_thread is not None:
             return
         self._releases_thread = threading.Thread(target=self._run_releases, name="releases", daemon=True)
@@ -543,6 +571,7 @@ class App:
     def _run_releases(self) -> None:
         while not self.stop.stopping():
             self.releases.refresh_if_due()
+            self.updates.refresh_if_due()
             self.stop.wait(RELEASES_INTERVAL_SECONDS)
 
 

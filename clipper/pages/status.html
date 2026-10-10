@@ -41,6 +41,19 @@
     <div class="notice p" id="setup-error" role="alert" hidden></div>
   </section>
 
+  <section class="setup cut" id="update" aria-labelledby="h-update" hidden>
+    <div class="head">
+      <div style="flex-grow:1;min-width:0">
+        <h2 id="h-update" class="h2">A new CS2 Clipper is out</h2>
+        <p class="lead" id="update-lead" aria-live="polite"></p>
+      </div>
+      <button class="primary" id="update-go">Update</button>
+    </div>
+    <div class="notes" id="update-notes" aria-label="What changed" hidden></div>
+    <div class="dl" id="update-dl" hidden><span class="pbar live" aria-hidden="true"><i></i></span><span class="lbl" id="update-mb"></span></div>
+    <div class="notice p" id="update-error" role="alert" hidden></div>
+  </section>
+
   <section id="notice" aria-label="Needs attention" style="display:flex;flex-direction:column;gap:8px"></section>
 
   <section class="hero cut rise" id="hero" aria-label="Your latest Highlights" tabindex="0" style="animation-delay:.06s"></section>
@@ -405,6 +418,46 @@ async function loadSetup() {
   } catch (e) { /* ask again */ }
 }
 
+// --- Update: a newer CS2 Clipper, what changed, and the click that installs it -------------------------------
+function renderUpdate(data) {
+  const card = document.getElementById("update"), offer = data.available;
+  card.hidden = !offer && !data.running;
+  if (card.hidden) return;
+  const installing = data.stage === "installing";
+  document.getElementById("h-update").textContent = offer ? `CS2 Clipper ${offer.version} is out` : "Updating CS2 Clipper";
+  document.getElementById("update-lead").textContent =
+    installing ? "Installing. CS2 Clipper closes and opens again by itself in a few seconds."
+    : data.running ? "Downloading the update. Leave the app open until it is done."
+    : `You have ${data.current}. Update downloads about ${Math.max(1, megabytes(offer.bytes))} MB, closes CS2 Clipper `
+      + "for a few seconds and opens it again. Your settings, Demos and Reels stay as they are.";
+  const button = document.getElementById("update-go");
+  button.disabled = data.running;
+  button.textContent = installing ? "Installing…" : data.running ? "Downloading…" : data.error ? "Try again" : "Update";
+
+  // The notes come as HTML the app made from the Release's notes, with everything in them escaped (update.notes_html).
+  const notes = document.getElementById("update-notes"), html = offer ? offer.notes : "";
+  notes.hidden = !html;
+  if (notes._html !== html) { notes._html = html; notes.innerHTML = html; }
+
+  const p = data.progress, download = document.getElementById("update-dl");
+  download.hidden = !(data.running && p && p.total && p.done < p.total);
+  if (!download.hidden) {
+    download.querySelector("i").style.width = (p.done / p.total * 100).toFixed(1) + "%";
+    document.getElementById("update-mb").textContent = `${megabytes(p.done)} of ${megabytes(p.total)} MB`;
+  }
+
+  const error = document.getElementById("update-error"), said = data.running ? "" : data.error || "";
+  error.hidden = !said;
+  if (error._said !== said) { error._said = said; error.innerHTML = said ? `${ICON.info}<span>${linked(said)}</span>` : ""; }
+}
+
+async function loadUpdate() {
+  try {
+    const response = await api("api/update");
+    if (response.ok) renderUpdate(await response.json());
+  } catch (e) { /* ask again: while the installer runs, the app is gone for a moment */ }
+}
+
 // --- loading ------------------------------------------------------------------------------------------------
 function renderStatus(data) {
   lastStatus = data;
@@ -435,7 +488,7 @@ function renderIntro() {
 
 function stopPolling() {
   clearInterval(statusTimer); clearInterval(logTimer); clearInterval(grabTimer); clearInterval(reelsTimer);
-  clearInterval(setupTimer);
+  clearInterval(setupTimer); clearInterval(updateTimer);
   document.getElementById("now").textContent = "Quitting…";
   document.getElementById("quit-choice").hidden = true;
   document.getElementById("quit").hidden = true;
@@ -533,6 +586,15 @@ document.getElementById("setup-go").addEventListener("click", async e => {
   } catch (err) { /* the next look tells how it went */ }
   loadSetup();
 });
+document.getElementById("update-go").addEventListener("click", async e => {
+  const button = e.currentTarget;
+  button.disabled = true;
+  try {
+    const response = await api("api/update", {method: "POST"});
+    if (response.status === 409) toast(`${ICON.info}<span>${esc((await response.json()).error)}</span>`);
+  } catch (err) { /* the next look tells how it went */ }
+  loadUpdate();
+});
 document.getElementById("grab").addEventListener("click", e => {
   const link = e.target.closest("a[data-open]");
   if (!link) return;
@@ -561,9 +623,10 @@ document.getElementById("log").addEventListener("wheel", e => { if (e.deltaY < 0
   } catch (e) { /* the greeting goes without a name */ }
   renderIntro();
 })();
-loadStatus(); loadLog(); loadGrab(); loadReels(); loadSetup();
+loadStatus(); loadLog(); loadGrab(); loadReels(); loadSetup(); loadUpdate();
 const statusTimer = setInterval(loadStatus, 2000);
 const setupTimer = setInterval(loadSetup, 2000);
+const updateTimer = setInterval(loadUpdate, 2000);
 const logTimer = setInterval(loadLog, 5000);
 const grabTimer = setInterval(loadGrab, 5000);
 const reelsTimer = setInterval(loadReels, 15000);

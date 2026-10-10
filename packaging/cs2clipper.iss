@@ -11,7 +11,7 @@
 ; instead of a folder, an install for this user only with no choice of folder, the version read from the
 ; exe, no WebView2 bootstrapper, the sign-in shortcut starts in the tray and is ticked by default, a
 ; shortcut whose box is unticked on an upgrade is removed, the running copy is asked to quit before its
-; exe is replaced or removed, and no relaunch after a silent install.
+; exe is replaced or removed, and no relaunch after a silent install unless /RELAUNCH asks for one.
 ;
 ; MIT License
 ;
@@ -91,6 +91,9 @@ Type: files; Name: "{userstartup}\{#AppName}.lnk"; Tasks: not startup
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; The app's own update runs this installer silently with /RELAUNCH (clipper.update): the app quit for it, so
+; it is started again.
+Filename: "{app}\{#AppExe}"; Flags: nowait skipifnotsilent; Check: RelaunchAsked
 
 [Code]
 // An exe that is running cannot be replaced or removed, and the app lives in the tray with no window to
@@ -115,6 +118,17 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   QuitTheRunningCopy();
   Result := '';
+end;
+
+// Whether the command line has /RELAUNCH, which the app's own update passes.
+function RelaunchAsked(): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 1 to ParamCount do
+    if CompareText(ParamStr(I), '/RELAUNCH') = 0 then
+      Result := True;
 end;
 
 function InitializeUninstall(): Boolean;

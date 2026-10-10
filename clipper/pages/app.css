@@ -196,6 +196,13 @@ h1.title{margin:0;font:800 italic 58px/.98 var(--display);font-stretch:70%}
 .setup .dl{display:flex;align-items:center;gap:12px}
 .setup .dl .pbar{flex-grow:1}
 .setup .notice a{margin:0;white-space:normal;word-break:break-all}
+.setup .notes{max-height:280px;overflow-y:auto;padding:12px 16px;border:1px solid var(--line2);border-radius:10px;background:rgba(0,0,0,.35);font-size:13.5px;line-height:1.55;color:var(--ink2)}
+.setup .notes h3{margin:14px 0 4px;font-size:14px;color:var(--ink)}
+.setup .notes h3:first-child{margin-top:0}
+.setup .notes p{margin:6px 0}
+.setup .notes ul{margin:6px 0;padding-left:20px}
+.setup .notes li{margin:3px 0}
+.setup .notes code{font-family:var(--mono);font-size:12.5px;padding:0 4px;border:1px solid var(--line2);border-radius:4px;background:#161616;overflow-wrap:anywhere}
 .nowmeta{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted)}
 .nowmeta .file{font-family:var(--mono);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #now{font:800 italic 40px/1 var(--display);font-stretch:70%;margin-top:8px}
@@ -252,7 +259,7 @@ h1.title{margin:0;font:800 italic 58px/.98 var(--display);font-stretch:70%}
 .logline:hover{background:#121212}
 .logline .t{color:var(--dim)}.logline .s{color:#8F8F8F;overflow:hidden;text-overflow:ellipsis}.logline .m{color:var(--ink2);word-break:break-word;white-space:pre-wrap}
 /* pywebview makes the window's body user-select:none; the text worth copying opts back in. */
-#log,.dcard .err span,.ck .d,.ck .h,#setup-error{-webkit-user-select:text;user-select:text;cursor:text}
+#log,.dcard .err span,.ck .d,.ck .h,#setup-error,#update-notes,#update-error{-webkit-user-select:text;user-select:text;cursor:text}
 .logline.enter{animation:rise .4s cubic-bezier(.2,.9,.3,1.15) both;background:#140B05}
 .lv{font-weight:600;color:#8F8F8F}
 .lv.WARNING{color:var(--accent2)}

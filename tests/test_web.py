@@ -593,6 +593,59 @@ def test_the_status_page_carries_the_set_up_card(client):
     assert 'id="setup"' in page and 'api("api/setup"' in page
 
 
+# --- Update: a newer CS2 Clipper, its notes, and the button that installs it ---------------------------
+
+UPDATE_STATUS = {"current": "0.2.0", "running": False, "stage": None, "progress": None, "error": None,
+                 "available": {"version": "0.3.0", "notes": "<h3>Fixed</h3>", "page": "https://github.com/x",
+                               "bytes": 27_000_000}}
+
+
+def test_api_update_is_what_the_updates_say_and_is_not_stored(tmp_path):
+    response = pc_get(app_for(tmp_path, update_status=lambda: UPDATE_STATUS).test_client(), "/api/update")
+
+    assert (response.status_code, response.get_json()) == (200, UPDATE_STATUS)
+    assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_api_update_offers_nothing_when_no_updates_are_wired_in(client):
+    data = pc_get(client, "/api/update").get_json()
+
+    assert (data["available"], data["running"], data["error"]) == (None, False, None)
+
+
+def test_posting_to_api_update_starts_it_and_replies_202(tmp_path):
+    calls = []
+    app = app_for(tmp_path, start_update=lambda: calls.append(True))
+
+    assert pc_post(app.test_client(), "/api/update", headers=MARKED).status_code == 202
+    assert calls == [True]
+
+
+def test_an_update_that_is_refused_is_a_409_that_says_why(tmp_path):
+    refusal = "A Reel is rendering. Update once it is done."
+    app = app_for(tmp_path, start_update=lambda: refusal)
+
+    response = pc_post(app.test_client(), "/api/update", headers=MARKED)
+
+    assert (response.status_code, response.get_json()) == (409, {"error": refusal})
+
+
+def test_api_update_refuses_a_phone_and_needs_the_marker(tmp_path):
+    calls = []
+    client = app_for(tmp_path, start_update=lambda: calls.append(True)).test_client()
+
+    assert pc_post(client, "/api/update").status_code == 403
+    assert phone_post(client, "/api/update", headers=MARKED).status_code == 403
+    assert phone_get(client, "/api/update").status_code == 403
+    assert calls == []
+
+
+def test_the_status_page_carries_the_update_card(client):
+    page = pc_get(client, "/status").get_data(as_text=True)
+
+    assert 'id="update"' in page and 'api("api/update"' in page and 'id="update-notes"' in page
+
+
 def test_the_status_page_deletes_a_demo_after_asking(client):
     page = pc_get(client, "/status").get_data(as_text=True)
 
@@ -1263,7 +1316,7 @@ def test_faceit_lookup_refuses_a_phone_and_needs_the_marker(tmp_path):
 PC_ONLY_ROUTES = [
     ("GET", "/"), ("GET", "/status"), ("GET", "/api/status"), ("GET", "/api/summary"), ("GET", "/api/log"),
     ("POST", "/api/demos/1/retry"), ("POST", "/api/pause"), ("POST", "/api/resume"), ("POST", "/api/quit"),
-    ("GET", "/api/setup"), ("POST", "/api/setup"),
+    ("GET", "/api/setup"), ("POST", "/api/setup"), ("GET", "/api/update"), ("POST", "/api/update"),
     ("GET", "/reels"), ("GET", "/api/reels"), ("GET", "/reels/1.mp4"), ("GET", "/reels/1.jpg"),
     ("POST", f"/api/reels/{'a' * 16}/open-folder"),
     ("GET", "/settings"), ("GET", "/api/settings"), ("PUT", "/api/settings"),

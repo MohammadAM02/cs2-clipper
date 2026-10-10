@@ -49,6 +49,8 @@ ICON.parent.mkdir(exist_ok=True)
 write_ico(ICON)
 
 datas = [(os.path.join(ROOT, "clipper", "pages"), "clipper/pages")]
+# The version the app tells its updates it is (clipper.update.running_version): the one stamped on the exe below.
+datas.append((os.path.join(ROOT, "pyproject.toml"), "."))
 SHIPPED_ENV = os.path.join(ROOT, "packaging", "shipped.env")
 if os.path.isfile(SHIPPED_ENV):
     # The FACEIT key this build ships to every install, at the bundle's root where move_in finds it.

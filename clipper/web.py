@@ -203,6 +203,10 @@ def _nothing_to_set_up() -> dict:
     return {"running": False, "needed": False, "steps": [], "download_bytes": 0, "progress": None, "error": None}
 
 
+def _no_update() -> dict:
+    return {"current": "", "available": None, "running": False, "stage": None, "progress": None, "error": None}
+
+
 @dataclass
 class WebContext:
     """What the pages need from the app, one field per thing. `App.start_web` fills every one; each field
@@ -230,6 +234,8 @@ class WebContext:
     faceit_lookup: Callable[[str], dict] = _faceit_lookup_not_set_up
     setup_status: Callable[[], dict] = _nothing_to_set_up        # provision.Setup.status
     start_setup: Callable[[], str | None] = lambda: None         # why it was not started, or None
+    update_status: Callable[[], dict] = _no_update               # update.Updates.status
+    start_update: Callable[[], str | None] = lambda: None        # why it was not started, or None
     delete_demo: Callable[[int], str | None] = lambda demo_id: None   # "deleted", "deferred" or None: no such Demo
 
 
@@ -374,6 +380,21 @@ def create_app(ctx: WebContext) -> Flask:
     def api_setup_start():
         """202: setup goes on after the reply, and `GET /api/setup` tells how it is going."""
         refused = ctx.start_setup()
+        if refused:
+            response = jsonify(error=refused)
+            response.status_code = 409
+            return _no_store(response)
+        return Response(status=202)
+
+    @app.get("/api/update")
+    def api_update():
+        return _no_store(jsonify(ctx.update_status()))
+
+    @app.post("/api/update")
+    def api_update_start():
+        """202: the update goes on after the reply, and `GET /api/update` tells how it is going until the
+        installer quits the app."""
+        refused = ctx.start_update()
         if refused:
             response = jsonify(error=refused)
             response.status_code = 409

@@ -1,7 +1,8 @@
 <#
 Proves the installer on a machine that has never seen the app. It installs dist\CS2Clipper-Setup.exe,
 runs the installed exe's real setup (which downloads and installs csda, FFmpeg and HLAE), checks what
-that left, runs setup again, upgrades over a running copy, and uninstalls.
+that left, runs setup again, upgrades over a running copy, updates the way the app does (which starts
+it again), and uninstalls.
 
 It is for a throwaway machine, such as the one GitHub lends a release build: it installs for the
 signed-in user and takes the app off again. So it refuses without -ThrowawayMachine, and on a PC that
@@ -54,6 +55,27 @@ function Get-Shortcut([string]$file) {
 function Test-AppAnswers([int]$port) {
     try { return (Invoke-RestMethod -Uri "http://127.0.0.1:$port/health" -TimeoutSec 3).app -eq 'cs2-clipper' }
     catch { return $false }
+}
+
+function Wait-ForPage([int]$skip, $process) {
+    # The port of the page an app started after the log's first $skip lines, once it answers; $null when none
+    # does in two minutes. The page takes the first free port from 8765 up, and the log tells which.
+    $patience = [Diagnostics.Stopwatch]::StartNew()
+    while ($patience.Elapsed.TotalSeconds -lt 120) {
+        Start-Sleep -Seconds 1
+        if ($process -and $process.HasExited) { throw "the app ended on its own, with exit code $($process.ExitCode)" }
+        $told = Get-Content -Encoding UTF8 -LiteralPath $log | Select-Object -Skip $skip |
+            Select-String 'page is on port (\d+)' | Select-Object -Last 1
+        if ($told) {
+            $candidate = [int]$told.Matches[0].Groups[1].Value
+            if (Test-AppAnswers $candidate) { return $candidate }
+        }
+    }
+    return $null
+}
+
+function Get-LogLength {
+    return @(Get-Content -Encoding UTF8 -LiteralPath $log).Count
 }
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -147,19 +169,7 @@ try {
     Write-Host '::group::Upgrade over a running copy'
     $before = @($said).Count
     $running = Start-Program $exe 'run --headless'
-    $port = $null
-    $patience = [Diagnostics.Stopwatch]::StartNew()
-    while (-not $port -and $patience.Elapsed.TotalSeconds -lt 120) {
-        Start-Sleep -Seconds 1
-        if ($running.HasExited) { throw "the app ended on its own, with exit code $($running.ExitCode)" }
-        # The page takes the first free port from 8765 up, and the log tells which.
-        $told = Get-Content -Encoding UTF8 -LiteralPath $log | Select-Object -Skip $before |
-            Select-String 'page is on port (\d+)' | Select-Object -Last 1
-        if ($told) {
-            $candidate = [int]$told.Matches[0].Groups[1].Value
-            if (Test-AppAnswers $candidate) { $port = $candidate }
-        }
-    }
+    $port = Wait-ForPage $before $running
     Confirm-That $port 'the installed app runs, and its page answers'
     Write-Host "  on port $port"
     $code = Start-AndWait $setup "$silently /LOG=`"$installerLogs\upgrade.log`"" 600
@@ -171,6 +181,25 @@ try {
     Confirm-That (-not (Get-Process -Name CS2Clipper -ErrorAction SilentlyContinue)) 'no copy of the app runs'
     Confirm-That (-not (Test-AppAnswers $port)) "nothing answers on port $port any more"
     Confirm-That ((Get-Item $exe).VersionInfo.ProductVersion -eq $version) "the installed exe is version $version"
+    Write-Host '::endgroup::'
+
+    Write-Host '::group::An update starts the app again'
+    # The app's own update runs the installer as the upgrade above did, with /RELAUNCH (clipper.update): the
+    # running copy quits, the exe is replaced, and the installer starts the app again.
+    $before = Get-LogLength
+    $running = Start-Program $exe 'run --headless'
+    Confirm-That (Wait-ForPage $before $running) 'the installed app runs, and its page answers'
+    $before = Get-LogLength
+    $code = Start-AndWait $setup "$silently /RELAUNCH /LOG=`"$installerLogs\update.log`"" 600
+    Show-File "$installerLogs\update.log"
+    Confirm-That ($code -eq 0) "the installer ended with exit code 0 over the running copy (it gave $code)"
+    Confirm-That ($running.WaitForExit(30000)) 'the copy that ran has ended'
+    $port = Wait-ForPage $before $null
+    Confirm-That $port 'the installer started the app again, and its page answers'
+    Write-Host "  on port $port"
+    $code = Start-AndWait $exe 'quit' 120
+    Confirm-That ($code -eq 0) "the app it started quits when asked (exit code $code)"
+    Confirm-That (-not (Get-Process -Name CS2Clipper -ErrorAction SilentlyContinue)) 'no copy of the app runs'
     Write-Host '::endgroup::'
 
     Write-Host '::group::Uninstall'
@@ -187,7 +216,8 @@ try {
     Write-Host '::endgroup::'
 
     Write-Host ''
-    Write-Host "Proved: CS2 Clipper $version installs, sets a PC up, upgrades over a running copy, and uninstalls."
+    Write-Host ("Proved: CS2 Clipper $version installs, sets a PC up, upgrades over a running copy, updates " +
+                "the way the app does, and uninstalls.")
 } catch {
     Write-Host '::endgroup::'
     Write-Host "::error::$($_.Exception.Message)"

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from clipper import cli
+from clipper import cli, update
 
 PACKAGING = Path(__file__).resolve().parent.parent / "packaging"
 SCRIPT = (PACKAGING / "cs2clipper.iss").read_text(encoding="utf-8")
@@ -30,6 +30,14 @@ def test_the_installer_asks_the_exe_only_for_what_its_command_line_has(monkeypat
     assert cli.main(at_sign_in.split()) == 0
 
     assert asked == ["quit", {"open_page": None, "background": True, "headless": False}]
+
+
+def test_the_apps_own_update_makes_the_installer_start_the_app_again():
+    # The update runs the installer silently with /RELAUNCH (clipper.update); only such an install starts the app.
+    assert {"/VERYSILENT", "/RELAUNCH"} <= set(update.INSTALLER_FLAGS)
+    [entry] = [line for line in SCRIPT.splitlines() if "Check: RelaunchAsked" in line]
+    assert entry == r'Filename: "{app}\{#AppExe}"; Flags: nowait skipifnotsilent; Check: RelaunchAsked'
+    assert "if CompareText(ParamStr(I), '/RELAUNCH') = 0 then" in SCRIPT
 
 
 @pytest.mark.parametrize("name", ["cs2clipper.iss", "build.ps1", "prove.ps1"])

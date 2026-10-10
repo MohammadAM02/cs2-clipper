@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from clipper import checks, cs2_paths, hlae_render, paths, web
+from clipper import checks, cs2_paths, hlae_render, packaged, paths, update, web
 from clipper.app import (
     PAGES, AlreadyRunning, App, ask_to_quit, build_worker, find_running, gate_reasons, hand_over, quit_running, run,
     run_headless, single_instance, start_match_alerts,
@@ -283,6 +283,30 @@ class FakeSetup:
         self.after()
 
 
+class FakeUpdates:
+    """Stands in for update.Updates: it never asks GitHub, downloads or installs anything. It keeps what the app
+    gave it, and a click starts an update unless `busy()` says why not."""
+
+    def __init__(self, **given):
+        self.given = given
+        self.starts = 0
+        self.refreshes = 0
+
+    def refresh_if_due(self) -> None:
+        self.refreshes += 1
+
+    def start(self) -> str | None:
+        refused = self.given["busy"]()
+        if refused:
+            return refused
+        self.starts += 1
+        return None
+
+    def status(self) -> dict:
+        return {"current": self.given["current"], "available": None, "running": self.starts > 0, "stage": None,
+                "progress": None, "error": None}
+
+
 @dataclass
 class World:
     store: SettingsStore
@@ -298,6 +322,10 @@ class World:
     def setup(self) -> FakeSetup:
         return self.app.setup
 
+    @property
+    def updates(self) -> FakeUpdates:
+        return self.app.updates
+
 
 @pytest.fixture
 def world(tmp_path):
@@ -310,7 +338,8 @@ def world(tmp_path):
     problems = FakeProblems()
     build = FakeBuild()
     app = App(store, index_path=tmp_path / "clipper.sqlite", state=state, stop=stop,
-             problems=problems, build=build, setup=FakeSetup, recheck_seconds=60.0, clock=clock)
+             problems=problems, build=build, setup=FakeSetup, updates=FakeUpdates, recheck_seconds=60.0,
+             clock=clock)
     yield World(store, index, state, stop, clock, problems, build, app)
     index.close()
 
@@ -492,6 +521,74 @@ def test_setup_works_on_the_apps_own_settings_and_is_told_the_newest_hlae(world)
     context = world.setup.context()
 
     assert context.store is world.store and context.latest_hlae == "2.200.0"
+
+
+# --- the one-click update -----------------------------------------------------------------------------
+
+
+def test_the_app_offers_updates_to_the_version_it_is_from_the_downloads_folder(world, monkeypatch):
+    given = world.updates.given
+    assert given["current"] == update.running_version()
+    assert given["enabled"] is False                 # tests run the source, which never updates itself
+    assert given["folder"]() == paths.data_dir() / "downloads"      # beside what Setup downloads
+    assert given["logs"]() == paths.logs_dir()
+
+
+def test_only_the_installed_exe_looks_for_updates(tmp_path, monkeypatch):
+    monkeypatch.setattr(packaged, "frozen", lambda: True)
+    app = App(SettingsStore(tmp_path / "settings.json"), index_path=tmp_path / "clipper.sqlite",
+              setup=FakeSetup, updates=FakeUpdates)
+    assert app.updates.given["enabled"] is True
+
+
+def test_update_is_refused_while_a_reel_renders(world):
+    world.state.set_rendering(Rendering("de_mirage", "player", 0.0))
+
+    assert world.app.start_update() == "A Reel is rendering. Update once it is done."
+    assert world.updates.starts == 0             # the installer quits the app, which would stop the render
+
+    world.state.set_idle()
+    assert world.app.start_update() is None
+    assert world.updates.starts == 1
+
+
+def test_update_is_refused_while_setup_runs(world):
+    world.setup.start()
+
+    assert world.app.start_update() == "Set up is running. Update once it is done."
+
+    world.setup.end()
+    assert world.app.start_update() is None
+
+
+def test_a_newer_version_is_announced_with_a_toast_that_opens_status(world, monkeypatch):
+    toasts = []
+    monkeypatch.setattr("clipper.app.notify", lambda title, body, actions=(): toasts.append((title, body, actions)))
+    world.app.page_port = 8766
+
+    world.updates.given["announce"](update.Release(version="0.3.0", notes="", page="", installer=None))
+
+    assert toasts == [("CS2 Clipper 0.3.0 is out",
+                       "Open Status to see what changed, then update with one click.",
+                       (("Show", "http://127.0.0.1:8766/status"), ("Not now", None)))]
+
+
+def test_the_toast_of_a_newer_version_has_no_button_when_there_are_no_pages(world, monkeypatch):
+    toasts = []
+    monkeypatch.setattr("clipper.app.notify", lambda title, body, actions=(): toasts.append(actions))
+
+    world.updates.given["announce"](update.Release(version="0.3.0", notes="", page="", installer=None))
+
+    assert toasts == [()]
+
+
+def test_the_release_check_looks_for_updates_too(world):
+    world.app.releases = checks.HlaeReleases(fetch=lambda: "2.200.0")
+    world.stop.wait = lambda seconds: world.stop.request("now")         # one round, then the loop ends
+
+    world.app._run_releases()
+
+    assert world.updates.refreshes == 1 and world.app.releases.latest == "2.200.0"
 
 
 # --- run_worker / wait ------------------------------------------------------------------------------
@@ -713,7 +810,8 @@ def windowed(tmp_path, monkeypatch):
         return launchers[-1]
 
     monkeypatch.setattr(web, "WebServer", Server)
-    app = App(store, index_path=tmp_path / "clipper.sqlite", launcher=make_launcher, setup=FakeSetup)
+    app = App(store, index_path=tmp_path / "clipper.sqlite", launcher=make_launcher, setup=FakeSetup,
+              updates=FakeUpdates)
     return Windowed(app, launchers, servers, events)
 
 
@@ -754,6 +852,17 @@ def test_a_page_asked_for_through_the_web_reaches_the_launcher(windowed):
 
     assert response.status_code == 204
     assert windowed.launchers[0].opened == ["/settings"]
+
+
+def test_the_update_routes_are_answered_by_the_apps_updates(windowed):
+    windowed.app.start_web()
+    client = windowed.servers[0].flask_app.test_client()
+    assert client.get("/api/update", base_url=PC).get_json()["running"] is False
+
+    response = client.post("/api/update", base_url=PC, headers={web.MARKER_HEADER: "1"})
+
+    assert response.status_code == 202 and windowed.app.updates.starts == 1
+    assert client.get("/api/update", base_url=PC).get_json()["running"] is True
 
 
 def test_the_set_up_routes_are_answered_by_the_apps_setup(windowed):

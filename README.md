@@ -105,6 +105,10 @@ offline Demo playback, and the app never touches a CS2 you started yourself.
 > **Needs** Windows 10 or 11, CS2 installed through Steam (with Steam running while it records), a FACEIT
 > account and 5 GB free on the clips drive.
 
+From 0.3.0 on, the app updates itself: when a new version is out, Status shows what changed and installs it
+with one click, keeping your settings, Demos and Reels. What changed in each version is in the
+[changelog](CHANGELOG.md).
+
 ## Using it
 
 1. **Play a FACEIT match.** When it has Highlights, a match alert says so, and the match shows up in
@@ -147,7 +151,7 @@ Set `CLIPPER_DATA_DIR` to keep a development copy's data apart from the installe
 `packaging\build.ps1 -Installer` builds `dist\CS2Clipper.exe` (PyInstaller, one file) and
 `dist\CS2Clipper-Setup.exe` (Inno Setup). Pushing a `v*` tag runs the
 [release workflow](.github/workflows/release.yml): the tests, the build, a proof install on a clean runner,
-then a GitHub Release with the installer.
+then a GitHub Release with the installer, whose notes are the version's section of [CHANGELOG.md](CHANGELOG.md).
 
 ## Project layout
 
@@ -163,6 +167,7 @@ clipper/              the app
 ├── hlae_render.py    one Render Job: CS2 through HLAE, watched to the end
 ├── join.py           Clips become one Reel per view
 ├── alerts.py         match alerts from the FACEIT Data API
+├── update.py         finds a newer release on GitHub and installs it with one click
 ├── app.py            tray, window, web server and worker, together
 └── …
 tests/                pytest; a whole Render Job runs against a scripted world
@@ -175,6 +180,7 @@ docs/
 └── index.html        GitHub Pages: hands a FACEIT sign-in back to the app
 .scratch/             design specs and open issues
 CONTEXT.md            the words this project uses: Demo, Highlight, Frag, Reel, Enemy POV…
+CHANGELOG.md          what changed in each release; a version's section becomes its release notes
 ```
 
 ## Credits

@@ -25,6 +25,11 @@
 // Reels (spec: Pages -> Reels): every match's Highlights, each watchable from the player's view or the
 // Enemy POV, in a player that opens under the row.
 const HEIGHT = {ACE: 36, "5K": 36, "4K": 30, "3K": 24, "2K": 18};
+// The two views a Reel can be rendered from: the words of its button and of the toasts about it.
+const VIEWS = {
+  player: {ask: "Render your view", busy: "Rendering your view…", name: "Your view"},
+  enemy: {ask: "Render Enemy POV", busy: "Rendering Enemy POV…", name: "Enemy POV"},
+};
 let data = [];
 let shown = null;    // the /api/reels text now on screen, so a poll that finds the same thing leaves the page be
 let filter = "all";
@@ -51,6 +56,19 @@ function highlightRow(h) {
   </div>`;
 }
 
+// The footer's render buttons. A view that can be asked for now gets a button; a view that is rendering gets a
+// disabled one in its place; a view in neither list gets nothing. The disabled one turns pointer events back on
+// (app.css switches them off for disabled ghosts) so that its title shows on hover.
+function renderButtons(m) {
+  return Object.keys(VIEWS).map(view => {
+    if ((m.rendering || []).includes(view))
+      return `<button class="ghost" disabled style="pointer-events:auto" title="Its Reels appear here when CS2 has recorded it">${VIEWS[view].busy}</button>`;
+    if ((m.can_render || []).includes(view))
+      return `<button class="ghost" data-render="${esc(view)}">${ICON.play}${VIEWS[view].ask}</button>`;
+    return "";
+  }).join("");
+}
+
 function matchBlock(m) {
   const rows = m.highlights.filter(keep);
   const byRound = {};
@@ -70,7 +88,7 @@ function matchBlock(m) {
     </button>
     <div class="collapse"><div>
       ${rows.length ? rows.map(highlightRow).join("") : '<p class="empty" style="padding:16px 22px">No Highlights of this kind in this match.</p>'}
-      <div class="mfoot"><button class="ghost" data-open="${esc(m.checksum)}">${ICON.folder}Open folder</button></div>
+      <div class="mfoot">${renderButtons(m)}<button class="ghost" data-open="${esc(m.checksum)}">${ICON.folder}Open folder</button></div>
     </div></div>
   </section>`;
 }
@@ -130,6 +148,33 @@ async function load() {
   }
 }
 
+// Asks the server for a view that no Reel has yet (spec: Pages, Reels). On 202 the page reloads, and the button
+// reads as rendering. On anything else the server's words go in a toast and the button comes back.
+async function askRender(button) {
+  const view = button.dataset.render;
+  button.disabled = true;
+  let response;
+  try {
+    response = await api(`api/reels/${button.closest(".mcard").dataset.checksum}/render`, {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({perspective: view}),
+    });
+  } catch (e) {
+    button.disabled = false;
+    toast(`${ICON.info}<span>Couldn't reach CS2 Clipper. Is it running?</span>`);
+    return;
+  }
+  if (response.status === 202) {
+    toast(`${ICON.check}<span>${VIEWS[view].name} queued. CS2 records it next, after a heads-up.</span>`);
+    await load();                                  // the 5-second reloads show its Reels once it is done
+    return;
+  }
+  let message = "";
+  try { message = (await response.json()).error; } catch (e) { /* a 404 has no body */ }
+  button.disabled = false;
+  toast(`${ICON.info}<span>${esc(message || "Couldn't queue it. Try again.")}</span>`);
+  await load();
+}
+
 function showReel(button) {
   let video = document.getElementById("player-video");
   if (!video) {
@@ -184,6 +229,8 @@ document.addEventListener("click", async e => {
     openButton.disabled = false;
     return;
   }
+  const renderButton = e.target.closest("button[data-render]");
+  if (renderButton && !renderButton.disabled) { await askRender(renderButton); return; }
   const reelButton = e.target.closest("button[data-reel]");
   if (reelButton && !reelButton.disabled) showReel(reelButton);
 });

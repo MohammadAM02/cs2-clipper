@@ -3,7 +3,8 @@
 CS2 starts with `+exec cs2clipper`, and HLAE's `mirv_cmd addAtTick` runs the plan below at the right ticks.
 `build_sequences` ports the two Sequence builders of CS Demo Manager 3.20.1 (MIT), and `script` sends the
 commands its video export sends, so a request gives the same Sequences, Clip names and look. `script` writes
-the cfg files that record them.
+the cfg files that record them, and those of a second view recorded in the same launch: the demo starts again
+for it (`AGAIN`), as CS Demo Manager restarted the demo for overlapping Sequences.
 
 Pure: no file, process or database access. The runner writes the cfg files, launches CS2, reads its
 console for the markers (`parse_marker`) and finds each Clip in `raw_folder`.
@@ -39,6 +40,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ENTRY = "cs2clipper"        # CS2 starts with `+exec cs2clipper`; every other cfg file is named after it
+AGAIN = f"{ENTRY}_again"    # a second view: the demo starts again, as this cfg does it
+SECOND_GO = f"{ENTRY}_go2"  # and plays from its first tick, as `cs2clipper_go` does for the first view
 
 # CS:DM's builders (build-players-event-sequences.ts): Sequences closer than this merge, and a Frag with
 # another this close after it carries on into it.
@@ -136,7 +139,7 @@ class VideoSettings:
 
 # CS2 writes `[InputService] execing <name>` to console.log for each cfg it runs; what an `echo` prints never gets
 # there. So the runner follows the plan by the names of the step files that mark how far it has got.
-_MARKER = re.compile(rf"execing\s+{ENTRY}_(?:go|s(\d+)_(prepare|start|end|quit))(?!\S)")
+_MARKER = re.compile(rf"execing\s+{ENTRY}_(?:(go2?|again)|s(\d+)_(prepare|start|end|quit))(?!\S)")
 _SEQUENCE_MARKERS = {"prepare": "ready", "start": "recording", "end": "done"}
 _DIGITS = re.compile(r"[0-9]+")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")      # what ends a cfg line or cannot be typed in one
@@ -273,24 +276,30 @@ def script(
     demo_path: Path,
     raw_dir: Path,
     settings: VideoSettings = VideoSettings(),
+    second_pass: Iterable[Sequence] = (),
 ) -> dict[str, str]:
     """The cfg files (file name -> text) that record `sequences`, one after the other and in the order given,
-    from the Demo at `demo_path` into `raw_folder(raw_dir, number)`.
+    from the Demo at `demo_path` into `raw_folder(raw_dir, number)`. `second_pass` are recorded after them, in the same
+    launch, for a second view: after the last of `sequences` the demo starts again (`AGAIN`), plays from its first tick
+    (`SECOND_GO`) and records `second_pass` the way it records `sequences`. So a Sequence of the second pass may start
+    before the last of the first pass ends, as the demo is back at its beginning.
 
     CS2 starts with `+exec cs2clipper`, which plays the Demo and schedules `cs2clipper_go` for tick 96 (`playing`).
     That sends the pinned settings and runs the first Sequence's cfg. Each Sequence's cfg schedules its own steps with
     `mirv_cmd addAtTick`, every step a cfg of its own, and seeks to its approach when that is worth it: set the
     recording up (`ready`), aim the camera, start (`recording`), change the camera, end (`done`) and hand over to the
-    next Sequence's cfg, or, after the last, quit (`quit`). The runner reads those markers from console.log, where
-    CS2 names each cfg it runs (`parse_marker`).
+    next Sequence's cfg, or, after the last of a pass, to `AGAIN` when a second pass follows, or else quit (`quit`).
+    The runner reads those markers from console.log, where CS2 names each cfg it runs (`parse_marker`).
 
-    Raises PlanError for no Sequence, two with one number, one that ends when it starts or before, one with
-    no room to be set up after the one before it (they overlap, or the first starts within the demo's first
-    seconds), and a path or setting that cannot go inside quotes."""
+    Raises PlanError for no Sequence, two with one number (in either pass), one that ends when it starts or before,
+    one with no room to be set up after the one before it in its pass (they overlap, or the first starts within the
+    demo's first seconds), and a path or setting that cannot go inside quotes."""
     sequences = list(sequences)
+    second = list(second_pass)
     if not sequences:
         raise PlanError("there is nothing to record")
-    if len({sequence.number for sequence in sequences}) < len(sequences):
+    numbers = [sequence.number for sequence in (*sequences, *second)]
+    if len(set(numbers)) < len(numbers):
         raise PlanError("two Sequences have the same number")
     demo = _quotable(str(demo_path), "the demo's path")
     _quotable(str(raw_dir), "the raw folder")
@@ -313,24 +322,42 @@ def script(
             f"exec {_stem(sequences[0])}",
         ),
     }
-    handoff = FIRST_TICK
-    for index, sequence in enumerate(sequences):
-        following = sequences[index + 1] if index + 1 < len(sequences) else None
-        files.update(_sequence_files(sequence, following, handoff, inputs.tickrate, slots, raw_dir, settings))
-        handoff = sequence.end_tick + _ticks(inputs.tickrate, HANDOFF_S)
+    passes = [sequences]
+    if second:
+        files[f"{AGAIN}.cfg"] = _cfg(       # the entry cfg's lines, with the second view's go
+            "mirv_cmd clear",
+            "mirv_cmd enabled 1",
+            f"mirv_cmd addAtTick {FIRST_TICK} exec {SECOND_GO}",
+            "demo_ui_mode 0",       # as the entry cfg has it: the playback bar goes before the demo plays
+            f'playdemo "{demo}"',
+        )
+        files[f"{SECOND_GO}.cfg"] = _cfg(*_pinned_lines(settings), f"exec {_stem(second[0])}")
+        passes.append(second)
+    for index, pass_sequences in enumerate(passes):
+        handoff = FIRST_TICK        # each pass starts with the demo at its first tick
+        for position, sequence in enumerate(pass_sequences):
+            if position + 1 < len(pass_sequences):
+                next_stem = _stem(pass_sequences[position + 1])
+            elif index + 1 < len(passes):
+                next_stem = AGAIN
+            else:
+                next_stem = None
+            files.update(_sequence_files(sequence, next_stem, handoff, inputs.tickrate, slots, raw_dir, settings))
+            handoff = sequence.end_tick + _ticks(inputs.tickrate, HANDOFF_S)
     return files
 
 
 def _sequence_files(
     sequence: Sequence,
-    following: Sequence | None,
+    next_stem: str | None,
     handoff: int,
     tickrate: float,
     slots: dict[str, int],
     raw_dir: Path,
     settings: VideoSettings,
 ) -> dict[str, str]:
-    """The cfg of `sequence` and the cfg of each of its steps. The game is at `handoff` when it runs."""
+    """The cfg of `sequence` and the cfg of each of its steps. The game is at `handoff` when it runs. The last step
+    execs the cfg `next_stem` names, or quits the game when there is none."""
     number, start, end = sequence.number, sequence.start_tick, sequence.end_tick
     if end <= start:
         raise PlanError(f"Sequence {number} ends at tick {end}, which is not after its start at {start}")
@@ -348,10 +375,10 @@ def _sequence_files(
     steps += [_Step(tick, f"camera{position}", _camera_lines(slot))
               for position, (tick, slot) in enumerate(changes, start=2)]
     steps.append(_Step(end, "end", ("mirv_streams record end",)))
-    if following is None:
+    if next_stem is None:
         steps.append(_Step(end + _ticks(tickrate, QUIT_S), "quit", ("quit",)))
     else:
-        steps.append(_Step(end + _ticks(tickrate, HANDOFF_S), "next", (f"exec {_stem(following)}",)))
+        steps.append(_Step(end + _ticks(tickrate, HANDOFF_S), "next", (f"exec {next_stem}",)))
     ticks = [landing, *(step.tick for step in steps)]
     if any(before >= after for before, after in zip(ticks, ticks[1:])):
         raise PlanError(f"Sequence {number} (ticks {start} to {end}) leaves no room to set it up after tick {handoff}")
@@ -468,14 +495,15 @@ def _prepare_lines(sequence: Sequence, folder: str, settings: VideoSettings) -> 
 
 def parse_marker(line: str) -> tuple[str, int | None] | None:
     """The marker a console line holds, as (kind, Sequence number or None), or None when it holds none. A marker is
-    CS2 saying it runs a step file of the plan: `_go` is playing, and a Sequence's `_prepare`, `_start` and `_end` are
-    ready, recording and done; `_quit` is quit. All but playing and quit name their Sequence."""
+    CS2 saying it runs a step file of the plan: `_go` and `_go2` are playing, `_again` is again (the demo starts again
+    for a second view), a Sequence's `_prepare`, `_start` and `_end` are ready, recording and done, and `_quit` is quit.
+    All but playing, again and quit name their Sequence."""
     found = _MARKER.search(line)
     if found is None:
         return None
-    step = found[2]
-    if step is None:
-        return "playing", None
+    word, number, step = found[1], found[2], found[3]
+    if word is not None:
+        return ("again", None) if word == "again" else ("playing", None)
     if step == "quit":
         return "quit", None
-    return _SEQUENCE_MARKERS[step], int(found[1])
+    return _SEQUENCE_MARKERS[step], int(number)

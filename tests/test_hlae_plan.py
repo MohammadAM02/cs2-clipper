@@ -48,6 +48,9 @@ def test_raw_folder_is_named_after_the_sequence_inside_the_raw_dir(tmp_path):
     ("[InputService] execing cs2clipper_s3_end", ("done", 3)),
     ("[InputService] execing cs2clipper_s2_quit", ("quit", None)),
     ("10/08 04:38:26 [InputService] execing cs2clipper_s4_end\r\n", ("done", 4)),     # as console.log has it
+    ("[InputService] execing cs2clipper_again", ("again", None)),       # the demo starts again for a second view
+    ("[InputService] execing cs2clipper_go2", ("playing", None)),       # and plays from its first tick
+    ("10/08 04:38:26 [InputService] execing cs2clipper_again\r\n", ("again", None)),
 ])
 def test_parse_marker_reads_the_step_from_the_cfg_cs2_says_it_runs(line, expected):
     assert hlae_plan.parse_marker(line) == expected
@@ -63,6 +66,10 @@ def test_parse_marker_reads_the_step_from_the_cfg_cs2_says_it_runs(line, expecte
     "[InputService] execing cs2clipper_s1_startx",
     "[InputService] execing cs2clipper_sx_start",
     "[InputService] execing cs2clipper_gone",
+    "[InputService] execing cs2clipper_again2",
+    "[InputService] execing cs2clipper_agains",
+    "[InputService] execing cs2clipper_go22",
+    "[InputService] execing cs2clipper_go2x",
     "[InputService] execing autoexec",
     "CS2CLIPPER playing",           # what an `echo` prints, which never reaches console.log
 ])
@@ -658,6 +665,65 @@ def test_sequences_that_overlap_cannot_be_recorded_without_going_back_and_are_re
         plan_script([Sequence(1, 1000, 2000, ((1000, SUBJECT),)), Sequence(2, 1500, 3000, ((1500, SUBJECT),))])
 
 
+# A second pass: a second view recorded in the same launch. After the first pass's last Sequence the demo starts
+# again (`cs2clipper_again`), plays from its first tick (`cs2clipper_go2`), and the second pass is recorded from there.
+
+def passes_script(first, second, **options):
+    return hlae_plan.script(first, inputs(), demo_path=DEMO, raw_dir=RAW, second_pass=second, **options)
+
+
+def test_the_first_pass_hands_over_to_the_demo_starting_again_instead_of_quitting():
+    files = passes_script([Sequence(1, 10000, 12000, ((10000, SUBJECT),))],
+                          [Sequence(2, 3000, 4000, ((3000, SUBJECT),))])
+    assert steps(files, "cs2clipper_s1")[-1] == (12032, "cs2clipper_s1_next")       # HANDOFF_S after the end
+    assert cfg_lines(files, "cs2clipper_s1_next") == ["exec cs2clipper_again"]
+    assert "cs2clipper_s1_quit.cfg" not in files
+    assert cfg_lines(files, "cs2clipper_s2_quit") == ["quit"]
+    assert "cs2clipper_s2_next.cfg" not in files
+
+
+def test_the_again_cfg_starts_the_demo_again_and_schedules_the_second_go_for_its_first_tick():
+    files = passes_script([Sequence(1, 10000, 12000, ((10000, SUBJECT),))],
+                          [Sequence(2, 3000, 4000, ((3000, SUBJECT),))])
+    assert cfg_lines(files, "cs2clipper_again") == [
+        "mirv_cmd clear",
+        "mirv_cmd enabled 1",                                   # as the entry cfg has it, rather than trust it lasts
+        "mirv_cmd addAtTick 96 exec cs2clipper_go2",
+        "demo_ui_mode 0",
+        r'playdemo "C:\Users\Some One\Demos\match 1.dem"',      # the path the entry cfg plays, as it is
+    ]
+
+
+def test_the_go2_cfg_sends_the_pinned_settings_again_and_hands_over_to_the_second_pass():
+    files = passes_script([Sequence(1, 10000, 12000, ((10000, SUBJECT),))],
+                          [Sequence(2, 3000, 4000, ((3000, SUBJECT),))])
+    assert cfg_lines(files, "cs2clipper_go2")[:-1] == cfg_lines(files, "cs2clipper_go")[:-1]
+    assert cfg_lines(files, "cs2clipper_go2")[-1] == "exec cs2clipper_s2"
+
+
+def test_the_second_pass_starts_from_the_demos_first_tick_so_it_may_begin_before_the_first_pass_ends():
+    files = passes_script([Sequence(1, 10000, 12000, ((10000, SUBJECT),))],
+                          [Sequence(2, 3000, 4000, ((3000, SUBJECT),))])
+    # 3000 - 2 s is 2872, which is far enough after the demo's first tick (96) to be worth a seek there
+    assert "demo_gototick 2872" in cfg_lines(files, "cs2clipper_s2")
+    assert steps(files, "cs2clipper_s2") == [
+        (2888, "cs2clipper_s2_prepare"), (2904, "cs2clipper_s2_aim"), (3000, "cs2clipper_s2_start"),
+        (4000, "cs2clipper_s2_end"), (4064, "cs2clipper_s2_quit")]
+
+
+def test_each_pass_is_checked_as_a_plan_of_its_own():
+    with pytest.raises(hlae_plan.PlanError, match="same number"):
+        passes_script([Sequence(1, 5000, 6000, ())], [Sequence(1, 9000, 10000, ())])
+    with pytest.raises(hlae_plan.PlanError):
+        passes_script([Sequence(1, 1000, 2000, ())], [Sequence(2, 5000, 6000, ()), Sequence(3, 5500, 7000, ())])
+
+
+def test_a_second_pass_of_nothing_is_the_plan_of_one_view():
+    assert passes_script(two_sequences(), []) == plan_script(two_sequences())
+    files = plan_script(two_sequences())
+    assert not any(name.startswith(("cs2clipper_again", "cs2clipper_go2")) for name in files)
+
+
 # Whatever the plan, it stays within what HLAE and CS2 do reliably.
 
 PLANS = {
@@ -667,6 +733,13 @@ PLANS = {
     "a kill at the start": lambda: kills_plan([kill(400)]),
     "rounds": lambda: rounds_plan([Round(1, 9000, 1000), Round(2, 19000, 11000), Round(3, 29000, 21000)],
                                   [kill(15000, victim=SUBJECT, killer=ENEMY, round_number=2)]),
+}
+# Plans of two passes: the second view's Sequences, numbered on from the first's, as the render makes them.
+TWO_PASSES = {
+    "two views": lambda: (two_sequences(), [Sequence(3, 10235, 10491, ((10235, ENEMY),)),
+                                            Sequence(4, 29872, 30128, ((29872, ENEMY),))]),
+    "second view early": lambda: ([Sequence(1, 10000, 12000, ((10000, SUBJECT),))],
+                                  [Sequence(2, 3000, 4000, ((3000, SUBJECT),))]),
 }
 ALLOWED_COMMANDS = {
     # the pinned settings, the recording and the camera
@@ -680,8 +753,11 @@ ALLOWED_COMMANDS = {
 }
 
 
-@pytest.fixture(params=sorted(PLANS))
+@pytest.fixture(params=[*sorted(PLANS), *sorted(TWO_PASSES)])
 def planned(request):
+    if request.param in TWO_PASSES:
+        first, second = TWO_PASSES[request.param]()
+        return plan_script(first, second_pass=second)
     return plan_script(PLANS[request.param]())
 
 
@@ -720,8 +796,9 @@ def test_the_runner_can_follow_the_plan_by_the_cfg_files_cs2_says_it_runs(planne
     logged = [hlae_plan.parse_marker(f"[InputService] execing {name.removesuffix('.cfg')}") for name in planned]
     markers = [marker for marker in logged if marker is not None]
     numbers = sorted(int(name.split("_")[1][1:]) for name in planned if name.endswith("_start.cfg"))
+    again = ["again", "playing"] if "cs2clipper_again.cfg" in planned else []     # a second view plays once more
     assert sorted(kind for kind, _ in markers) == sorted(
-        ["playing", "quit"] + ["ready", "recording", "done"] * len(numbers))
+        ["playing", "quit", *again, *(["ready", "recording", "done"] * len(numbers))])
     assert sorted(number for kind, number in markers if kind == "recording") == numbers
 
 

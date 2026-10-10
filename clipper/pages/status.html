@@ -130,6 +130,7 @@ function greeting() {
 function subLine(data) {
   if (data.quitting) return data.quitting === "after_render" ? "The app closes when this render finishes." : "Closing CS2 Clipper.";
   if (data.problems.length) return "Nothing renders until these are fixed.";
+  if (data.rendering && data.rendering.progress) return progressLine(data.rendering.progress);
   if (data.rendering) {
     const minutes = Math.max(1, Math.round(Date.now() / 60000 - data.rendering.started_at / 60));
     return `For ${plural(minutes, "min", "min")}. CS2 is recording; leave the PC to it.`;
@@ -140,6 +141,18 @@ function subLine(data) {
   return "Watching your Downloads for Demos and FACEIT for new matches.";
 }
 
+// The line while a render reports its progress (RenderProgress in clipper/render.py).
+function progressLine(p) {
+  const enemy = p.perspective === "enemy";
+  if (p.stage === "starting") return "Starting CS2…";
+  if (p.stage === "restarting") return `Starting the demo again for ${enemy ? "the Enemy POV" : "your view"}…`;
+  if (p.stage === "joining") return "Joining the Clips…";
+  const sequence = `${enemy ? "Enemy POV" : "Your view"} · Sequence ${Math.min(p.done + 1, p.total)} of ${p.total}`;
+  if (p.seconds_left == null) return sequence;
+  const left = p.seconds_left < 60 ? "less than a minute left" : `about ${Math.ceil(p.seconds_left / 60)} min left`;
+  return `${sequence} · ${left}`;
+}
+
 // --- Now: the summary, the current Demo's pipeline, its Render Jobs -----------------------------------
 // The list is newest first, but the worker renders the oldest Demo in rendering first (maps first).
 function currentDemo(demos) {
@@ -148,16 +161,19 @@ function currentDemo(demos) {
     || demos.find(d => d.state !== "failed") || null;
 }
 
-function progressOf(d) {
+// A running Render Job counts for `overall`, how far its render has got (0 to 1), when the app says; else a guess.
+function progressOf(d, overall) {
   if (d.state === "failed") return {index: d.jobs.length ? 4 : 2, frac: (d.jobs.length ? 4 : 2) / 6};
   const index = STAGES.indexOf(d.state);
   let frac = Math.max(0, index) / 6;
   if (d.state === "rendering" && d.jobs.length) {
-    const done = d.jobs.filter(j => j.state === "done").length, running = d.jobs.some(j => j.state === "running");
-    frac = (4 + (done + (running ? 0.35 : 0)) / d.jobs.length) / 6;
+    const done = d.jobs.filter(j => j.state === "done").length;
+    const running = d.jobs.filter(j => j.state === "running").length;     // a launch records both views at once
+    frac = (4 + (done + running * (overall ?? 0.35)) / d.jobs.length) / 6;
   }
   return {index, frac: Math.min(1, frac)};
 }
+const overallOf = data => data?.rendering?.progress?.overall;
 
 function jobPill(j) {
   const cls = j.state === "running" ? "job run" : j.state === "failed" ? "job fail" : "job";
@@ -189,7 +205,7 @@ function renderNow(data) {
   document.getElementById("current").hidden = !d;
   document.getElementById("now-file").textContent = d ? `#${d.id} ${d.map || ""}` : "";
   if (!d) return;
-  const {index, frac} = progressOf(d);
+  const {index, frac} = progressOf(d, overallOf(data));
   const rail = document.getElementById("rail");
   rail.className = "rail" + (d.state === "rendering" && data.rendering ? " live" : "");
   rail.firstElementChild.style.width = (frac * 100) + "%";
@@ -207,7 +223,7 @@ const askingDelete = new Set(), deleted = new Set();
 const demoName = d => `${esc(d.map || "Demo")} #${+d.id}`;
 
 function demoCard(d) {
-  const {frac} = progressOf(d);
+  const {frac} = progressOf(d);       // not the live progress: a card whose HTML changes flashes, Sequence by Sequence
   const going = deleted.has(d.id), asking = askingDelete.has(d.id) && !going;
   const label = going ? "Deleting…" : d.state === "failed" ? "Failed" : STAGE_LABEL[STAGES.indexOf(d.state)] || d.state;
   const color = going ? "#8F8F8F" : d.state === "failed" ? "#FF8A3D" : d.state === "rendering" ? "#FFB27A" : "#D6D3CE";

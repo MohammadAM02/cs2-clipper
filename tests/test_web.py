@@ -9,6 +9,7 @@ import logging
 import os
 import shutil
 import socket
+import sqlite3
 import subprocess
 import urllib.request
 from dataclasses import replace
@@ -24,6 +25,7 @@ from clipper.faceit import FaceitError
 from clipper.faceit_oauth import OAuthError
 from clipper.index import Index
 from clipper.model import FaceitStats, Highlight, MatchInfo
+from clipper.render import RenderProgress
 from clipper.settings import FIELDS, KEY_FIELD, SECRET_FIELD, STORED_KEY, Loaded, SettingsStore
 from clipper.state import Rendering, Snapshot
 from clipper.web import MARKER_HEADER, WebContext, WebServer, create_app
@@ -361,7 +363,7 @@ def test_api_status_shape_and_values(tmp_path, index):
     data = pc_get(app.test_client(), "/api/status").get_json()
 
     assert data["summary"] == "Rendering Mirage (player view)"
-    assert data["rendering"] == {"map": "Mirage", "perspective": "player", "started_at": 1790000000.0}
+    assert data["rendering"] == {"map": "Mirage", "perspective": "player", "started_at": 1790000000.0, "progress": None}
     assert (data["paused_by"], data["quitting"], data["pages_off"]) == (None, None, None)
     assert data["problems"] == []
     assert data["warnings"] == ["settings.json: top_n bad"]
@@ -388,6 +390,14 @@ def test_api_status_demos_are_filtered_to_unfinished_and_ordered_newest_first(tm
     data = pc_get(app_for(tmp_path).test_client(), "/api/status").get_json()
 
     assert [d["id"] for d in data["demos"]] == [newer, older]
+
+
+def test_api_status_carries_the_progress_the_render_reports(tmp_path):
+    progress = RenderProgress("recording", "enemy", done=1, total=2, overall=0.5, seconds_left=None)
+    snapshot = Snapshot(rendering=Rendering("de_mirage", "enemy", 1790000000.0, progress=progress))
+    data = pc_get(app_for(tmp_path, snapshot=lambda: snapshot).test_client(), "/api/status").get_json()
+    assert data["rendering"]["progress"] == {"stage": "recording", "perspective": "enemy", "done": 1, "total": 2,
+                                             "overall": 0.5, "seconds_left": None}
 
 
 def test_api_status_a_failed_demo_shows_its_error_and_can_retry_and_has_no_jobs_before_rendering(tmp_path, index):
@@ -837,6 +847,162 @@ def test_a_reel_keeps_playing_after_the_clips_folder_moves(tmp_path):
     assert store.save({"data_root": str(tmp_path / "moved")}) == {}
 
     assert pc_get(client, f"/reels/{reel_id}.mp4").status_code == 200
+
+
+# --- asking for the other view of a finished match (render the other view later) ------------------
+
+
+def _finished_match(tmp_path, index, *, views=("player",), state="done", download=True) -> int:
+    """REEL_MATCH with one selected Highlight holding a Reel for each of `views`, its Demo in `state`, its
+    download kept in tmp_path when `download`. Returns the Demo's id."""
+    index.save_match(REEL_MATCH)
+    archive = tmp_path / "demos" / "1-ask.dem.zst"
+    if download:
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_bytes(b"x")
+    demo_id = index.add_demo("1-ask.dem.zst", "d" * 64, archive)
+    index.advance(demo_id, state, match_checksum=REEL_MATCH.checksum)
+    hl = Highlight(round=8, type="4K", score=40, reasons=("4k",), frag_ticks=(100,),
+                   round_start_tick=0, round_end_tick=5000)
+    index.save_highlights(REEL_MATCH.checksum, [hl], {8})
+    highlight_id = index.selected_highlights(REEL_MATCH.checksum)[0]["id"]
+    for perspective in views:
+        index.save_reel(highlight_id, perspective, tmp_path / f"r8-{perspective}.mp4", 12.5)
+    return demo_id
+
+
+def _the_match(client) -> dict:
+    return pc_get(client, "/api/reels").get_json()[0]
+
+
+def _ask(client, perspective="enemy", **kw):
+    return pc_post(client, f"/api/reels/{REEL_MATCH.checksum}/render", headers=MARKED,
+                   json={"perspective": perspective}, **kw)
+
+
+def test_a_match_with_one_view_offers_the_other_from_its_kept_download(tmp_path, index):
+    _finished_match(tmp_path, index)
+    match = _the_match(app_for(tmp_path).test_client())
+    assert (match["rendering"], match["can_render"]) == ([], ["enemy"])
+
+
+def test_a_match_with_both_views_has_nothing_to_render(tmp_path, index):
+    _finished_match(tmp_path, index, views=("player", "enemy"))
+    match = _the_match(app_for(tmp_path).test_client())
+    assert (match["rendering"], match["can_render"]) == ([], [])
+
+
+def test_round_mode_offers_no_enemy_pov_to_render(tmp_path, index):
+    _finished_match(tmp_path, index)
+    client = app_for(tmp_path, load_settings=lambda: Loaded(Config(sequence_event="rounds"), ())).test_client()
+    assert _the_match(client)["can_render"] == []
+
+
+def test_a_match_whose_download_is_gone_offers_nothing_to_render(tmp_path, index):
+    _finished_match(tmp_path, index, download=False)
+    assert _the_match(app_for(tmp_path).test_client())["can_render"] == []
+
+
+def test_a_match_being_rendered_lists_the_view_it_asked_for_as_rendering(tmp_path, index):
+    demo_id = _finished_match(tmp_path, index)
+    index.ask_render(demo_id, "enemy")
+    match = _the_match(app_for(tmp_path).test_client())
+    assert (match["rendering"], match["can_render"]) == (["enemy"], [])
+
+
+def test_a_match_whose_demo_is_gone_lists_nothing_to_render(tmp_path, index):
+    demo_id = _finished_match(tmp_path, index)
+    with sqlite3.connect(tmp_path / "clipper.sqlite") as db:       # Reels with no Demo: Index never lets that happen
+        db.execute("DELETE FROM demos WHERE id = ?", (demo_id,))
+    match = _the_match(app_for(tmp_path).test_client())
+    assert (match["rendering"], match["can_render"]) == ([], [])
+
+
+def test_asking_for_the_other_view_queues_it_and_replies_202(tmp_path, index):
+    demo_id = _finished_match(tmp_path, index)
+    response = _ask(app_for(tmp_path).test_client())
+    assert response.status_code == 202
+    assert response.get_json() == {"queued": "enemy"}
+    assert index.asked_renders(demo_id) == ("enemy",)
+    assert index.demo(demo_id)["state"] == "rendering"
+
+
+@pytest.mark.parametrize("body", [
+    {"data": "not json", "content_type": "application/json"},
+    {"json": {}},
+    {"json": {"perspective": "both"}},
+    {"json": ["enemy"]},
+])
+def test_a_bad_body_is_400_and_asks_for_nothing(tmp_path, index, body):
+    demo_id = _finished_match(tmp_path, index)
+    response = pc_post(app_for(tmp_path).test_client(), f"/api/reels/{REEL_MATCH.checksum}/render",
+                       headers=MARKED, **body)
+    assert response.status_code == 400
+    assert "error" in response.get_json()
+    assert index.asked_renders(demo_id) == ()
+
+
+def test_a_match_without_a_demo_is_404(tmp_path):
+    assert _ask(app_for(tmp_path).test_client()).status_code == 404
+
+
+def test_a_view_the_match_already_has_is_409(tmp_path, index):
+    _finished_match(tmp_path, index)
+    response = _ask(app_for(tmp_path).test_client(), "player")
+    assert response.status_code == 409
+    assert response.get_json() == {"error": "This match already has your view."}
+
+
+def test_round_mode_has_no_enemy_pov_to_ask_for(tmp_path, index):
+    demo_id = _finished_match(tmp_path, index)
+    client = app_for(tmp_path, load_settings=lambda: Loaded(Config(sequence_event="rounds"), ())).test_client()
+    response = _ask(client)
+    assert response.status_code == 409
+    assert response.get_json() == {"error": "Round mode has no Enemy POV."}
+    assert index.asked_renders(demo_id) == ()
+
+
+def test_a_match_whose_download_is_gone_cannot_render_the_other_view(tmp_path, index):
+    _finished_match(tmp_path, index, download=False)
+    response = _ask(app_for(tmp_path).test_client())
+    assert response.status_code == 409
+    assert "download is gone" in response.get_json()["error"]
+
+
+def test_a_view_already_rendering_cannot_be_asked_for_again(tmp_path, index):
+    demo_id = _finished_match(tmp_path, index)
+    index.ask_render(demo_id, "enemy")
+    response = _ask(app_for(tmp_path).test_client())
+    assert response.status_code == 409
+    assert response.get_json() == {"error": "Already rendering the Enemy POV."}
+
+
+def test_a_demo_not_done_yet_cannot_be_asked_for_a_view(tmp_path, index):
+    _finished_match(tmp_path, index, state="rendering")
+    response = _ask(app_for(tmp_path).test_client())
+    assert response.status_code == 409
+    assert response.get_json() == {"error": "The Demo is not done yet."}
+
+
+def test_an_ask_the_index_refuses_after_the_check_is_409(tmp_path, index, monkeypatch):
+    demo_id = _finished_match(tmp_path, index)
+
+    def refused(self, demo_id, perspective):
+        raise ValueError(f"demo {demo_id} is not done")
+
+    monkeypatch.setattr(Index, "ask_render", refused)
+    response = _ask(app_for(tmp_path).test_client())
+    assert response.status_code == 409
+    assert response.get_json() == {"error": f"demo {demo_id} is not done"}
+
+
+def test_asking_for_a_view_refuses_a_phone_and_needs_the_marker(tmp_path, index):
+    demo_id = _finished_match(tmp_path, index)
+    client = app_for(tmp_path).test_client()
+    url = f"/api/reels/{REEL_MATCH.checksum}/render"
+    assert phone_post(client, url, headers=MARKED, json={"perspective": "enemy"}).status_code == 403
+    assert pc_post(client, url, json={"perspective": "enemy"}).status_code == 403
+    assert index.asked_renders(demo_id) == ()
 
 
 class FakeFfmpeg:
@@ -1318,7 +1484,7 @@ PC_ONLY_ROUTES = [
     ("POST", "/api/demos/1/retry"), ("POST", "/api/pause"), ("POST", "/api/resume"), ("POST", "/api/quit"),
     ("GET", "/api/setup"), ("POST", "/api/setup"), ("GET", "/api/update"), ("POST", "/api/update"),
     ("GET", "/reels"), ("GET", "/api/reels"), ("GET", "/reels/1.mp4"), ("GET", "/reels/1.jpg"),
-    ("POST", f"/api/reels/{'a' * 16}/open-folder"),
+    ("POST", f"/api/reels/{'a' * 16}/open-folder"), ("POST", f"/api/reels/{'a' * 16}/render"),
     ("GET", "/settings"), ("GET", "/api/settings"), ("PUT", "/api/settings"),
     ("POST", "/api/faceit/session"), ("POST", "/api/faceit/lookup"),
     ("GET", "/api/window"), ("POST", "/api/window"),

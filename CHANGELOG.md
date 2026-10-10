@@ -8,11 +8,40 @@ its GitHub Release, and the app shows those notes on the Status page when it off
 ### New: choose which views to render
 
 Settings → Picture → **Views to render** picks **Both** (as before), **Your view** or **Enemy POV**. With one view,
-CS2 opens once per match instead of twice, so a match renders in about half the time. A change applies to every
-match not rendered yet, including the ones already waiting; matches that are done keep their Reels.
+each match records half as much, so it renders faster. A change applies to every match not rendered yet, including
+the ones already waiting; matches that are done keep their Reels.
 
 With **One Clip per: Round**, matches now render your view only. A whole round has no one enemy to follow, so its
 Enemy POV was your view again, recorded in a second CS2 run.
+
+### New: raw Clips are deleted once their Reels are made
+
+When a match's Reels are made, its raw Clips are deleted, so each Highlight is stored once instead of twice, and the
+Reels stay as they are. Matches finished before this version are cleaned up once, the next time the app starts. A
+Demo that failed keeps its Clips, so **Retry** on the Status page can still make its Reels.
+
+### New: one heads-up per match
+
+When CS2 has just closed after rendering a match, the next render of that match starts right away, without another
+30-second heads-up or notification. A new match still gets the heads-up, and so does a render after CS2 or FACEIT AC
+was open in between.
+
+### New: both views in one CS2 launch
+
+When both views are due, CS2 opens once and records your view, then starts the demo again for the Enemy POV, saving a
+CS2 start-up per match. If CS2 fails during the Enemy POV, your view is kept and the Enemy POV is tried again on its
+own; retries go one view at a time.
+
+### New: render progress on the Status page
+
+The Status page shows which view and Sequence CS2 is recording, and about how long is left. The Demo's bar moves with
+the render, instead of holding at the same place for the whole of it.
+
+### New: render the other view later
+
+On the Reels page, a match rendered with one view has a button to render the other. The match goes back in the queue
+for that view only, using the download the app kept. If that view cannot be rendered, the match keeps its Reels and
+you get a notification.
 
 ## 0.3.0
 

@@ -9,7 +9,7 @@ import inspect
 import itertools
 import subprocess
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import astuple, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -63,7 +63,7 @@ class World:
         self.console = self.csgo / "console.log"
         self.cfg_dir = self.csgo / "cfg"
         self.cs2_settings = tmp_path / "app-data" / "cs2-settings"
-        self.raw_dir = req.output_dir / "raw"
+        self.raw_dir = req.outputs[req.perspectives[0]] / "raw"       # the first view's folder holds the raw recordings
         self.now = 1000.0
         self.steam = True
         self.inputs: RenderInputs | None = INPUTS
@@ -273,13 +273,39 @@ def game(numbers=(1, 2), *, quits=True, closes=True) -> list[tuple]:
     return script
 
 
+def two_views_game(*, second=(3, 4), quits=True, closes=True) -> list[tuple]:
+    """A game of two views: the player view's Sequences 1 and 2, then the demo starts again (`again`, and `go2` at its
+    first tick), then the enemy view's `second`, as the plan of two views has them."""
+    script = [(2, "hlae_exits", 0), (4, "cs2_up"), (15, "line", ran("go"))]
+    at = 17
+    for number in (1, 2):
+        script += sequence_events(number, at)
+        at += 15
+    script += [(at - 4, "line", ran("again")), (at - 2, "line", ran("go2"))]
+    for number in second:
+        script += sequence_events(number, at)
+        at += 15
+    if quits:
+        script.append((at, "line", ran(f"s{second[-1]}_quit")))
+        at += 2
+    if closes:
+        script.append((at, "cs2_down"))
+    return script
+
+
 @pytest.fixture
 def req(tmp_path):
     return RenderRequest(
-        demo_path=tmp_path / "demos" / "match.dem", perspective="player", rounds=(3, 12),
-        output_dir=tmp_path / "out", log_path=tmp_path / "logs" / "render.log",
+        demo_path=tmp_path / "demos" / "match.dem", outputs={"player": tmp_path / "out"}, rounds=(3, 12),
+        log_path=tmp_path / "logs" / "render.log",
         steamid=SUBJECT, padding_before_s=4.0, padding_after_s=2.0, checksum=MATCH_CHECKSUM,
     )
+
+
+@pytest.fixture
+def both(req, tmp_path):
+    """The request for both views: the player's Clips in `out`, the enemy's in `out-enemy`."""
+    return replace(req, outputs={"player": tmp_path / "out", "enemy": tmp_path / "out-enemy"})
 
 
 @pytest.fixture
@@ -303,6 +329,13 @@ def run(world, req, **overrides):
     return hlae_render.render(req, **options)
 
 
+def run_reporting(world, req, **overrides):
+    """Runs the job as `run` does and gives its result with every progress report, each as a tuple of its fields."""
+    reports = []
+    result = run(world, req, progress=lambda progress: reports.append(astuple(progress)), **overrides)
+    return result, reports
+
+
 def assert_clean(world):
     """Whatever happened, no game or HLAE.exe is left running and no cfg file is left in CS2's folder."""
     assert not world.cs2
@@ -311,7 +344,7 @@ def assert_clean(world):
 
 
 def assert_not_started(world, result, failure):
-    assert (result.ok, result.aborted, result.failure, result.clips) == (False, False, failure, ())
+    assert (result.ok, result.aborted, result.failure, result.clips) == (False, False, failure, {})
     assert world.launches == []
     assert world.cfgs() == []
     assert world.ini() is None
@@ -325,10 +358,11 @@ def test_two_sequences_become_two_clips_and_nothing_is_left_behind(world, req):
     world.scripts = [game()]
     result = run(world, req)
     assert result.ok and result.failure is None and not result.aborted
-    assert [(clip.sequence, clip.start_tick, clip.end_tick, clip.path.name) for clip in result.clips] == [
+    assert list(result.clips) == ["player"]
+    assert [(clip.sequence, clip.start_tick, clip.end_tick, clip.path.name) for clip in result.clips["player"]] == [
         (1, 19744, 20328, CLIP_1), (2, 75744, 76128, CLIP_2)]
-    assert all(clip.path.parent == req.output_dir and clip.path.is_file() and clip.duration_s == 4.0
-               for clip in result.clips)
+    assert all(clip.path.parent == req.outputs["player"] and clip.path.is_file() and clip.duration_s == 4.0
+               for clip in result.clips["player"])
     assert not world.raw_dir.exists()
     assert_clean(world)
     assert len(world.launches) == 1 and world.kills == 0 and world.hlae_ended == 0
@@ -348,7 +382,7 @@ def test_the_request_for_the_plan_is_the_one_the_job_makes(world, req):
     world.scripts = [game([1])]
     result = run(world, replace(req, rounds=(12,)))
     assert world.asked_for == [MATCH_CHECKSUM]
-    assert [clip.path.name for clip in result.clips] == ["sequence-1-tick-75744-to-76128.mp4"]
+    assert [clip.path.name for clip in result.clips["player"]] == ["sequence-1-tick-75744-to-76128.mp4"]
 
 
 def test_the_defaults_are_the_ones_the_job_runs_with():
@@ -660,7 +694,7 @@ def test_a_recording_that_keeps_writing_is_not_stalled_however_long_it_takes(wor
                       (18, "line", ran("s1_start")), *growth, (100, "line", ran("s1_end")),
                       (101, "line", ran("s1_quit")), (103, "cs2_down")]]
     result = run(world, replace(req, rounds=(3,)))
-    assert result.ok and [clip.path.name for clip in result.clips] == [CLIP_1]
+    assert result.ok and [clip.path.name for clip in result.clips["player"]] == [CLIP_1]
 
 
 def test_a_game_that_closes_while_recording_fails_the_job(world, req):
@@ -676,7 +710,7 @@ def test_a_game_that_closes_while_recording_fails_the_job(world, req):
 def test_a_game_that_closes_after_the_last_sequence_but_before_quit_has_recorded_everything(world, req):
     world.scripts = [game(quits=False)]
     result = run(world, req)
-    assert result.ok and len(result.clips) == 2
+    assert result.ok and len(result.clips["player"]) == 2
     assert "every Sequence is recorded" in world.log()
 
 
@@ -687,7 +721,7 @@ def test_a_game_that_finishes_just_before_it_is_looked_at_is_read_to_its_end(wor
     world.scripts = [script]
     world.before_look = [(45, "line", ran("s2_end")), (45, "line", ran("s2_quit")), (45, "cs2_down")]
     result = run(world, req)
-    assert result.ok and len(result.clips) == 2
+    assert result.ok and len(result.clips["player"]) == 2
     assert "marker quit, 45.0 s after launch" in world.log()
     assert "intervention" not in world.log()
 
@@ -695,7 +729,7 @@ def test_a_game_that_finishes_just_before_it_is_looked_at_is_read_to_its_end(wor
 def test_a_game_that_does_not_close_after_quit_is_closed_without_failing_the_job(world, req):
     world.scripts = [game(closes=False)]
     result = run(world, req)
-    assert result.ok and len(result.clips) == 2
+    assert result.ok and len(result.clips["player"]) == 2
     assert world.kills == 1
     assert "intervention: CS2 still running 10 s after 'quit'" in world.log()
     assert_clean(world)
@@ -722,7 +756,7 @@ def test_an_abort_closes_the_game_and_hlae_and_removes_the_cfgs(world, req):
     world.scripts = [[(4, "cs2_up"), (15, "line", ran("go"))]]
     world.abort_at = world.now + 20
     result = run(world, req)
-    assert (result.ok, result.aborted, result.failure, result.clips) == (False, True, ABORTED, ())
+    assert (result.ok, result.aborted, result.failure, result.clips) == (False, True, ABORTED, {})
     assert world.kills == 1 and world.hlae_ended == 1
     assert_clean(world)
 
@@ -787,7 +821,7 @@ def test_a_failed_mux_fails_the_job(world, req):
     result = run(world, req)
     assert result.failure == ("mux failed: ffmpeg failed on Sequence 1 (exit code 1): "
                               "Invalid data found when processing input")
-    assert result.clips == ()
+    assert result.clips == {}
     assert_clean(world)
     assert "failed: mux failed" in world.log()
 
@@ -815,6 +849,162 @@ def test_a_mux_that_made_no_clip_fails_the_job(world, req):
     world.scripts = [game()]
     result = run(world, req)
     assert result.failure == "no sequence-*.mp4 in the output folder"
+    assert_clean(world)
+
+
+# --- two views in one launch --------------------------------------------------------------------------
+
+
+def test_two_views_are_recorded_in_one_launch_and_each_is_joined_into_its_own_folder(world, both):
+    world.scripts = [two_views_game()]
+    result = run(world, both)
+    assert result.ok and result.failure is None and not result.aborted
+    assert list(result.clips) == ["player", "enemy"]
+    assert [(clip.sequence, clip.start_tick, clip.end_tick, clip.path.name) for clip in result.clips["player"]] == [
+        (1, 19744, 20328, CLIP_1), (2, 75744, 76128, CLIP_2)]
+    assert [(clip.sequence, clip.start_tick, clip.end_tick, clip.path.name) for clip in result.clips["enemy"]] == [
+        (3, 19744, 20328, "sequence-3-tick-19744-to-20328.mp4"),
+        (4, 75744, 76128, "sequence-4-tick-75744-to-76128.mp4")]
+    assert all(clip.path.parent == both.outputs[perspective] and clip.path.is_file()
+               for perspective, clips in result.clips.items() for clip in clips)
+    assert not world.raw_dir.exists()
+    assert len(world.launches) == 1 and world.kills == 0 and world.hlae_ended == 0
+    assert_clean(world)
+
+
+def test_the_second_view_is_joined_from_the_raw_recordings_of_the_one_launch(world, both):
+    world.scripts = [two_views_game()]
+    run(world, both)
+    assert [command[command.index("-i") + 1] for command in world.ffmpeg_calls] == [
+        str(world.raw_dir / f"{number}-sequence" / "video.mp4") for number in (1, 2, 3, 4)]
+    assert world.trace == ["awake", "launch", "mux", "mux", "mux", "mux", "asleep"]
+
+
+def test_the_log_plans_the_second_view_as_starting_the_demo_again(world, both):
+    world.scripts = [two_views_game()]
+    run(world, both)
+    text = world.log()
+    assert "plan: 2 Sequences of the player view" in text
+    assert "then 2 Sequences of the enemy view, after the demo starts again" in text
+    assert "Sequence 3: ticks 19744 to 20328, 2 cameras" in text
+    for marker in ("again, 43.0", "playing, 45.0", "ready 3, 47.0", "done 4, 72.0", "quit, 77.0"):
+        assert f"marker {marker} s after launch" in text
+    assert "mux: joining 2 Sequences of the player view into Clips" in text
+    assert "mux: joining 2 Sequences of the enemy view into Clips" in text
+    assert text.rstrip().endswith("done: 4 Clips")
+
+
+def test_a_view_whose_output_folder_cannot_be_made_stops_the_job_before_the_launch(world, both, tmp_path):
+    (tmp_path / "out-enemy").write_text("a file where the enemy view's Clips should go")
+    world.scripts = [two_views_game()]
+    result = run(world, both)
+    assert result.failure.startswith("could not set up the HLAE files: ")
+    assert world.launches == [] and world.cfgs() == []
+
+
+def test_a_launch_that_fails_during_the_second_view_keeps_the_first_views_clips(world, both):
+    script = [event for event in two_views_game(second=(3,), quits=False, closes=False)
+              if event[1:] != ("line", ran("s3_end"))]
+    world.scripts = [script]
+    result = run(world, both)
+    assert (result.ok, result.failure) == (False, "stalled: no progress for 30s after 'recording 3'")
+    assert list(result.clips) == ["player"]
+    assert [clip.path.name for clip in result.clips["player"]] == [CLIP_1, CLIP_2]
+    assert [Path(command[-1]).name for command in world.ffmpeg_calls] == [CLIP_1, CLIP_2]
+    assert not world.raw_dir.exists()
+    assert "kept: 2 Clips of the player view; the enemy view was not recorded" in world.log()
+    assert_clean(world)
+
+
+def test_a_second_view_whose_last_sequence_never_finishes_keeps_the_first_views_clips(world, both):
+    world.scripts = [[event for event in two_views_game() if event[1:] != ("line", ran("s4_end"))]]
+    result = run(world, both)
+    assert (result.ok, result.failure) == (False, "Sequence 4 never finished recording")
+    assert list(result.clips) == ["player"] and len(result.clips["player"]) == 2
+    assert_clean(world)
+
+
+def test_a_launch_that_fails_during_the_first_view_keeps_no_clips(world, both):
+    world.scripts = [[(2, "hlae_exits", 0), (4, "cs2_up"), (15, "line", ran("go")), (17, "line", ran("s1_prepare"))]]
+    result = run(world, both)
+    assert (result.ok, result.failure, result.clips) == (False, "stalled: no progress for 30s after 'ready 1'", {})
+    assert world.ffmpeg_calls == []
+    assert_clean(world)
+
+
+def test_a_mux_that_fails_on_the_second_view_keeps_the_first_views_clips_and_the_raw_recordings(world, both):
+    def run_ffmpeg(command, **kwargs):
+        if command[-1].startswith(str(both.outputs["enemy"])):
+            return SimpleNamespace(returncode=1, stderr="Invalid data found when processing input")
+        return world.run_ffmpeg(command, **kwargs)
+
+    world.scripts = [two_views_game()]
+    result = run(world, both, run_ffmpeg=run_ffmpeg)
+    assert (result.ok, result.failure) == (
+        False, "mux failed: ffmpeg failed on Sequence 3 (exit code 1): Invalid data found when processing input")
+    assert list(result.clips) == ["player"] and len(result.clips["player"]) == 2
+    assert world.raw_dir.exists()       # the only copy of what the enemy view recorded
+    assert_clean(world)
+
+
+# --- how far it has got -------------------------------------------------------------------------------
+
+
+def test_a_job_reports_its_start_each_sequence_and_the_joining(world, req):
+    world.scripts = [game()]
+    result, reports = run_reporting(world, req)
+    assert result.ok
+    # 968 ticks in all: Sequence 1 has 584 and Sequence 2 has 384. The first 'ready' came 17 s after the launch and
+    # Sequence 1's 'done' 10 s later, so the 384 ticks left take 10 * 384 / 584 s at that pace.
+    assert reports == [
+        ("starting", "player", 0, 2, 0.0, None),
+        ("recording", "player", 1, 2, 584 / 968, pytest.approx(10 * 384 / 584)),
+        ("recording", "player", 2, 2, 1.0, 0.0),
+        ("joining", "player", 2, 2, 1.0, None),
+    ]
+
+
+def test_a_two_view_job_reports_the_enemy_view_from_the_demo_starting_again(world, both):
+    world.scripts = [two_views_game()]
+    result, reports = run_reporting(world, both)
+    assert result.ok
+    # 1936 ticks in all, both views' Sequences; the demo starts again 43 s after the launch and the enemy view's
+    # first Sequence is done 26 s after it, at the pace of the launch so far
+    assert reports == [
+        ("starting", "player", 0, 2, 0.0, None),
+        ("recording", "player", 1, 2, 584 / 1936, pytest.approx(10 * 1352 / 584)),
+        ("recording", "player", 2, 2, 0.5, pytest.approx(25.0)),
+        ("restarting", "enemy", 0, 2, 0.5, pytest.approx(26.0)),
+        ("recording", "enemy", 1, 2, 1552 / 1936, pytest.approx(40 * 384 / 1552)),
+        ("recording", "enemy", 2, 2, 1.0, 0.0),
+        ("joining", "enemy", 2, 2, 1.0, None),
+    ]
+
+
+def test_a_launch_that_fails_in_the_second_view_reports_joining_the_first_view_alone(world, both):
+    script = [event for event in two_views_game(second=(3,), quits=False, closes=False)
+              if event[1:] != ("line", ran("s3_end"))]
+    world.scripts = [script]
+    result, reports = run_reporting(world, both)
+    assert result.failure == "stalled: no progress for 30s after 'recording 3'"
+    assert reports[-1] == ("joining", "player", 2, 2, 1.0, None)
+
+
+def test_each_launch_reports_that_cs2_is_starting(world, req):
+    world.scripts = [[(4, "cs2_up")], game()]       # the first never plays, so the job starts CS2 again
+    result, reports = run_reporting(world, req)
+    assert result.ok and len(world.launches) == 2
+    assert [report[:2] for report in reports if report[0] == "starting"] == [("starting", "player")] * 2
+
+
+def test_a_progress_report_that_raises_is_said_once_and_the_job_goes_on(world, req):
+    def broken(progress):
+        raise RuntimeError("the window is gone")
+
+    world.scripts = [game()]
+    result = run(world, req, progress=broken)
+    assert result.ok and [clip.path.name for clip in result.clips["player"]] == [CLIP_1, CLIP_2]
+    assert world.log().count("progress report failed: the window is gone") == 1
     assert_clean(world)
 
 

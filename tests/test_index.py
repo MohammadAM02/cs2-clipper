@@ -125,6 +125,18 @@ def test_a_demo_that_has_its_reels_is_never_deleted(index, state):
     assert index.demo(demo_id)["state"] == state
 
 
+def test_a_demo_rendering_another_view_of_its_reels_is_never_deleted(index):
+    demo_id = add(index)
+    index.save_match(MATCH)
+    index.save_highlights(MATCH.checksum, [highlight(3, 50, 1000)], {3})
+    index.advance(demo_id, "done", match_checksum=MATCH.checksum)
+    index.save_reel(index.selected_highlights(MATCH.checksum)[0]["id"], "player", "r3-player.mp4", 6.0)
+    index.ask_render(demo_id, "enemy")
+    with pytest.raises(ValueError, match="Reels"):
+        index.delete_demo(demo_id)
+    assert index.demo(demo_id)["state"] == "rendering"
+
+
 def test_deleting_an_unknown_demo_finds_nothing(index):
     assert index.delete_demo(999) is None
 
@@ -165,6 +177,100 @@ def test_a_perspectives_queued_render_jobs_come_off_the_queue_and_the_rest_stay(
     assert index.latest_render(second, "player")["state"] == "queued"
 
 
+# --- asking a done Demo for the view it did not render: asked_renders ----------------------------
+
+
+def done_demo(index, name="1-a.dem.zst", sha="a" * 64) -> int:
+    demo_id = add(index, name, sha)
+    index.advance(demo_id, "done")
+    return demo_id
+
+
+def test_asking_for_a_view_queues_it_and_takes_the_done_demo_back_to_rendering(index):
+    demo_id = done_demo(index)
+    index.advance(demo_id, "done", last_error="an old hiccup")
+
+    index.ask_render(demo_id, "enemy")
+
+    demo = index.demo(demo_id)
+    assert (demo["state"], demo["attempts"], demo["last_error"]) == ("rendering", 0, None)
+    assert index.asked_renders(demo_id) == ("enemy",)
+    job = index.latest_render(demo_id, "enemy")
+    assert (job["state"], job["attempt"]) == ("queued", 1)
+    assert index.latest_render(demo_id, "player") is None
+
+
+@pytest.mark.parametrize("state", ["spotted", "rendering", "joined", "failed"])
+def test_only_a_done_demo_can_be_asked_for_a_view(index, state):
+    demo_id = add(index)
+    index.advance(demo_id, state)
+    with pytest.raises(ValueError, match="is not done"):
+        index.ask_render(demo_id, "enemy")
+    assert index.demo(demo_id)["state"] == state
+    assert index.asked_renders(demo_id) == ()
+    assert index.latest_render(demo_id, "enemy") is None
+
+
+def test_asking_about_an_unknown_demo_or_a_bad_view_is_a_value_error(index):
+    demo_id = done_demo(index)
+    with pytest.raises(ValueError, match="does not exist"):
+        index.ask_render(999, "enemy")
+    with pytest.raises(ValueError):
+        index.ask_render(demo_id, "both")
+    assert index.asked_renders(demo_id) == ()
+
+
+def test_a_failed_ask_changes_nothing(index, monkeypatch):
+    demo_id = done_demo(index)
+
+    def failing_queue_render(demo_id, perspective, attempt):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(index, "queue_render", failing_queue_render)
+    with pytest.raises(sqlite3.OperationalError):
+        index.ask_render(demo_id, "enemy")
+
+    assert index.demo(demo_id)["state"] == "done"
+    assert index.asked_renders(demo_id) == ()
+
+
+def test_the_asks_of_a_demo_can_be_cleared(index):
+    demo_id = done_demo(index)
+    index.ask_render(demo_id, "enemy")
+    index.clear_asked_renders(demo_id)
+    assert index.asked_renders(demo_id) == ()
+
+
+def test_unqueue_renders_leaves_the_queued_job_of_a_demo_that_asked_for_the_view(index):
+    asked, other = done_demo(index), done_demo(index, "2-b.dem.zst", "b" * 64)
+    index.ask_render(asked, "enemy")
+    index.queue_render(other, "enemy", attempt=1)
+    index.queue_render(asked, "player", attempt=1)
+
+    assert index.unqueue_renders("enemy") == 1
+    assert index.latest_render(asked, "enemy")["state"] == "queued"
+    assert index.latest_render(other, "enemy") is None
+    assert index.unqueue_renders("player") == 1
+    assert index.latest_render(asked, "player") is None
+
+
+def test_deleting_a_demo_takes_its_asks_with_it(index):
+    demo_id = done_demo(index)
+    index.ask_render(demo_id, "enemy")
+    assert index.delete_demo(demo_id)["id"] == demo_id
+    assert index.demo(demo_id) is None
+    assert index.asked_renders(demo_id) == ()
+
+
+def test_demo_of_match_is_the_newest_demo_of_that_match(index):
+    first = add(index)
+    index.advance(first, "done", match_checksum=MATCH.checksum)
+    second = add(index, "2-b.dem.zst", "b" * 64)
+    index.advance(second, "rendering", match_checksum=MATCH.checksum)
+    assert index.demo_of_match(MATCH.checksum)["id"] == second
+    assert index.demo_of_match("0" * 16) is None
+
+
 def test_clips_come_from_finished_renders_in_tick_order(index):
     demo_id = add(index)
     index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031)], {12})
@@ -192,10 +298,20 @@ def test_one_reel_per_highlight_and_perspective(index):
     assert index.reel_count(MATCH.checksum) == 2
 
 
+def test_has_reel_tells_whether_a_highlight_already_has_a_reel_for_a_view(index):
+    index.save_match(MATCH)
+    index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031)], {12})
+    highlight_id = index.selected_highlights(MATCH.checksum)[0]["id"]
+    assert index.has_reel(highlight_id, "player") is False
+    index.save_reel(highlight_id, "player", Path("E:/r12-player.mp4"), 15.6)
+    assert index.has_reel(highlight_id, "player") is True
+    assert index.has_reel(highlight_id, "enemy") is False
+
+
 # --- reel_matches / match_reels / reel: the Reels page (Task 12) -----------------------------------
 
 
-def test_reel_matches_lists_only_done_demos_with_a_reel_newest_played_first(index):
+def test_reel_matches_lists_matches_of_any_demo_state_with_a_reel_newest_played_first(index):
     older = MatchInfo(checksum="a" * 16, map_name="de_inferno",
                       played_at=datetime(2026, 9, 20, tzinfo=timezone.utc), team_score=13, opponent_score=5)
     newer = MatchInfo(checksum="b" * 16, map_name="de_mirage",
@@ -217,8 +333,9 @@ def test_reel_matches_lists_only_done_demos_with_a_reel_newest_played_first(inde
 
     rows = index.reel_matches()
 
-    assert [r["checksum"] for r in rows] == [newer.checksum, older.checksum]
-    row = rows[1]
+    # not_done is still rendering its other view: it stays listed while that view renders
+    assert [r["checksum"] for r in rows] == [not_done.checksum, newer.checksum, older.checksum]
+    row = rows[2]
     assert (row["map"], row["team_score"], row["opponent_score"], row["result"]) == ("de_inferno", 13, 5, "win")
 
 
@@ -386,6 +503,26 @@ def test_the_page_lists_matches_to_grab_and_what_was_decided_in_the_last_day(ind
     rows = index.page_matches(NOW - timedelta(hours=24))
     assert [r["match_id"] for r in rows] == [SECOND, FIRST]
     assert rows[0]["demo_state"] is None
+
+
+def test_an_existing_index_gains_the_asked_renders_table(tmp_path):
+    path = tmp_path / "clipper.sqlite"
+    old = sqlite3.connect(path)
+    old.execute("CREATE TABLE demos (id INTEGER PRIMARY KEY, file_name TEXT NOT NULL UNIQUE,"
+                " sha256 TEXT NOT NULL UNIQUE, archive_path TEXT NOT NULL, dem_path TEXT, match_checksum TEXT,"
+                " state TEXT NOT NULL, resume_state TEXT, attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,"
+                " created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    old.execute("INSERT INTO demos (file_name, sha256, archive_path, state, created_at, updated_at)"
+                " VALUES ('1-a.dem.zst', 'aaa', 'E:/a', 'done', 'x', 'x')")
+    old.commit()
+    old.close()
+    index = Index(path)
+    try:
+        demo_id = index.find_demo("1-a.dem.zst")["id"]
+        index.ask_render(demo_id, "enemy")
+        assert index.asked_renders(demo_id) == ("enemy",)
+    finally:
+        index.close()
 
 
 def test_an_existing_index_gains_the_faceit_table(tmp_path):

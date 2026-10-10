@@ -12,13 +12,15 @@ from dataclasses import dataclass, replace
 from threading import Lock
 
 from clipper.alerts import map_label
+from clipper.render import RenderProgress
 
 
 @dataclass(frozen=True)
 class Rendering:
     map_name: str          # the analysis's map name, e.g. "de_mirage"
-    perspective: str       # "player" | "enemy"
+    perspective: str       # "player" | "enemy" | "both" (one CS2 launch records both views)
     started_at: float      # time.time() when the Render Job started
+    progress: RenderProgress | None = None      # how far it has got, once the render reports it
 
 
 @dataclass(frozen=True)
@@ -29,6 +31,16 @@ class Snapshot:
     rendering: Rendering | None = None
     quitting: str | None = None         # "now" | "after_render" | None
     pages_off: str | None = None        # why the web server has no port (the tray adds it to its tooltip)
+
+
+def views_label(perspective: str) -> str:
+    """What the app calls the view(s) a render records: "player view", "enemy view" or "both views"."""
+    return "both views" if perspective == "both" else f"{perspective} view"
+
+
+def view_name(perspective: str) -> str:
+    """What the notifications and the Reels page call one view: "your view" or "the Enemy POV"."""
+    return "your view" if perspective == "player" else "the Enemy POV"
 
 
 def summary(snapshot: Snapshot) -> str:
@@ -44,7 +56,7 @@ def summary(snapshot: Snapshot) -> str:
         more = len(snapshot.problems) - 1
         return f"{text} (+{more} more)" if more else text
     if snapshot.rendering is not None:
-        return f"Rendering {map_label(snapshot.rendering.map_name)} ({snapshot.rendering.perspective} view)"
+        return f"Rendering {map_label(snapshot.rendering.map_name)} ({views_label(snapshot.rendering.perspective)})"
     if snapshot.paused_by == "you":
         return "Paused by you"
     if snapshot.paused_by == "failures":
@@ -81,6 +93,13 @@ class AppState:
     def set_rendering(self, rendering: Rendering) -> None:
         with self._lock:
             self._snapshot = replace(self._snapshot, rendering=rendering, waiting=())
+
+    def set_progress(self, progress: RenderProgress) -> None:
+        """How far the current Rendering has got. Nothing when nothing is rendering: a late report changes nothing."""
+        with self._lock:
+            if self._snapshot.rendering is not None:
+                rendering = replace(self._snapshot.rendering, progress=progress)
+                self._snapshot = replace(self._snapshot, rendering=rendering)
 
     def set_idle(self) -> None:
         with self._lock:

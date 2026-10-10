@@ -42,7 +42,7 @@ import sqlite3
 import subprocess
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -59,7 +59,7 @@ from clipper.faceit import FaceitError
 from clipper.faceit_oauth import OAuthError
 from clipper.index import Index
 from clipper.settings import FIELDS, SECRETS, Field, Loaded, json_values
-from clipper.state import Snapshot, summary
+from clipper.state import Snapshot, summary, view_name
 
 log = logging.getLogger(__name__)
 
@@ -157,17 +157,53 @@ def field_dict(f: Field) -> dict:
             "minimum": f.minimum, "maximum": f.maximum, "choices": list(f.choices), "help": f.help}
 
 
-def reels_row(index: Index, match: sqlite3.Row) -> dict:
-    """One entry of `/api/reels`: `match`'s Reels, in round order (spec: Pages, Reels)."""
+def _render_options(index: Index, config: Config, checksum: str) -> tuple[list[str], dict[str, str | None]]:
+    """What the Reels page can ask of `checksum`'s Demo: the views it is rendering now (asked for and not done), and
+    for each Perspective why it cannot be asked for now in plain words, or None when it can. A view can be asked for
+    when the Demo is done with its download kept, the match has Highlights and no Reel of that view, and the view is
+    not already rendering; Round mode has no Enemy POV (spec: Pages, Reels)."""
+    demo = index.demo_of_match(checksum)
+    if demo is None:
+        return [], {perspective: "This match has no Demo." for perspective in PERSPECTIVES}
+    asked = index.asked_renders(demo["id"])
+    has_highlights = bool(index.selected_highlights(checksum))
+    reels = index.match_reels(checksum)
+    refusals: dict[str, str | None] = {}
+    for perspective in PERSPECTIVES:
+        name = view_name(perspective)
+        if not has_highlights:
+            refusal = "This match has no Highlights to render."
+        elif any(row[f"{perspective}_reel_id"] is not None for row in reels):
+            refusal = f"This match already has {name}."
+        elif perspective in asked:
+            refusal = f"Already rendering {name}."
+        elif perspective == "enemy" and config.sequence_event == "rounds":
+            refusal = "Round mode has no Enemy POV."
+        elif demo["state"] != "done":
+            refusal = "The Demo is not done yet."
+        elif not Path(demo["archive_path"]).is_file():
+            refusal = "The Demo's download is gone, so it cannot be rendered again."
+        else:
+            refusal = None
+        refusals[perspective] = refusal
+    return list(asked), refusals
+
+
+def reels_row(index: Index, match: sqlite3.Row, config: Config) -> dict:
+    """One entry of `/api/reels`: `match`'s Reels, in round order, and the views the Reels page can render for it:
+    `rendering` (asked for, not done yet) and `can_render` (see `_render_options`) (spec: Pages, Reels)."""
     highlights = [
         {"round": h["round"], "type": h["type"], "reasons": json.loads(h["reasons"]),
          "player": h["player_reel_id"], "enemy": h["enemy_reel_id"]}
         for h in index.match_reels(match["checksum"])
     ]
+    rendering, refusals = _render_options(index, config, match["checksum"])
     return {
         "checksum": match["checksum"], "map": map_label(match["map"]), "played_at": match["played_at"],
         "score": f"{match['team_score']}–{match['opponent_score']}", "result": match["result"],
         "highlights": highlights,
+        "rendering": rendering,
+        "can_render": [perspective for perspective in PERSPECTIVES if refusals[perspective] is None],
     }
 
 
@@ -291,8 +327,10 @@ def create_app(ctx: WebContext) -> Flask:
         snapshot = ctx.snapshot()
         rendering = None
         if snapshot.rendering is not None:
+            progress = snapshot.rendering.progress
             rendering = {"map": map_label(snapshot.rendering.map_name),
-                        "perspective": snapshot.rendering.perspective, "started_at": snapshot.rendering.started_at}
+                         "perspective": snapshot.rendering.perspective, "started_at": snapshot.rendering.started_at,
+                         "progress": None if progress is None else asdict(progress)}
         index = Index(ctx.index_path)
         try:
             demos = status_demos(index)
@@ -415,9 +453,10 @@ def create_app(ctx: WebContext) -> Flask:
 
     @app.get("/api/reels")
     def api_reels():
+        config = ctx.load_settings().config
         index = Index(ctx.index_path)
         try:
-            body = [reels_row(index, match) for match in index.reel_matches()]
+            body = [reels_row(index, match, config) for match in index.reel_matches()]
         finally:
             index.close()
         return _no_store(jsonify(body))
@@ -475,6 +514,39 @@ def create_app(ctx: WebContext) -> Flask:
             log.warning("could not open %s: %s", folder, exc)
             return Response(status=404)
         return Response(status=204)
+
+    @app.post("/api/reels/<checksum:checksum>/render")
+    def api_reels_render(checksum: str):
+        """202 once the match's Demo is asked to render `perspective`: it goes back in the queue for that view alone,
+        using its kept download. 409 says in plain words why it cannot (spec: Pages, Reels)."""
+        body = request.get_json(silent=True)
+        perspective = body.get("perspective") if isinstance(body, dict) else None
+        if perspective not in PERSPECTIVES:
+            response = jsonify(error='perspective must be "player" or "enemy"')
+            response.status_code = 400
+            return _no_store(response)
+        config = ctx.load_settings().config
+        index = Index(ctx.index_path)
+        try:
+            demo = index.demo_of_match(checksum)
+            if demo is None:
+                return Response(status=404)
+            _, refusals = _render_options(index, config, checksum)
+            if refusals[perspective] is not None:
+                response = jsonify(error=refusals[perspective])
+                response.status_code = 409
+                return _no_store(response)
+            try:
+                index.ask_render(demo["id"], perspective)
+            except ValueError as exc:     # the Demo changed since the check above; `ask_render` checked again
+                response = jsonify(error=str(exc))
+                response.status_code = 409
+                return _no_store(response)
+        finally:
+            index.close()
+        response = jsonify(queued=perspective)
+        response.status_code = 202
+        return _no_store(response)
 
     @app.get("/settings")
     def settings_page():

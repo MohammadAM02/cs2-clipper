@@ -59,6 +59,11 @@ CREATE TABLE IF NOT EXISTS render_jobs (
     finished_at TEXT,
     failure     TEXT
 );
+CREATE TABLE IF NOT EXISTS asked_renders (
+    demo_id     INTEGER NOT NULL REFERENCES demos (id),
+    perspective TEXT NOT NULL,
+    PRIMARY KEY (demo_id, perspective)
+);
 CREATE TABLE IF NOT EXISTS clips (
     id            INTEGER PRIMARY KEY,
     render_job_id INTEGER NOT NULL REFERENCES render_jobs (id),
@@ -164,6 +169,10 @@ class Index:
     def all_demos(self) -> list[sqlite3.Row]:
         return self._all("SELECT * FROM demos ORDER BY id")
 
+    def demo_of_match(self, checksum: str) -> sqlite3.Row | None:
+        """The newest Demo of a match, or None when no Demo of it is in the index."""
+        return self._one("SELECT * FROM demos WHERE match_checksum = ? ORDER BY id DESC LIMIT 1", (checksum,))
+
     def advance(self, demo_id: int, state: str, **fields: object) -> None:
         """Move a Demo to `state`; the new step's attempts start from zero."""
         unknown = set(fields) - _DEMO_FIELDS
@@ -216,6 +225,27 @@ class Index:
         self._db.execute("COMMIT")
         return state
 
+    def ask_render(self, demo_id: int, perspective: str) -> None:
+        """Ask a done Demo to render the view it did not render: it goes back to rendering with a fresh Render Job for
+        that view, and keeps the ask (`asked_renders`) until it is finished. One transaction, as in `retry`."""
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            demo = self.demo(demo_id)
+            if demo is None:
+                raise ValueError(f"demo {demo_id} does not exist")
+            if demo["state"] != "done":
+                raise ValueError(f"demo {demo_id} is not done")
+            if perspective not in ("player", "enemy"):
+                raise ValueError(f"unknown perspective: {perspective!r}")
+            self._db.execute("INSERT INTO asked_renders (demo_id, perspective) VALUES (?, ?)"
+                             " ON CONFLICT (demo_id, perspective) DO NOTHING", (demo_id, perspective))
+            self.queue_render(demo_id, perspective, attempt=1)
+            self.advance(demo_id, "rendering", last_error=None)
+        except BaseException:
+            self._db.execute("ROLLBACK")
+            raise
+        self._db.execute("COMMIT")
+
     def delete_demo(self, demo_id: int) -> sqlite3.Row | None:
         """Forget a Demo that is not in Reels yet: its Render Jobs and their Clips go with it, and its
         FACEIT match lets go of it. Returns the row deleted (None when there was none); its files are
@@ -225,11 +255,13 @@ class Index:
         try:
             demo = self.demo(demo_id)
             if demo is not None:
-                if demo["state"] in ("joined", "done"):
+                if demo["state"] in ("joined", "done") or (       # or it renders another view of its Reels
+                        demo["match_checksum"] and self.reel_count(demo["match_checksum"])):
                     raise ValueError(f"demo {demo_id} is already in Reels")
                 self._db.execute("DELETE FROM clips WHERE render_job_id IN"
                                  " (SELECT id FROM render_jobs WHERE demo_id = ?)", (demo_id,))
                 self._db.execute("DELETE FROM render_jobs WHERE demo_id = ?", (demo_id,))
+                self._db.execute("DELETE FROM asked_renders WHERE demo_id = ?", (demo_id,))
                 self._db.execute("UPDATE faceit_matches SET demo_id = NULL WHERE demo_id = ?", (demo_id,))
                 self._db.execute("DELETE FROM demos WHERE id = ?", (demo_id,))
         except BaseException:
@@ -282,11 +314,23 @@ class Index:
         )
         return cursor.lastrowid
 
+    def asked_renders(self, demo_id: int) -> tuple[str, ...]:
+        """The views a Demo was asked to render (`ask_render`); the asks are cleared once the Demo is done."""
+        rows = self._all("SELECT perspective FROM asked_renders WHERE demo_id = ? ORDER BY perspective", (demo_id,))
+        return tuple(row["perspective"] for row in rows)
+
+    def clear_asked_renders(self, demo_id: int) -> None:
+        self._db.execute("DELETE FROM asked_renders WHERE demo_id = ?", (demo_id,))
+
     def unqueue_renders(self, perspective: str) -> int:
         """Take every Demo's queued Render Job for `perspective` off the queue; returns how many went.
-        Jobs that started stay, so each Demo's latest attempt is its last real one again."""
+        Jobs that started stay, so each Demo's latest attempt is its last real one again; so do the queued
+        jobs of Demos that asked for this view (`ask_render`)."""
         cursor = self._db.execute(
-            "DELETE FROM render_jobs WHERE perspective = ? AND state = 'queued'", (perspective,)
+            "DELETE FROM render_jobs WHERE perspective = ? AND state = 'queued'"
+            " AND NOT EXISTS (SELECT 1 FROM asked_renders a WHERE a.demo_id = render_jobs.demo_id"
+            " AND a.perspective = render_jobs.perspective)",
+            (perspective,),
         )
         return cursor.rowcount
 
@@ -337,6 +381,11 @@ class Index:
             (highlight_id, perspective, str(path), duration_s),
         )
 
+    def has_reel(self, highlight_id: int, perspective: str) -> bool:
+        """Whether this Highlight already has a Reel for `perspective`."""
+        return self._one("SELECT 1 FROM reels WHERE highlight_id = ? AND perspective = ?",
+                         (highlight_id, perspective)) is not None
+
     def reel_count(self, checksum: str) -> int:
         row = self._one(
             "SELECT count(*) FROM reels r JOIN highlights h ON h.id = r.highlight_id"
@@ -346,11 +395,12 @@ class Index:
         return row[0]
 
     def reel_matches(self) -> list[sqlite3.Row]:
-        """Every match with a done Demo and at least one Reel on a selected Highlight -- what
-        `match_reels` lists -- newest played first (spec: Pages, Reels)."""
+        """Every match with at least one Reel on a selected Highlight -- what `match_reels` lists -- whatever
+        its Demo's state: a match stays on the Reels page while its other view renders. Newest played first
+        (spec: Pages, Reels)."""
         return self._all(
-            "SELECT DISTINCT m.checksum, m.map, m.played_at, m.team_score, m.opponent_score, m.result"
-            " FROM matches m JOIN demos d ON d.match_checksum = m.checksum AND d.state = 'done'"
+            "SELECT m.checksum, m.map, m.played_at, m.team_score, m.opponent_score, m.result"
+            " FROM matches m"
             " WHERE EXISTS (SELECT 1 FROM highlights h JOIN reels r ON r.highlight_id = h.id"
             " WHERE h.match_checksum = m.checksum AND h.selected = 1)"
             " ORDER BY m.played_at DESC"

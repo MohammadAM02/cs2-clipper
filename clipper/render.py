@@ -4,21 +4,21 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from clipper.model import ClipFile
 
 CLIP_NAME = re.compile(r"^sequence-(\d+)-tick-(\d+)-to-(\d+)\.mp4$", re.IGNORECASE)
 ABORTED = "aborted: FACEIT AC started during the render"
+PERSPECTIVES = ("player", "enemy")
 
 
 @dataclass(frozen=True)
 class RenderRequest:
     demo_path: Path
-    perspective: str            # "player" or "enemy"
+    outputs: dict[str, Path]    # each Perspective to record, with the folder its Clips go to, in the order recorded
     rounds: tuple[int, ...]
-    output_dir: Path
     log_path: Path
     steamid: str
     padding_before_s: float
@@ -28,13 +28,41 @@ class RenderRequest:
     height: int = 1080
     checksum: str = ""          # the Demo's match, whose analysis the plan is made from
 
+    def __post_init__(self) -> None:
+        if not 1 <= len(self.outputs) <= 2:
+            raise ValueError(f"a Render Job records one or two views, not {len(self.outputs)}")
+        for perspective in self.outputs:
+            if perspective not in PERSPECTIVES:
+                raise ValueError(f"unknown perspective: {perspective!r}")
+
+    @property
+    def perspectives(self) -> tuple[str, ...]:
+        """The views to record, in the order they are recorded."""
+        return tuple(self.outputs)
+
 
 @dataclass(frozen=True)
 class RenderResult:
-    ok: bool
+    ok: bool                    # every view recorded
     aborted: bool = False
     failure: str | None = None
-    clips: tuple[ClipFile, ...] = ()
+    clips: dict[str, tuple[ClipFile, ...]] = field(default_factory=dict)     # by Perspective: the views that recorded
+
+
+@dataclass(frozen=True)
+class RenderProgress:
+    """How far a Render Job has got, as `hlae_render` reports it while CS2 records. `stage` is "starting" (CS2 is
+    starting), "restarting" (the demo starts again for the second view), "recording" or "joining" (the Clips are being
+    made). `perspective` is the view the stage is about, whose Sequences recorded so far are `done` of `total`.
+    `overall` is the share of all the launch's Sequences recorded, counted in ticks; `seconds_left` is None until it
+    can be estimated."""
+
+    stage: str
+    perspective: str
+    done: int
+    total: int
+    overall: float
+    seconds_left: float | None = None
 
 
 def find_clips(output_dir: Path, duration_of: Callable[[Path], float]) -> list[ClipFile]:

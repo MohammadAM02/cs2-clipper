@@ -7,9 +7,11 @@ import dataclasses
 
 import pytest
 
+from clipper.render import RenderProgress
 from clipper.state import AppState, Rendering, Snapshot, summary
 
 RENDERING = Rendering(map_name="de_mirage", perspective="player", started_at=1000.0)
+PROGRESS = RenderProgress("recording", "player", done=1, total=2, overall=0.3, seconds_left=40.0)
 
 
 def test_idle_by_default():
@@ -25,6 +27,11 @@ def test_rendering_shows_the_map_and_perspective():
     assert summary(Snapshot(rendering=RENDERING)) == "Rendering Mirage (player view)"
     enemy = dataclasses.replace(RENDERING, perspective="enemy")
     assert summary(Snapshot(rendering=enemy)) == "Rendering Mirage (enemy view)"
+
+
+def test_a_render_of_both_views_says_both_views():
+    both = dataclasses.replace(RENDERING, perspective="both")
+    assert summary(Snapshot(rendering=both)) == "Rendering Mirage (both views)"
 
 
 def test_paused_by_you():
@@ -136,3 +143,37 @@ def test_setters_replace_the_snapshot_atomically_leaving_other_fields_alone():
     snap = state.snapshot()
     assert (snap.paused_by, snap.quitting, snap.pages_off) == (None, None, None)
     assert snap.problems == ("disk full",)          # untouched by the calls above
+
+
+def test_a_rendering_has_no_progress_until_its_render_reports_some():
+    assert RENDERING.progress is None
+    state = AppState()
+    state.set_rendering(RENDERING)
+    assert state.snapshot().rendering.progress is None
+
+
+def test_set_progress_is_the_progress_of_the_current_rendering():
+    state = AppState()
+    state.set_rendering(RENDERING)
+    state.set_progress(PROGRESS)
+    rendering = state.snapshot().rendering
+    assert rendering.progress == PROGRESS
+    assert rendering == dataclasses.replace(RENDERING, progress=PROGRESS)
+
+
+def test_set_progress_does_nothing_when_nothing_is_rendering():
+    state = AppState()
+    state.set_progress(PROGRESS)
+    assert state.snapshot().rendering is None
+    state.set_rendering(RENDERING)
+    state.set_idle()
+    state.set_progress(PROGRESS)
+    assert state.snapshot().rendering is None
+
+
+def test_a_new_rendering_starts_without_the_progress_of_the_last_one():
+    state = AppState()
+    state.set_rendering(RENDERING)
+    state.set_progress(PROGRESS)
+    state.set_rendering(RENDERING)
+    assert state.snapshot().rendering.progress is None

@@ -151,6 +151,20 @@ def test_render_jobs_track_the_latest_attempt(index):
     assert index.latest_render(demo_id, "enemy") is None
 
 
+def test_a_perspectives_queued_render_jobs_come_off_the_queue_and_the_rest_stay(index):
+    first, second = add(index), add(index, "2-b.dem.zst", "b" * 64)
+    failed = index.queue_render(first, "enemy", attempt=1)
+    index.start_render(failed, Path("E:/out"), Path("E:/log.txt"))
+    index.finish_render(failed, "failed", "stalled")
+    index.queue_render(first, "enemy", attempt=2)
+    index.queue_render(second, "enemy", attempt=1)
+    index.queue_render(second, "player", attempt=1)
+    assert index.unqueue_renders("enemy") == 2
+    assert index.latest_render(first, "enemy")["id"] == failed
+    assert index.latest_render(second, "enemy") is None
+    assert index.latest_render(second, "player")["state"] == "queued"
+
+
 def test_clips_come_from_finished_renders_in_tick_order(index):
     demo_id = add(index)
     index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031)], {12})

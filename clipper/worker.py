@@ -216,8 +216,9 @@ class Worker:
 
     def tick(self) -> None:
         """Take any new Demos, move every unfinished Demo on by at most one step, then run match
-        alerts. Only the oldest Demo in rendering gets a step there, so one map has both views
-        rendered before the next map's first. Once a stop is requested, no new step starts (a running one, a render included,
+        alerts. Only the oldest Demo in rendering gets a step there, so one map has every view it renders
+        done before the next map's first. A view the settings no longer render comes off every Demo's queue.
+        Once a stop is requested, no new step starts (a running one, a render included,
         finishes on its own terms); publishes the "what it's doing" summary throughout, and always
         ends idle or waiting, never stuck saying "rendering"."""
         self.state.set_paused_by(self.index.paused_by())
@@ -230,13 +231,20 @@ class Worker:
                     self.services.intake.take(path, self.index)
                 except OSError:
                     log.exception("could not take %s; will try again", path.name)
+            for perspective in PERSPECTIVES:
+                if perspective in self.cfg.perspectives_to_render:
+                    continue
+                removed = self.index.unqueue_renders(perspective)
+                if removed:
+                    log.info("the %s view is off in Settings: %s queued render%s taken off the queue",
+                             perspective, removed, "" if removed == 1 else "s")
             render_turn_taken = False
             for demo in self.index.demos_in(ACTIVE_STATES):
                 if self.stop.stopping():
                     return
                 if demo["state"] == "rendering":
                     if render_turn_taken:
-                        continue      # maps first: the oldest Demo renders both views before the next starts
+                        continue      # maps first: the oldest Demo renders its views before the next starts
                     render_turn_taken = True
                 self._step(demo["id"])
             if self.stop.stopping():
@@ -332,7 +340,7 @@ class Worker:
         if not self.index.selected_highlights(demo["match_checksum"]):
             self._finish(demo)                        # no Frags: nothing to render
             return
-        for perspective in PERSPECTIVES:
+        for perspective in self.cfg.perspectives_to_render:
             if self.index.latest_render(demo["id"], perspective) is None:
                 self.index.queue_render(demo["id"], perspective, attempt=1)
         self.index.advance(demo["id"], "rendering")
@@ -340,7 +348,7 @@ class Worker:
     # --- step 5: rendering -----------------------------------------------------------------------
 
     def _render(self, demo) -> None:
-        for perspective in PERSPECTIVES:
+        for perspective in self.cfg.perspectives_to_render:
             job = self.index.latest_render(demo["id"], perspective)
             if job is None:
                 self.index.queue_render(demo["id"], perspective, attempt=1)
@@ -466,8 +474,12 @@ class Worker:
     # --- steps 6–7 -------------------------------------------------------------------------------
 
     def _join(self, demo) -> None:
+        """Every view the Demo has rendered becomes Reels, one rendered before the settings dropped it too."""
+        rendered = [perspective for perspective in PERSPECTIVES
+                    if (job := self.index.latest_render(demo["id"], perspective)) is not None
+                    and job["state"] == "done"]
         for highlight in self.index.selected_highlights(demo["match_checksum"]):
-            for perspective in PERSPECTIVES:
+            for perspective in rendered:
                 clips = [self.cfg.load_path(row["path"])
                          for row in self.index.clips_for(highlight["id"], perspective)]
                 out = (self.cfg.library_dir / "videos" / demo["match_checksum"]

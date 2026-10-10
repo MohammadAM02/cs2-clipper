@@ -22,6 +22,12 @@ RATIOS: dict[str, tuple[int, int, bool]] = {
     "4:3-stretched": (1280, 960, True),
 }
 SEQUENCE_EVENTS = ("kills", "rounds")
+# perspectives -> the Perspectives each Demo is rendered from, in render order.
+PERSPECTIVE_CHOICES: dict[str, tuple[str, ...]] = {
+    "both": ("player", "enemy"),
+    "player": ("player",),
+    "enemy": ("enemy",),
+}
 
 
 @dataclass(frozen=True)
@@ -52,6 +58,7 @@ class Config:
     poll_seconds: float = 5.0
     aspect_ratio: str = "16:9"
     sequence_event: str = "kills"
+    perspectives: str = "both"
     match_alerts: bool = True
     stopped_playing_minutes: float = 5.0
     page_port: int = 8765
@@ -63,6 +70,18 @@ class Config:
             raise ValueError(
                 f"sequence_event must be one of {', '.join(SEQUENCE_EVENTS)} (got {self.sequence_event!r})"
             )
+        if self.perspectives not in PERSPECTIVE_CHOICES:
+            raise ValueError(
+                f"perspectives must be one of {', '.join(PERSPECTIVE_CHOICES)} (got {self.perspectives!r})"
+            )
+
+    @property
+    def perspectives_to_render(self) -> tuple[str, ...]:
+        """The Perspectives each Demo is rendered from. Round Clips only ever come from the player's view:
+        a round has no one enemy to follow, so an Enemy render would record the player's camera again."""
+        if self.sequence_event == "rounds":
+            return ("player",)
+        return PERSPECTIVE_CHOICES[self.perspectives]
 
     @property
     def video_size(self) -> tuple[int, int]:

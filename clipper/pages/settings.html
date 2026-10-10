@@ -33,8 +33,12 @@ const BLURB = {"You": "Who the Highlights are for", "Folders": "Where things liv
   "Rendering": "How hard it tries, and when it waits", "Match alerts": "Notifications when a FACEIT match has Highlights", "App": "The pages and the worker"};
 const RATIO = {"16:9": ["16:9", "1920×1080", 64, 36], "4:3": ["4:3", "1280×960", 48, 36], "4:3-hd": ["4:3 HD", "1440×1080", 48, 36],
   "4:3-stretched": ["4:3 stretched", "1280×960 shown at 1920×1080", 64, 36]};
-const CHOICE_LABEL = {kills: "Kill", rounds: "Round"};
-const CHOICE_HELP = {kills: "Each Frag starts its own Sequence.", rounds: "A whole round of Frags becomes one Sequence."};
+const CHOICE_LABEL = {kills: "Kill", rounds: "Round", both: "Both", player: "Your view", enemy: "Enemy POV"};
+const CHOICE_HELP = {kills: "Each Frag starts its own Sequence.", rounds: "A whole round of Frags becomes one Sequence.",
+  both: "Your view and the Enemy POV. CS2 opens twice per match.",
+  player: "Only your view. CS2 opens once per match, so it takes about half the time.",
+  enemy: "Only the Enemy POV: each Frag seen by the player you killed. CS2 opens once per match."};
+const ROUND_VIEW = "Round Clips are always rendered from your view: a round has no one enemy to follow.";
 const MONO = new Set(["steamid", "folder", "program", "url"]);
 const PAD = ["padding_before_s", "padding_after_s"];
 let fields = [], values = {}, secretsSet = {}, removedSecrets = new Set(), loginUrl = "", signInNote = "", warnings = [];
@@ -149,11 +153,20 @@ function updatePad() {
   document.getElementById("pad-a").textContent = `${after} s after`;
 }
 
-// "Minutes after you stop playing" means nothing while Match alerts are off.
+// "Minutes after you stop playing" means nothing while Match alerts are off, and "Views to render" nothing
+// with one Clip per round.
 function updateDepends() {
   const alerts = document.getElementById(fid("match_alerts"));
   const minutes = document.querySelector('[data-field="stopped_playing_minutes"]');
   if (alerts && minutes) minutes.classList.toggle("off", alerts.getAttribute("aria-checked") !== "true");
+  const event = document.getElementById(fid("sequence_event"));
+  const views = document.getElementById(fid("perspectives"));
+  if (event && views) {
+    const rounds = event.dataset.value === "rounds";
+    views.closest("[data-field]").classList.toggle("off", rounds);
+    const help = document.getElementById("help-perspectives");
+    if (help) help.textContent = rounds ? ROUND_VIEW : CHOICE_HELP[views.dataset.value] || "";
+  }
 }
 
 function readField(f) {
@@ -291,6 +304,7 @@ form.addEventListener("click", async e => {
     if (box.classList.contains("seg")) placePill(box);
     const name = box.id.slice(2), help = document.getElementById(`help-${name}`);
     if (help && CHOICE_HELP[box.dataset.value] && !fields.find(f => f.name === name).help) help.textContent = CHOICE_HELP[box.dataset.value];
+    updateDepends();
     updateDirty();
     return;
   }

@@ -11,7 +11,7 @@ from clipper.index import Index
 from clipper.model import ClipFile, MatchInfo
 from clipper.render import ABORTED, RenderResult
 from clipper.state import AppState
-from clipper.worker import QUIT_ABORT, DeleteRequest, Services, StopRequest, Worker, delete_demo
+from clipper.worker import QUIT_ABORT, DeleteRequest, Services, StopRequest, Worker, delete_demo, prune_renders
 from tests.fixtures import DEMO_NAME, MATCH_CHECKSUM, MATCH_FACTS
 
 ROUND_START = {facts.round: facts.round_start_tick for facts in MATCH_FACTS}
@@ -633,3 +633,68 @@ def test_quit_now_during_a_render_aborts_it_like_a_faceit_ac_abort(world):
     assert world.index.demo(demo_id)["state"] == "rendering"
     assert world.index.latest_render(demo_id, "enemy")["state"] == "queued"   # not started
     assert alerts.ticks == 4   # this tick's alerts step was skipped once the abort set stop
+
+
+# --- raw Clips: deleted once their Reels are made ------------------------------------------------
+
+
+def test_a_finished_match_loses_its_raw_clips_and_keeps_its_reels_and_the_library(world):
+    world.add_demo()
+    _write(world.cfg.renders_dir / MATCH_CHECKSUM / "player" / "attempt-1" / "sequence-1.mp4")
+    _write(world.cfg.renders_dir / MATCH_CHECKSUM / "enemy" / "attempt-1" / "sequence-1.mp4")
+    reel = _write(world.cfg.library_dir / "videos" / MATCH_CHECKSUM / "r3-player.mp4")
+    world.ticks(8)
+    assert not (world.cfg.renders_dir / MATCH_CHECKSUM).exists()
+    assert world.index.reel_count(MATCH_CHECKSUM) == 10
+    assert reel.exists()
+
+
+def test_a_view_added_to_a_finished_match_joins_alone(world):
+    """The finished match's raw Clips are gone, so the view it already has must not be joined again."""
+    world.use(perspectives="player")
+    demo_id = world.add_demo()
+    world.ticks(7)                                  # done with the player view only
+    assert world.index.demo(demo_id)["state"] == "done"
+    world.use(perspectives="both")
+    joined = []
+
+    def record_join(clips, out):
+        joined.append(out.name)
+        return 4.0 * len(clips)
+
+    world.services.join = record_join
+    world.index.advance(demo_id, "rendering")       # back to rendering: the enemy view is rendered now
+    world.ticks(3)
+    assert [call.perspective for call in world.render.calls] == ["player", "enemy"]
+    assert joined == [f"r{round_}-enemy.mp4" for round_ in (3, 4, 8, 12, 14)]
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert world.index.reel_count(MATCH_CHECKSUM) == 10
+
+
+def test_a_new_worker_takes_leftover_renders_of_done_matches_and_keeps_those_of_failed_demos(world):
+    world.add_demo()
+    world.ticks(8)
+    _write(world.cfg.renders_dir / MATCH_CHECKSUM / "player" / "attempt-1" / "sequence-1.mp4")
+    failed = world.add_demo(SECOND_DEMO, "1" * 64)
+    world.index.advance(failed, "analyzed", match_checksum=SECOND_CHECKSUM)
+    world.index.fail(failed, "x")
+    kept = _write(world.cfg.renders_dir / SECOND_CHECKSUM / "player" / "attempt-1" / "sequence-1.mp4")
+    world.use()                                     # a new Worker, as after a restart
+    world.ticks(1)
+    assert not (world.cfg.renders_dir / MATCH_CHECKSUM).exists()
+    assert kept.exists()
+    assert world.index.reel_count(MATCH_CHECKSUM) == 10
+
+
+def test_a_match_keeps_its_renders_until_every_demo_of_it_is_done(world):
+    clip = _write(world.cfg.renders_dir / MATCH_CHECKSUM / "player" / "attempt-1" / "sequence-1.mp4")
+    done = world.add_demo()
+    world.index.advance(done, "done", match_checksum=MATCH_CHECKSUM)
+    other = world.add_demo(SECOND_DEMO, "1" * 64)
+    world.index.advance(other, "rendering", match_checksum=MATCH_CHECKSUM)
+    assert prune_renders(world.index, world.cfg, MATCH_CHECKSUM) is False
+    assert clip.exists()
+    world.index.advance(other, "done")
+    assert prune_renders(world.index, world.cfg, MATCH_CHECKSUM) is True
+    assert not clip.exists()
+    assert prune_renders(world.index, world.cfg, MATCH_CHECKSUM) is False    # nothing left to remove

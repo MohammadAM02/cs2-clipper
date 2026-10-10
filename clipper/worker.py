@@ -200,6 +200,22 @@ def delete_demo(index: Index, cfg: Config, demo_id: int) -> bool:
     return True
 
 
+def prune_renders(index: Index, cfg: Config, checksum: str) -> bool:
+    """Delete a match's raw Clips (its renders folder: every view and attempt) once every Demo of the match is
+    done, since its Reels are made and they are all that is kept. True when the folder was removed. The library
+    is never touched; a folder that cannot all go is logged and left."""
+    renders = cfg.renders_dir / checksum
+    if not renders.exists():
+        return False
+    if any(demo["state"] != "done" for demo in index.all_demos() if demo["match_checksum"] == checksum):
+        return False                                  # a Demo of the match still needs its Clips
+    shutil.rmtree(renders, ignore_errors=True)
+    if renders.exists():
+        log.warning("match %s: could not remove all of %s", checksum, renders)
+        return False
+    return True
+
+
 class Worker:
     def __init__(self, cfg: Config, index: Index, services: Services, *,
                  state: AppState | None = None, stop: StopRequest | None = None,
@@ -211,6 +227,7 @@ class Worker:
         self.stop = stop if stop is not None else StopRequest()
         self.deletes = deletes if deletes is not None else DeleteRequest()
         self._waiting_reasons: tuple[str, ...] = ()
+        self._pruned_at_start = False
 
     # --- the loop --------------------------------------------------------------------------------
 
@@ -224,6 +241,9 @@ class Worker:
         self.state.set_paused_by(self.index.paused_by())
         self._waiting_reasons = ()
         try:
+            if not self._pruned_at_start:
+                self._pruned_at_start = True
+                self._prune_done_matches()
             for path in self.services.intake.ready():
                 if self.stop.stopping():
                     return
@@ -259,6 +279,13 @@ class Worker:
                 self.state.set_waiting(self._waiting_reasons)
             else:
                 self.state.set_idle()
+
+    def _prune_done_matches(self) -> None:
+        """On the first tick of each Worker: matches finished before their raw Clips were pruned give them up now.
+        A match with a Demo that is not done keeps its Clips (prune_renders)."""
+        checksums = {demo["match_checksum"] for demo in self.index.demos_in(("done",)) if demo["match_checksum"]}
+        for checksum in sorted(checksums):
+            prune_renders(self.index, self.cfg, checksum)
 
     def _step(self, demo_id: int) -> None:
         """One step on one Demo, which the Status page cannot delete under it: a delete asked
@@ -474,12 +501,15 @@ class Worker:
     # --- steps 6–7 -------------------------------------------------------------------------------
 
     def _join(self, demo) -> None:
-        """Every view the Demo has rendered becomes Reels, one rendered before the settings dropped it too."""
+        """Every view the Demo has rendered becomes Reels, one rendered before the settings dropped it too.
+        A Reel already made stays as it is: its raw Clips may have been pruned since."""
         rendered = [perspective for perspective in PERSPECTIVES
                     if (job := self.index.latest_render(demo["id"], perspective)) is not None
                     and job["state"] == "done"]
         for highlight in self.index.selected_highlights(demo["match_checksum"]):
             for perspective in rendered:
+                if self.index.has_reel(highlight["id"], perspective):
+                    continue
                 clips = [self.cfg.load_path(row["path"])
                          for row in self.index.clips_for(highlight["id"], perspective)]
                 out = (self.cfg.library_dir / "videos" / demo["match_checksum"]
@@ -496,6 +526,8 @@ class Worker:
             match = self.index.match(demo["match_checksum"])
             self.services.notify("Highlights ready", f"{count} Highlights from {match['map']} are ready.")
         self.index.advance(demo["id"], "done")
+        if demo["match_checksum"]:
+            prune_renders(self.index, self.cfg, demo["match_checksum"])   # the Reels are made: the raw Clips go
 
     def _log_path(self, demo, name: str) -> Path:
         return self.cfg.logs_dir / f"demo-{demo['id']}-{name}.log"

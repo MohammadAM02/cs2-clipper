@@ -337,6 +337,11 @@ class Index:
             (highlight_id, perspective, str(path), duration_s),
         )
 
+    def has_reel(self, highlight_id: int, perspective: str) -> bool:
+        """Whether this Highlight already has a Reel for `perspective`."""
+        return self._one("SELECT 1 FROM reels WHERE highlight_id = ? AND perspective = ?",
+                         (highlight_id, perspective)) is not None
+
     def reel_count(self, checksum: str) -> int:
         row = self._one(
             "SELECT count(*) FROM reels r JOIN highlights h ON h.id = r.highlight_id"

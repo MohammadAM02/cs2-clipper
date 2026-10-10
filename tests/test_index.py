@@ -192,6 +192,16 @@ def test_one_reel_per_highlight_and_perspective(index):
     assert index.reel_count(MATCH.checksum) == 2
 
 
+def test_has_reel_tells_whether_a_highlight_already_has_a_reel_for_a_view(index):
+    index.save_match(MATCH)
+    index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031)], {12})
+    highlight_id = index.selected_highlights(MATCH.checksum)[0]["id"]
+    assert index.has_reel(highlight_id, "player") is False
+    index.save_reel(highlight_id, "player", Path("E:/r12-player.mp4"), 15.6)
+    assert index.has_reel(highlight_id, "player") is True
+    assert index.has_reel(highlight_id, "enemy") is False
+
+
 # --- reel_matches / match_reels / reel: the Reels page (Task 12) -----------------------------------
 
 

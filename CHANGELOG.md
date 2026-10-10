@@ -14,6 +14,12 @@ match not rendered yet, including the ones already waiting; matches that are don
 With **One Clip per: Round**, matches now render your view only. A whole round has no one enemy to follow, so its
 Enemy POV was your view again, recorded in a second CS2 run.
 
+### New: raw Clips are deleted once their Reels are made
+
+When a match's Reels are made, its raw Clips are deleted, so each Highlight is stored once instead of twice, and the
+Reels stay as they are. Matches finished before this version are cleaned up once, the next time the app starts. A
+Demo that failed keeps its Clips, so **Retry** on the Status page can still make its Reels.
+
 ## 0.3.0
 
 ### Fixed: rendering changed your CS2 video settings

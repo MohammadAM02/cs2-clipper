@@ -42,7 +42,7 @@ import sqlite3
 import subprocess
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -291,8 +291,10 @@ def create_app(ctx: WebContext) -> Flask:
         snapshot = ctx.snapshot()
         rendering = None
         if snapshot.rendering is not None:
+            progress = snapshot.rendering.progress
             rendering = {"map": map_label(snapshot.rendering.map_name),
-                        "perspective": snapshot.rendering.perspective, "started_at": snapshot.rendering.started_at}
+                         "perspective": snapshot.rendering.perspective, "started_at": snapshot.rendering.started_at,
+                         "progress": None if progress is None else asdict(progress)}
         index = Index(ctx.index_path)
         try:
             demos = status_demos(index)

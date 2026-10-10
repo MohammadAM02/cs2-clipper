@@ -154,12 +154,14 @@ def build_worker(cfg: Config, index: Index, *, state: AppState, stop: StopReques
     analyses = analysis.Analyses(cfg.analyses_dir, cfg.csda_exe)
     duration_of = partial(probe_duration, ffprobe=cfg.ffprobe)
 
-    def render_job(request, should_abort):     # CS2, HLAE and FFmpeg are looked for per job: they may have moved
+    # CS2, HLAE and FFmpeg are looked for per job: they may have moved
+    def render_job(request, should_abort, progress):
         return hlae_render.render(
             request, probe=probe, should_abort=should_abort, stall_seconds=cfg.stall_seconds,
             launch_timeout_seconds=cfg.launch_timeout_seconds, duration_of=duration_of,
             load_inputs=analyses.render_inputs, cs2_exe=cs2_paths.find_cs2_exe(), hlae_exe=checks.hlae_exe(cfg),
-            hlae_ffmpeg=_program(cfg.ffmpeg), ffmpeg=cfg.ffmpeg, cs2_settings_dir=cfg.cs2_settings_dir)
+            hlae_ffmpeg=_program(cfg.ffmpeg), ffmpeg=cfg.ffmpeg, cs2_settings_dir=cfg.cs2_settings_dir,
+            progress=progress)
 
     services = Services(
         intake=Intake(cfg.downloads_dir, cfg.demos_dir),

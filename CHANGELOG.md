@@ -32,6 +32,11 @@ When both views are due, CS2 opens once and records your view, then starts the d
 CS2 start-up per match. If CS2 fails during the Enemy POV, your view is kept and the Enemy POV is tried again on its
 own; retries go one view at a time.
 
+### New: render progress on the Status page
+
+The Status page shows which view and Sequence CS2 is recording, and about how long is left. The Demo's bar moves with
+the render, instead of holding at the same place for the whole of it.
+
 ## 0.3.0
 
 ### Fixed: rendering changed your CS2 video settings

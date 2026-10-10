@@ -9,7 +9,7 @@ import inspect
 import itertools
 import subprocess
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import astuple, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -327,6 +327,13 @@ def run(world, req, **overrides):
     }
     options.update(overrides)
     return hlae_render.render(req, **options)
+
+
+def run_reporting(world, req, **overrides):
+    """Runs the job as `run` does and gives its result with every progress report, each as a tuple of its fields."""
+    reports = []
+    result = run(world, req, progress=lambda progress: reports.append(astuple(progress)), **overrides)
+    return result, reports
 
 
 def assert_clean(world):
@@ -937,6 +944,67 @@ def test_a_mux_that_fails_on_the_second_view_keeps_the_first_views_clips_and_the
         False, "mux failed: ffmpeg failed on Sequence 3 (exit code 1): Invalid data found when processing input")
     assert list(result.clips) == ["player"] and len(result.clips["player"]) == 2
     assert world.raw_dir.exists()       # the only copy of what the enemy view recorded
+    assert_clean(world)
+
+
+# --- how far it has got -------------------------------------------------------------------------------
+
+
+def test_a_job_reports_its_start_each_sequence_and_the_joining(world, req):
+    world.scripts = [game()]
+    result, reports = run_reporting(world, req)
+    assert result.ok
+    # 968 ticks in all: Sequence 1 has 584 and Sequence 2 has 384. The first 'ready' came 17 s after the launch and
+    # Sequence 1's 'done' 10 s later, so the 384 ticks left take 10 * 384 / 584 s at that pace.
+    assert reports == [
+        ("starting", "player", 0, 2, 0.0, None),
+        ("recording", "player", 1, 2, 584 / 968, pytest.approx(10 * 384 / 584)),
+        ("recording", "player", 2, 2, 1.0, 0.0),
+        ("joining", "player", 2, 2, 1.0, None),
+    ]
+
+
+def test_a_two_view_job_reports_the_enemy_view_from_the_demo_starting_again(world, both):
+    world.scripts = [two_views_game()]
+    result, reports = run_reporting(world, both)
+    assert result.ok
+    # 1936 ticks in all, both views' Sequences; the demo starts again 43 s after the launch and the enemy view's
+    # first Sequence is done 26 s after it, at the pace of the launch so far
+    assert reports == [
+        ("starting", "player", 0, 2, 0.0, None),
+        ("recording", "player", 1, 2, 584 / 1936, pytest.approx(10 * 1352 / 584)),
+        ("recording", "player", 2, 2, 0.5, pytest.approx(25.0)),
+        ("restarting", "enemy", 0, 2, 0.5, pytest.approx(26.0)),
+        ("recording", "enemy", 1, 2, 1552 / 1936, pytest.approx(40 * 384 / 1552)),
+        ("recording", "enemy", 2, 2, 1.0, 0.0),
+        ("joining", "enemy", 2, 2, 1.0, None),
+    ]
+
+
+def test_a_launch_that_fails_in_the_second_view_reports_joining_the_first_view_alone(world, both):
+    script = [event for event in two_views_game(second=(3,), quits=False, closes=False)
+              if event[1:] != ("line", ran("s3_end"))]
+    world.scripts = [script]
+    result, reports = run_reporting(world, both)
+    assert result.failure == "stalled: no progress for 30s after 'recording 3'"
+    assert reports[-1] == ("joining", "player", 2, 2, 1.0, None)
+
+
+def test_each_launch_reports_that_cs2_is_starting(world, req):
+    world.scripts = [[(4, "cs2_up")], game()]       # the first never plays, so the job starts CS2 again
+    result, reports = run_reporting(world, req)
+    assert result.ok and len(world.launches) == 2
+    assert [report[:2] for report in reports if report[0] == "starting"] == [("starting", "player")] * 2
+
+
+def test_a_progress_report_that_raises_is_said_once_and_the_job_goes_on(world, req):
+    def broken(progress):
+        raise RuntimeError("the window is gone")
+
+    world.scripts = [game()]
+    result = run(world, req, progress=broken)
+    assert result.ok and [clip.path.name for clip in result.clips["player"]] == [CLIP_1, CLIP_2]
+    assert world.log().count("progress report failed: the window is gone") == 1
     assert_clean(world)
 
 

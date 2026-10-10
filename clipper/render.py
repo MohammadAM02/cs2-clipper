@@ -49,6 +49,22 @@ class RenderResult:
     clips: dict[str, tuple[ClipFile, ...]] = field(default_factory=dict)     # by Perspective: the views that recorded
 
 
+@dataclass(frozen=True)
+class RenderProgress:
+    """How far a Render Job has got, as `hlae_render` reports it while CS2 records. `stage` is "starting" (CS2 is
+    starting), "restarting" (the demo starts again for the second view), "recording" or "joining" (the Clips are being
+    made). `perspective` is the view the stage is about, whose Sequences recorded so far are `done` of `total`.
+    `overall` is the share of all the launch's Sequences recorded, counted in ticks; `seconds_left` is None until it
+    can be estimated."""
+
+    stage: str
+    perspective: str
+    done: int
+    total: int
+    overall: float
+    seconds_left: float | None = None
+
+
 def find_clips(output_dir: Path, duration_of: Callable[[Path], float]) -> list[ClipFile]:
     """The Clips in `output_dir`, in Tick order."""
     clips = []

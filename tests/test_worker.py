@@ -9,7 +9,7 @@ from clipper.config import Config
 from clipper.gate import GateStatus
 from clipper.index import Index
 from clipper.model import ClipFile, MatchInfo
-from clipper.render import ABORTED, RenderResult
+from clipper.render import ABORTED, RenderProgress, RenderResult
 from clipper.state import AppState
 from clipper.worker import QUIT_ABORT, DeleteRequest, Services, StopRequest, Worker, delete_demo, prune_renders
 from tests.fixtures import DEMO_NAME, MATCH_CHECKSUM, MATCH_FACTS
@@ -86,7 +86,7 @@ class FakeRender:
         self.calls = []
         self.results = []
 
-    def __call__(self, request, should_abort):
+    def __call__(self, request, should_abort, progress):
         self.calls.append(request)
         if self.results:
             result = self.results.pop(0)
@@ -523,7 +523,7 @@ def test_deleting_a_demo_leaves_the_renders_and_analysis_another_demo_of_its_mat
 def test_deleting_the_demo_being_rendered_aborts_its_render_then_deletes_it(world):
     seen = {}
 
-    def render_while_deleted(request, should_abort):
+    def render_while_deleted(request, should_abort, progress):
         seen["before"] = should_abort()
         seen["delete"] = world.deletes.delete(demo_id, lambda: pytest.fail("deleted under the worker"))
         seen["after"] = should_abort()
@@ -624,7 +624,7 @@ def test_stop_request_wait_returns_true_on_a_request_and_false_on_timeout():
 def test_state_reports_rendering_during_a_render_then_clears_it_after_the_tick(world):
     seen = {}
 
-    def render_and_snapshot(request, should_abort):
+    def render_and_snapshot(request, should_abort, progress):
         seen["rendering"] = world.state.snapshot().rendering
         return RenderResult(ok=True, clips=clips_of(request))
 
@@ -637,6 +637,23 @@ def test_state_reports_rendering_during_a_render_then_clears_it_after_the_tick(w
     snap = world.state.snapshot()
     assert snap.rendering is None   # cleared by the end of the tick that started it
     assert snap.waiting == ()
+
+
+def test_progress_the_render_reports_reaches_the_state_while_it_runs(world):
+    seen = {}
+    report = RenderProgress("recording", "player", done=1, total=2, overall=0.25, seconds_left=40.0)
+
+    def render_with_progress(request, should_abort, progress):
+        seen["before"] = world.state.snapshot().rendering.progress
+        progress(report)
+        seen["during"] = world.state.snapshot().rendering.progress
+        return RenderResult(ok=True, clips=clips_of(request))
+
+    world.services.render = render_with_progress
+    world.add_demo()
+    world.ticks(5)
+    assert seen == {"before": None, "during": report}
+    assert world.state.snapshot().rendering is None   # cleared with the rest of the Rendering
 
 
 def test_state_reports_waiting_with_the_gates_reasons(world):
@@ -664,7 +681,7 @@ def test_state_publishes_paused_by(world):
 def test_a_stop_during_the_heads_up_skips_the_render_and_ends_early(world):
     calls = []
 
-    def render_spy(request, should_abort):
+    def render_spy(request, should_abort, progress):
         calls.append(request)
         return RenderResult(ok=True, clips={})
 
@@ -710,7 +727,7 @@ def test_quit_now_during_a_render_aborts_it_like_a_faceit_ac_abort(world):
     abort stops it; here Quit now arrives from the tray or the Status page mid-render."""
     world.use(perspectives="player")                  # one view: the render Quit now stops is that view's
 
-    def render_until_quit(request, should_abort):
+    def render_until_quit(request, should_abort, progress):
         assert not should_abort()
         world.stop.request("now")
         assert should_abort()
@@ -728,7 +745,7 @@ def test_quit_now_during_a_render_aborts_it_like_a_faceit_ac_abort(world):
 
 
 def test_quit_now_during_a_two_view_launch_aborts_both_views(world):
-    def render_until_quit(request, should_abort):
+    def render_until_quit(request, should_abort, progress):
         world.stop.request("now")
         assert should_abort()
         return RenderResult(ok=False, aborted=True, failure=ABORTED)

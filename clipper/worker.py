@@ -20,7 +20,7 @@ from clipper.gate import GateStatus
 from clipper.index import Index
 from clipper.join import JoinError, assign_clips
 from clipper.model import MatchInfo, RoundFacts
-from clipper.render import RenderRequest, RenderResult
+from clipper.render import RenderProgress, RenderRequest, RenderResult
 from clipper.scoring import score_match, select
 from clipper.state import AppState, Rendering, views_label
 
@@ -158,7 +158,7 @@ class Services:
     analyze: Callable[[Path, Path], str]          # (the .dem, its log) -> the match checksum
     facts: FactsSource
     gate: GateLike
-    render: Callable[[RenderRequest, Callable[[], bool]], RenderResult]
+    render: Callable[[RenderRequest, Callable[[], bool], Callable[[RenderProgress], None]], RenderResult]
     join: Callable[[list[Path], Path], float]
     notify: Callable[..., None]
     sleep: Callable[[float], None] = time.sleep
@@ -458,7 +458,8 @@ class Worker:
         try:
             result = self.services.render(
                 request, lambda: (self.services.gate.faceit_running() or self.stop.abort_render()
-                                  or self.deletes.asked(demo["id"]))
+                                  or self.deletes.asked(demo["id"])),
+                self.state.set_progress,
             )
         except Exception as exc:  # noqa: BLE001 - a crashed render is a failed attempt
             log.exception("render crashed")

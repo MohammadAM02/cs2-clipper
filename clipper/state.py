@@ -12,6 +12,7 @@ from dataclasses import dataclass, replace
 from threading import Lock
 
 from clipper.alerts import map_label
+from clipper.render import RenderProgress
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class Rendering:
     map_name: str          # the analysis's map name, e.g. "de_mirage"
     perspective: str       # "player" | "enemy" | "both" (one CS2 launch records both views)
     started_at: float      # time.time() when the Render Job started
+    progress: RenderProgress | None = None      # how far it has got, once the render reports it
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,13 @@ class AppState:
     def set_rendering(self, rendering: Rendering) -> None:
         with self._lock:
             self._snapshot = replace(self._snapshot, rendering=rendering, waiting=())
+
+    def set_progress(self, progress: RenderProgress) -> None:
+        """How far the current Rendering has got. Nothing when nothing is rendering: a late report changes nothing."""
+        with self._lock:
+            if self._snapshot.rendering is not None:
+                rendering = replace(self._snapshot.rendering, progress=progress)
+                self._snapshot = replace(self._snapshot, rendering=rendering)
 
     def set_idle(self) -> None:
         with self._lock:

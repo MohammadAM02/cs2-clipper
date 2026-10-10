@@ -24,6 +24,7 @@ from clipper.faceit import FaceitError
 from clipper.faceit_oauth import OAuthError
 from clipper.index import Index
 from clipper.model import FaceitStats, Highlight, MatchInfo
+from clipper.render import RenderProgress
 from clipper.settings import FIELDS, KEY_FIELD, SECRET_FIELD, STORED_KEY, Loaded, SettingsStore
 from clipper.state import Rendering, Snapshot
 from clipper.web import MARKER_HEADER, WebContext, WebServer, create_app
@@ -361,7 +362,7 @@ def test_api_status_shape_and_values(tmp_path, index):
     data = pc_get(app.test_client(), "/api/status").get_json()
 
     assert data["summary"] == "Rendering Mirage (player view)"
-    assert data["rendering"] == {"map": "Mirage", "perspective": "player", "started_at": 1790000000.0}
+    assert data["rendering"] == {"map": "Mirage", "perspective": "player", "started_at": 1790000000.0, "progress": None}
     assert (data["paused_by"], data["quitting"], data["pages_off"]) == (None, None, None)
     assert data["problems"] == []
     assert data["warnings"] == ["settings.json: top_n bad"]
@@ -388,6 +389,14 @@ def test_api_status_demos_are_filtered_to_unfinished_and_ordered_newest_first(tm
     data = pc_get(app_for(tmp_path).test_client(), "/api/status").get_json()
 
     assert [d["id"] for d in data["demos"]] == [newer, older]
+
+
+def test_api_status_carries_the_progress_the_render_reports(tmp_path):
+    progress = RenderProgress("recording", "enemy", done=1, total=2, overall=0.5, seconds_left=None)
+    snapshot = Snapshot(rendering=Rendering("de_mirage", "enemy", 1790000000.0, progress=progress))
+    data = pc_get(app_for(tmp_path, snapshot=lambda: snapshot).test_client(), "/api/status").get_json()
+    assert data["rendering"]["progress"] == {"stage": "recording", "perspective": "enemy", "done": 1, "total": 2,
+                                             "overall": 0.5, "seconds_left": None}
 
 
 def test_api_status_a_failed_demo_shows_its_error_and_can_retry_and_has_no_jobs_before_rendering(tmp_path, index):

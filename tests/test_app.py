@@ -164,13 +164,15 @@ def test_a_render_job_goes_to_hlae_with_what_it_drives_cs2_with(built, renderer,
     hlae = _touch(tmp_path / "HLAE" / "HLAE.exe")
     ffmpeg = _touch(tmp_path / "ffmpeg" / "ffmpeg.exe")
     worker = built(hlae_exe=str(hlae), ffmpeg=str(ffmpeg), stall_seconds=90.0, launch_timeout_seconds=240.0)
-    request, abort = _render_request(tmp_path), lambda: False
-    assert worker.services.render(request, abort) is renderer.result
+    request, abort, progress = _render_request(tmp_path), lambda: False, lambda report: None
+    assert worker.services.render(request, abort, progress) is renderer.result
     [(given, kwargs)] = renderer.calls
     assert given is request
     assert set(kwargs) == {"probe", "should_abort", "stall_seconds", "launch_timeout_seconds", "duration_of",
-                           "load_inputs", "cs2_exe", "hlae_exe", "hlae_ffmpeg", "ffmpeg", "cs2_settings_dir"}
+                           "load_inputs", "cs2_exe", "hlae_exe", "hlae_ffmpeg", "ffmpeg", "cs2_settings_dir",
+                           "progress"}
     assert kwargs["should_abort"] is abort
+    assert kwargs["progress"] is progress           # the Status page's progress is told the render's progress
     assert (kwargs["stall_seconds"], kwargs["launch_timeout_seconds"]) == (90.0, 240.0)
     assert kwargs["cs2_exe"] == cs2_exe
     assert kwargs["hlae_exe"] == hlae               # the setting's
@@ -182,7 +184,7 @@ def test_a_render_job_goes_to_hlae_with_what_it_drives_cs2_with(built, renderer,
 def test_hlae_and_ffmpeg_that_are_nowhere_reach_the_renderer_as_none(built, renderer, tmp_path):
     renderer.cs2_exes = [None]
     worker = built(ffmpeg=str(tmp_path / "no-ffmpeg" / "ffmpeg.exe"))      # and no HLAE in the tools folder
-    worker.services.render(_render_request(tmp_path), lambda: False)
+    worker.services.render(_render_request(tmp_path), lambda: False, lambda report: None)
     [(_, kwargs)] = renderer.calls
     assert (kwargs["cs2_exe"], kwargs["hlae_exe"], kwargs["hlae_ffmpeg"]) == (None, None, None)
 
@@ -190,7 +192,7 @@ def test_hlae_and_ffmpeg_that_are_nowhere_reach_the_renderer_as_none(built, rend
 def test_the_renderer_reads_its_plan_through_the_same_analyses_as_the_worker(built, renderer, tmp_path):
     renderer.cs2_exes = [None]
     worker = built()
-    worker.services.render(_render_request(tmp_path), lambda: False)
+    worker.services.render(_render_request(tmp_path), lambda: False, lambda report: None)
     [(_, kwargs)] = renderer.calls
     assert kwargs["load_inputs"] == worker.services.facts.render_inputs     # a method of the one instance
 
@@ -199,9 +201,9 @@ def test_cs2_and_hlae_are_looked_for_again_for_every_render_job(built, renderer,
     cs2_exe = tmp_path / "cs2.exe"
     renderer.cs2_exes = [None, cs2_exe]
     worker = built()
-    worker.services.render(_render_request(tmp_path), lambda: False)
+    worker.services.render(_render_request(tmp_path), lambda: False, lambda report: None)
     hlae = _touch(worker.cfg.tools_dir / "hlae" / "HLAE.exe")       # Setup installed it in between
-    worker.services.render(_render_request(tmp_path), lambda: False)
+    worker.services.render(_render_request(tmp_path), lambda: False, lambda report: None)
     assert [(kwargs["cs2_exe"], kwargs["hlae_exe"]) for _, kwargs in renderer.calls] == [(None, None), (cs2_exe, hlae)]
 
 

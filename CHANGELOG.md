@@ -20,6 +20,12 @@ When a match's Reels are made, its raw Clips are deleted, so each Highlight is s
 Reels stay as they are. Matches finished before this version are cleaned up once, the next time the app starts. A
 Demo that failed keeps its Clips, so **Retry** on the Status page can still make its Reels.
 
+### New: one heads-up per match
+
+When CS2 has just closed after rendering a match, the next render of that match starts right away, without another
+30-second heads-up or notification. A new match still gets the heads-up, and so does a render after CS2 or FACEIT AC
+was open in between.
+
 ## 0.3.0
 
 ### Fixed: rendering changed your CS2 video settings

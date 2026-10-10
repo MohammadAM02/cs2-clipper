@@ -86,6 +86,16 @@ class FakeRender:
         return RenderResult(ok=True, clips=clips)
 
 
+class FakeClock:
+    """The worker's clock: `now` moves only when a test moves it."""
+
+    def __init__(self):
+        self.now = 0.0
+
+    def __call__(self):
+        return self.now
+
+
 @dataclass
 class World:
     cfg: Config
@@ -99,6 +109,7 @@ class World:
     state: AppState
     stop: StopRequest
     deletes: DeleteRequest
+    clock: FakeClock
 
     def add_demo(self, name: str = DEMO_NAME, sha256: str = "0" * 64) -> int:
         file_name = f"{name}.dem.zst"
@@ -124,7 +135,7 @@ def world(tmp_path):
                  index_path=tmp_path / "clipper.sqlite", analyses_dir=tmp_path / "analyses")
     index = Index(cfg.index_path)
     facts, gate, render, notices = FakeFacts(), FakeGate(), FakeRender(), []
-    state, stop, deletes = AppState(), StopRequest(), DeleteRequest()
+    state, stop, deletes, clock = AppState(), StopRequest(), DeleteRequest(), FakeClock()
     services = Services(
         intake=FakeIntake(),
         unpack=lambda archive, out_dir: out_dir / archive.name.removesuffix(".zst"),
@@ -135,9 +146,10 @@ def world(tmp_path):
         join=lambda clips, out: 4.0 * len(clips),
         notify=lambda title, body: notices.append((title, body)),
         sleep=lambda seconds: None,
+        clock=clock,
     )
     worker = Worker(cfg, index, services, state=state, stop=stop, deletes=deletes)
-    yield World(cfg, index, services, worker, facts, gate, render, notices, state, stop, deletes)
+    yield World(cfg, index, services, worker, facts, gate, render, notices, state, stop, deletes, clock)
     index.close()
 
 
@@ -150,7 +162,7 @@ def test_a_demo_goes_from_spotted_to_done(world):
     first = world.render.calls[0]
     assert (first.event, first.width, first.height) == ("kills", 1920, 1080)
     assert world.index.reel_count(MATCH_CHECKSUM) == 10
-    assert world.titles() == ["Rendering highlights", "Rendering highlights", "Highlights ready"]
+    assert world.titles() == ["Rendering highlights", "Highlights ready"]   # one heads-up for both views
 
 
 def test_one_demo_renders_both_views_before_the_next_demo_starts(world):
@@ -698,3 +710,86 @@ def test_a_match_keeps_its_renders_until_every_demo_of_it_is_done(world):
     assert prune_renders(world.index, world.cfg, MATCH_CHECKSUM) is True
     assert not clip.exists()
     assert prune_renders(world.index, world.cfg, MATCH_CHECKSUM) is False    # nothing left to remove
+
+
+# --- one heads-up per match ----------------------------------------------------------------------
+
+
+def test_a_failed_render_retried_straight_away_gets_no_new_heads_up(world, caplog):
+    world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran")]
+    world.add_demo()
+    with caplog.at_level(logging.INFO, logger="clipper.worker"):
+        world.ticks(9)
+    assert [call.perspective for call in world.render.calls] == ["player", "player", "enemy"]
+    assert world.titles() == ["Rendering highlights", "Highlights ready"]
+    assert sum("no heads-up" in message for message in caplog.messages) == 2   # the retry and the enemy view
+
+
+@pytest.mark.parametrize(("seconds_later", "heads_up_again"), [(119.9, False), (120.0, True), (121.0, True)])
+def test_a_retry_gets_a_heads_up_again_only_once_two_minutes_have_passed(world, seconds_later, heads_up_again):
+    world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran")]
+    world.add_demo()
+    world.ticks(5)                                    # the player view fails: one heads-up so far
+    world.clock.now += seconds_later
+    world.ticks(1)                                    # its retry
+    assert world.titles() == ["Rendering highlights"] * (2 if heads_up_again else 1)
+
+
+def test_the_retry_after_an_aborted_render_gets_a_heads_up(world):
+    demo_id = world.add_demo()
+    world.ticks(5)                                    # the player view renders: CS2 has just closed
+    world.render.results = [RenderResult(ok=False, aborted=True, failure=ABORTED)]
+    world.ticks(2)                                    # the enemy view is aborted, then tried again
+    assert world.titles() == ["Rendering highlights", "Rendering highlights"]
+    assert world.index.latest_render(demo_id, "enemy")["state"] == "done"
+
+
+def test_a_second_demo_gets_its_own_heads_up(world):
+    world.add_demo()
+    world.add_demo(SECOND_DEMO, "1" * 64)
+    world.ticks(12)
+    assert world.titles() == ["Rendering highlights", "Highlights ready", "Rendering highlights", "Highlights ready"]
+
+
+def test_a_render_straight_after_another_still_waits_for_the_gate_and_a_pause(world):
+    world.add_demo()
+    world.ticks(5)                                    # the player view renders: CS2 has just closed
+    world.gate.reasons = ("FACEIT AC is running",)
+    world.ticks(1)
+    assert [call.perspective for call in world.render.calls] == ["player"]
+    assert world.state.snapshot().waiting == ("FACEIT AC is running",)
+    world.gate.reasons = ()
+    world.index.pause("you")
+    world.ticks(1)
+    assert [call.perspective for call in world.render.calls] == ["player"]
+    world.index.resume()
+    world.ticks(1)
+    assert [call.perspective for call in world.render.calls] == ["player", "enemy"]
+    assert world.titles() == ["Rendering highlights"] * 2        # the Gate closed: someone was at the PC
+
+
+def test_a_stop_asked_while_the_analysis_is_made_again_keeps_cs2_closed(world):
+    demo_id = world.add_demo()
+    world.ticks(5)                                    # the player view renders: CS2 has just closed
+    world.facts.kept.clear()                          # the next view needs its Demo analyzed again
+    analyze = world.services.analyze
+
+    def analyze_while_stopped(dem, log_path):
+        world.stop.request("after_render")
+        return analyze(dem, log_path)
+
+    world.services.analyze = analyze_while_stopped
+    world.ticks(1)
+    assert [call.perspective for call in world.render.calls] == ["player"]
+    assert world.index.latest_render(demo_id, "enemy")["state"] == "queued"
+
+
+def test_a_gate_that_closes_between_views_brings_the_heads_up_back(world):
+    world.add_demo()
+    world.ticks(5)                                    # the player view is rendered, after one heads-up
+    world.gate.reasons = ("CS2 is running",)          # someone is at the PC
+    world.ticks(1)
+    world.gate.reasons = ()
+    world.ticks(1)                                    # the enemy view
+    assert [call.perspective for call in world.render.calls] == ["player", "enemy"]
+    assert world.titles().count("Rendering highlights") == 2

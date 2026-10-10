@@ -32,6 +32,7 @@ MAX_STEP_ATTEMPTS = 3
 MAX_RENDER_ATTEMPTS = 3
 PAUSE_AFTER_FAILURES = 3
 QUIT_ABORT = "aborted: the app was quit"
+BACK_TO_BACK_SECONDS = 120.0       # a view this soon after CS2 closed for its Demo starts without a heads-up
 
 
 class Skip(Exception):
@@ -161,6 +162,7 @@ class Services:
     join: Callable[[list[Path], Path], float]
     notify: Callable[..., None]
     sleep: Callable[[float], None] = time.sleep
+    clock: Callable[[], float] = time.monotonic
     alerts: AlertsStep | None = None
 
 
@@ -228,6 +230,7 @@ class Worker:
         self.deletes = deletes if deletes is not None else DeleteRequest()
         self._waiting_reasons: tuple[str, ...] = ()
         self._pruned_at_start = False
+        self._last_render: tuple[int, float] | None = None   # (Demo id, clock time) of the last render not aborted
 
     # --- the loop --------------------------------------------------------------------------------
 
@@ -408,13 +411,19 @@ class Worker:
         self._ensure_analysis(demo)
         highlights = self.index.selected_highlights(demo["match_checksum"])
         match = self.index.match(demo["match_checksum"])
-        self.services.notify(
-            "Rendering highlights",
-            f"{len(highlights)} Highlights from {match['map']} ({job['perspective']} view). "
-            f"CS2 opens in {self.cfg.heads_up_seconds:g} s — please don't start it yourself.",
-        )
-        if not self._gate_stays_clear(self.cfg.heads_up_seconds, demo["id"]):
-            return
+        if self._back_to_back(demo["id"]):
+            if self._gives_way(demo["id"]) or not self._gate_is_clear():
+                return                                # the last look the heads-up would have had
+            log.info("demo #%s: the %s view follows straight on from the last render, so no heads-up",
+                     demo["id"], job["perspective"])
+        else:
+            self.services.notify(
+                "Rendering highlights",
+                f"{len(highlights)} Highlights from {match['map']} ({job['perspective']} view). "
+                f"CS2 opens in {self.cfg.heads_up_seconds:g} s — please don't start it yourself.",
+            )
+            if not self._gate_stays_clear(self.cfg.heads_up_seconds, demo["id"]):
+                return
         output_dir = _fresh_dir(
             self.cfg.renders_dir / demo["match_checksum"] / job["perspective"] / f"attempt-{job['attempt']}"
         )
@@ -444,9 +453,11 @@ class Worker:
             log.exception("render crashed")
             result = RenderResult(ok=False, failure=f"render crashed: {exc}")
         if result.aborted:
+            self._last_render = None                  # an abort: the next render warns again
             failure = QUIT_ABORT if self.stop.abort_render() else result.failure
             self.index.finish_render(job["id"], "aborted", failure)
             return
+        self._last_render = (demo["id"], self.services.clock())   # CS2 has just closed
         if result.ok:
             try:
                 groups = assign_clips(result.clips, [(h["round"], h["round_start_tick"]) for h in highlights])
@@ -474,10 +485,19 @@ class Worker:
                 f" then resume rendering from the tray or the Status page.",
             )
 
+    def _back_to_back(self, demo_id: int) -> bool:
+        """True when the last render not aborted was of this same Demo and ended less than BACK_TO_BACK_SECONDS
+        ago: CS2 has only just closed for this match, so its next view starts without a heads-up."""
+        if self._last_render is None:
+            return False
+        last_demo_id, ended = self._last_render
+        return last_demo_id == demo_id and self.services.clock() - ended < BACK_TO_BACK_SECONDS
+
     def _gate_is_clear(self) -> bool:
         status = self.services.gate.check()
         if not status.ok:
             self._waiting_reasons = status.reasons
+            self._last_render = None                  # someone may be at the PC: the next render warns again
         return status.ok
 
     def _gate_stays_clear(self, seconds: float, demo_id: int) -> bool:

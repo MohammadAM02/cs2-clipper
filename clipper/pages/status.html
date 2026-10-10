@@ -308,7 +308,8 @@ function renderSlides(matches) {
     return {key: `${h.match.checksum}-${h.round}`, type, tab: `${type === "ACE" ? "Ace" : type}, ${h.match.map}`, thumb: play,
       meta: `${h.match.map}, ${dateLabel(h.match.played_at)}, round ${h.round}`,
       title: `${type === "ACE" ? "Ace" : type} in round ${h.round}`,
-      sub: tags.length ? tags.join(", ") + "." : (h.enemy !== null ? "From your view and the Enemy POV." : "From your view."),
+      sub: tags.length ? tags.join(", ") + "." : h.player === null ? "From the Enemy POV."
+        : h.enemy !== null ? "From your view and the Enemy POV." : "From your view.",
       acts: [{label: "Watch", primary: true, href: `/reels?play=${+play}`},
         ...(h.player !== null && h.enemy !== null ? [{label: "Enemy POV", href: `/reels?play=${+h.enemy}`}] : [])]};
   });

@@ -108,6 +108,12 @@ class World:
         for _ in range(count):
             self.worker.tick()
 
+    def use(self, **settings) -> None:
+        """Change settings as the app does: the next tick runs on a new Worker with the new Config."""
+        self.cfg = replace(self.cfg, **settings)
+        self.worker = Worker(self.cfg, self.index, self.services, state=self.state, stop=self.stop,
+                             deletes=self.deletes)
+
     def titles(self) -> list[str]:
         return [title for title, _ in self.notices]
 
@@ -156,6 +162,52 @@ def test_one_demo_renders_both_views_before_the_next_demo_starts(world):
         (f"{SECOND_DEMO}.dem", "player"), (f"{SECOND_DEMO}.dem", "enemy"),
     ]
     assert world.index.demo(first)["state"] == world.index.demo(second)["state"] == "done"
+
+
+@pytest.mark.parametrize("perspective", ["player", "enemy"])
+def test_a_demo_renders_and_joins_only_the_chosen_view(world, perspective):
+    world.use(perspectives=perspective)
+    demo_id = world.add_demo()
+    world.ticks(8)
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert [call.perspective for call in world.render.calls] == [perspective]
+    reels = world.index.match_reels(MATCH_CHECKSUM)
+    assert [(r["player_reel_id"] is not None, r["enemy_reel_id"] is not None) for r in reels] == [
+        (perspective == "player", perspective == "enemy")] * 5
+    assert world.titles() == ["Rendering highlights", "Highlights ready"]
+
+
+def test_round_clips_are_rendered_from_the_players_view_only(world):
+    world.use(sequence_event="rounds")
+    world.add_demo()
+    world.ticks(8)
+    assert [(call.perspective, call.event) for call in world.render.calls] == [("player", "rounds")]
+
+
+def test_turning_a_view_off_takes_it_off_every_waiting_demos_queue(world, caplog):
+    first = world.add_demo()
+    second = world.add_demo(SECOND_DEMO, "1" * 64)
+    world.ticks(5)                                    # the first Demo's player view is rendered
+    world.use(perspectives="player")
+    with caplog.at_level(logging.INFO, logger="clipper.worker"):
+        world.ticks(1)
+    assert world.index.demo(second)["state"] == "rendering"
+    assert world.index.latest_render(first, "enemy") is None
+    assert world.index.latest_render(second, "enemy") is None
+    assert "the enemy view is off in Settings: 2 queued renders taken off the queue" in caplog.messages
+    world.ticks(6)
+    assert [(call.demo_path.name, call.perspective) for call in world.render.calls] == [
+        (f"{DEMO_NAME}.dem", "player"), (f"{SECOND_DEMO}.dem", "player")]
+    assert world.index.demo(first)["state"] == world.index.demo(second)["state"] == "done"
+
+
+def test_a_view_rendered_before_it_was_turned_off_still_becomes_reels(world):
+    demo_id = world.add_demo()
+    world.ticks(6)                                    # both views are rendered
+    world.use(perspectives="enemy")
+    world.ticks(2)
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert world.index.reel_count(MATCH_CHECKSUM) == 10
 
 
 def test_each_render_is_given_the_checksum_the_analysis_gave_its_demo(world):

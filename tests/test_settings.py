@@ -37,6 +37,13 @@ def test_hlae_is_a_program_after_ffprobe():
     assert (hlae.label, hlae.kind) == ("HLAE", "program")
 
 
+def test_the_views_to_render_are_a_choice_after_one_clip_per():
+    picture = [f.name for f in FIELDS if f.group == "Picture"]
+    assert picture[picture.index("sequence_event") + 1] == "perspectives"
+    views = next(f for f in FIELDS if f.name == "perspectives")
+    assert (views.label, views.kind, views.choices) == ("Views to render", "choice", ("both", "player", "enemy"))
+
+
 # --- defaults() ----------------------------------------------------------------------------------------
 
 
@@ -54,6 +61,7 @@ def test_defaults_match_configs_own_defaults():
     assert values["top_n"] == cfg.top_n == 5
     assert values["page_port"] == cfg.page_port == 8765
     assert values["aspect_ratio"] == "16:9"
+    assert values["perspectives"] == cfg.perspectives == "both"
     assert values["hlae_exe"] == cfg.hlae_exe == ""
     assert values["match_alerts"] is True
     assert isinstance(values["downloads_dir"], str)
@@ -232,6 +240,8 @@ def test_the_stored_protected_key_loads_as_is_and_a_corrupt_one_falls_back(tmp_p
     ("faceit_redirect_uri", "https://baggaclipper.pages.dev/"),
     ("aspect_ratio", "4:3-stretched"),
     ("sequence_event", "rounds"),
+    ("perspectives", "player"),
+    ("perspectives", "enemy"),
     ("hlae_exe", ""),
     ("hlae_exe", "C:/HLAE/hlae.exe"),
     ("top_n", 25),
@@ -253,6 +263,8 @@ def test_valid_values_pass(name, value):
     ("faceit_redirect_uri", 5),
     ("aspect_ratio", "21:9"),
     ("sequence_event", "frags"),
+    ("perspectives", "neither"),
+    ("perspectives", ""),
     ("hlae_exe", 1),
     ("ffmpeg", ""),
     ("top_n", 0),
@@ -272,6 +284,8 @@ def test_error_messages_are_short_and_say_whats_allowed():
     assert errors["top_n"] == "must be a whole number from 1 to 50"
     errors = validate({"aspect_ratio": "21:9"}, check_exists=False)
     assert errors["aspect_ratio"] == "must be one of 16:9, 4:3, 4:3-hd, 4:3-stretched"
+    errors = validate({"perspectives": "neither"}, check_exists=False)
+    assert errors["perspectives"] == "must be one of both, player, enemy"
 
 
 def test_the_secret_kind_is_only_checked_when_a_value_is_given():

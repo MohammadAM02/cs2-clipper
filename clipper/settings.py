@@ -16,7 +16,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 
 from clipper import paths, protect
-from clipper.config import RATIOS, SEQUENCE_EVENTS, Config
+from clipper.config import PERSPECTIVE_CHOICES, RATIOS, SEQUENCE_EVENTS, Config
 from clipper.faceit_oauth import RELAY_URL
 
 KEY_FIELD = "faceit_api_key"                  # write-only: never stored or read back under this name
@@ -63,6 +63,7 @@ FIELDS: tuple[Field, ...] = (
     Field("hlae_exe", "Folders", "HLAE", "program", help="Full path to HLAE.exe. Blank uses the one Setup installs."),
     Field("aspect_ratio", "Picture", "Aspect ratio", "choice", choices=tuple(RATIOS)),
     Field("sequence_event", "Picture", "One Clip per", "choice", choices=SEQUENCE_EVENTS),
+    Field("perspectives", "Picture", "Views to render", "choice", choices=tuple(PERSPECTIVE_CHOICES)),
     Field("padding_before_s", "Picture", "Seconds before each Frag", "number", minimum=0, maximum=30),
     Field("padding_after_s", "Picture", "Seconds after each Frag", "number", minimum=0, maximum=30),
     Field("top_n", "Rendering", "Highlights per match", "int", minimum=1, maximum=50),

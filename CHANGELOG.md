@@ -3,6 +3,17 @@
 What changed in each release of CS2 Clipper. The release workflow publishes a version's section as the notes of
 its GitHub Release, and the app shows those notes on the Status page when it offers that version.
 
+## 0.4.0
+
+### New: choose which views to render
+
+Settings → Picture → **Views to render** picks **Both** (as before), **Your view** or **Enemy POV**. With one view,
+CS2 opens once per match instead of twice, so a match renders in about half the time. A change applies to every
+match not rendered yet, including the ones already waiting; matches that are done keep their Reels.
+
+With **One Clip per: Round**, matches now render your view only. A whole round has no one enemy to follow, so its
+Enemy POV was your view again, recorded in a second CS2 run.
+
 ## 0.3.0
 
 ### Fixed: rendering changed your CS2 video settings

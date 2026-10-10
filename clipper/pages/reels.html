@@ -45,7 +45,7 @@ function highlightRow(h) {
     <span class="rd">Round ${+h.round}</span>${badge(h.type)}
     <span class="tags">${tags}</span>
     <span class="povs" role="group" aria-label="Watch round ${+h.round} from">
-      <button class="pov l" data-reel="${h.player}" ${h.player === null ? "disabled" : ""}>${ICON.play}Player</button>
+      <button class="pov l" data-reel="${h.player}" ${h.player === null ? 'disabled title="No Player view for this round"' : ""}>${ICON.play}Player</button>
       <button class="pov r" data-reel="${h.enemy}" ${h.enemy === null ? 'disabled title="No Enemy POV for this round"' : ""}>${ICON.play}Enemy</button>
     </span>
   </div>`;

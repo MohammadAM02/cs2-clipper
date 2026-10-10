@@ -97,6 +97,26 @@ def test_an_unknown_sequence_event_is_rejected():
         Config(sequence_event="frags")
 
 
+def test_both_perspectives_are_rendered_by_default():
+    cfg = Config()
+    assert (cfg.perspectives, cfg.perspectives_to_render) == ("both", ("player", "enemy"))
+
+
+def test_one_perspective_can_be_rendered_alone():
+    assert Config(perspectives="player").perspectives_to_render == ("player",)
+    assert Config(perspectives="enemy").perspectives_to_render == ("enemy",)
+
+
+def test_round_clips_are_rendered_from_the_players_view_only():
+    for choice in ("both", "player", "enemy"):
+        assert Config(perspectives=choice, sequence_event="rounds").perspectives_to_render == ("player",)
+
+
+def test_an_unknown_perspectives_choice_is_rejected():
+    with pytest.raises(ValueError, match="perspectives"):
+        Config(perspectives="neither")
+
+
 def test_match_alert_settings_have_defaults():
     cfg = Config()
     assert (cfg.match_alerts, cfg.stopped_playing_minutes, cfg.page_port) == (True, 5.0, 8765)

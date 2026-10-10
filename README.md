@@ -38,7 +38,8 @@
 - **Records them in the game.** CS2 plays the Demo back through HLAE, and each Frag is recorded at 60 fps
   with its build-up: 4 seconds before, 2 after.
 - **Shows both sides.** Every Highlight comes twice: from your view, and from an Enemy POV that follows
-  each player you take down.
+  each player you take down. Keep just one in Settings → Picture → Views to render, and matches render in
+  about half the time.
 - **Stays out of your way.** It records only while CS2 and FACEIT AC are closed, gives a 30-second
   heads-up first, and stops the moment FACEIT AC starts.
 - **Tells you what to grab.** Match alerts flag the FACEIT matches that have Highlights, and Demos to grab
@@ -80,7 +81,7 @@ a reboot picks up where it stopped.
 | **Unpacked** | The `.dem.zst` FACEIT serves becomes a `.dem`. |
 | **Analyzed** | [csda](https://github.com/akiver/cs-demo-analyzer) reads every round; the app keeps what it needs as `analyses\<checksum>.json`. |
 | **Scored** | Each round with your Frags becomes a Highlight; the five with the best Score are picked. |
-| **Rendering** | HLAE starts CS2 and a console script ([`hlae_plan.py`](clipper/hlae_plan.py)) records each Sequence at its exact ticks: your view first, then the Enemy POV. |
+| **Rendering** | HLAE starts CS2 and a console script ([`hlae_plan.py`](clipper/hlae_plan.py)) records each Sequence at its exact ticks: your view first, then the Enemy POV (or only the view Settings picks). |
 | **Joined** | FFmpeg joins each Highlight's Clips into one Reel per view. |
 | **Done** | The unpacked `.dem` is deleted, and a notification says the Reels are ready. |
 

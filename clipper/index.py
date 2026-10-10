@@ -282,6 +282,14 @@ class Index:
         )
         return cursor.lastrowid
 
+    def unqueue_renders(self, perspective: str) -> int:
+        """Take every Demo's queued Render Job for `perspective` off the queue; returns how many went.
+        Jobs that started stay, so each Demo's latest attempt is its last real one again."""
+        cursor = self._db.execute(
+            "DELETE FROM render_jobs WHERE perspective = ? AND state = 'queued'", (perspective,)
+        )
+        return cursor.rowcount
+
     def latest_render(self, demo_id: int, perspective: str) -> sqlite3.Row | None:
         return self._one(
             "SELECT * FROM render_jobs WHERE demo_id = ? AND perspective = ? ORDER BY id DESC LIMIT 1",

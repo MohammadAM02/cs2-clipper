@@ -27,6 +27,11 @@ def test_rendering_shows_the_map_and_perspective():
     assert summary(Snapshot(rendering=enemy)) == "Rendering Mirage (enemy view)"
 
 
+def test_a_render_of_both_views_says_both_views():
+    both = dataclasses.replace(RENDERING, perspective="both")
+    assert summary(Snapshot(rendering=both)) == "Rendering Mirage (both views)"
+
+
 def test_paused_by_you():
     assert summary(Snapshot(paused_by="you")) == "Paused by you"
 

@@ -22,7 +22,7 @@ from clipper.join import JoinError, assign_clips
 from clipper.model import MatchInfo, RoundFacts
 from clipper.render import RenderRequest, RenderResult
 from clipper.scoring import score_match, select
-from clipper.state import AppState, Rendering
+from clipper.state import AppState, Rendering, views_label
 
 log = logging.getLogger(__name__)
 
@@ -378,6 +378,7 @@ class Worker:
     # --- step 5: rendering -----------------------------------------------------------------------
 
     def _render(self, demo) -> None:
+        jobs = []                                     # the Render Jobs of the views not done yet, player first
         for perspective in self.cfg.perspectives_to_render:
             job = self.index.latest_render(demo["id"], perspective)
             if job is None:
@@ -396,12 +397,19 @@ class Worker:
             elif job["state"] == "aborted":            # FACEIT AC appeared: go again, not counted
                 self.index.queue_render(demo["id"], perspective, attempt=job["attempt"])
                 job = self.index.latest_render(demo["id"], perspective)
-            self._try_render(demo, job)
-            return                                    # at most one CS2 launch per tick
-        self._join(demo)
-        self.index.advance(demo["id"], "joined")
+            jobs.append(job)
+        if not jobs:
+            self._join(demo)
+            self.index.advance(demo["id"], "joined")
+            return
+        # both views at their first attempt: one CS2 launch records both; a retry, or the last view left, goes alone
+        if len(jobs) == 2 and all(job["attempt"] == 1 for job in jobs):
+            self._try_render(demo, jobs)              # at most one CS2 launch per tick
+        else:
+            self._try_render(demo, jobs[:1])
 
-    def _try_render(self, demo, job) -> None:
+    def _try_render(self, demo, jobs) -> None:
+        """One CS2 launch for `jobs`: a view, or both views of the Demo, which share one heads-up and one log."""
         if self._gives_way(demo["id"]):
             return
         if self.index.paused_by() is not None:
@@ -411,28 +419,32 @@ class Worker:
         self._ensure_analysis(demo)
         highlights = self.index.selected_highlights(demo["match_checksum"])
         match = self.index.match(demo["match_checksum"])
+        perspective = "both" if len(jobs) == 2 else jobs[0]["perspective"]
         if self._back_to_back(demo["id"]):
             if self._gives_way(demo["id"]) or not self._gate_is_clear():
                 return                                # the last look the heads-up would have had
-            log.info("demo #%s: the %s view follows straight on from the last render, so no heads-up",
-                     demo["id"], job["perspective"])
+            log.info("demo #%s (%s) follows straight on from the last render, so no heads-up",
+                     demo["id"], views_label(perspective))
         else:
             self.services.notify(
                 "Rendering highlights",
-                f"{len(highlights)} Highlights from {match['map']} ({job['perspective']} view). "
+                f"{len(highlights)} Highlights from {match['map']} ({views_label(perspective)}). "
                 f"CS2 opens in {self.cfg.heads_up_seconds:g} s — please don't start it yourself.",
             )
             if not self._gate_stays_clear(self.cfg.heads_up_seconds, demo["id"]):
                 return
-        output_dir = _fresh_dir(
-            self.cfg.renders_dir / demo["match_checksum"] / job["perspective"] / f"attempt-{job['attempt']}"
-        )
-        log_path = self._log_path(demo, f"render-{job['perspective']}-{job['attempt']}")
-        self.index.start_render(job["id"], output_dir, log_path)
-        self.state.set_rendering(Rendering(match["map"], job["perspective"], time.time()))
+        log_path = self._log_path(demo, f"render-{perspective}-{jobs[0]['attempt']}")
+        outputs = {}
+        for job in jobs:
+            output_dir = _fresh_dir(
+                self.cfg.renders_dir / demo["match_checksum"] / job["perspective"] / f"attempt-{job['attempt']}"
+            )
+            self.index.start_render(job["id"], output_dir, log_path)
+            outputs[job["perspective"]] = output_dir
+        self.state.set_rendering(Rendering(match["map"], perspective, time.time()))
         request = RenderRequest(
             demo_path=Path(demo["dem_path"]),
-            outputs={job["perspective"]: output_dir},
+            outputs=outputs,
             rounds=tuple(h["round"] for h in highlights),
             log_path=log_path,
             steamid=self.cfg.subject_steamid,
@@ -454,28 +466,24 @@ class Worker:
         if result.aborted:
             self._last_render = None                  # an abort: the next render warns again
             failure = QUIT_ABORT if self.stop.abort_render() else result.failure
-            self.index.finish_render(job["id"], "aborted", failure)
+            for job in jobs:
+                self.index.finish_render(job["id"], "aborted", failure)
             return
         self._last_render = (demo["id"], self.services.clock())   # CS2 has just closed
-        if result.ok:
-            try:
-                groups = assign_clips(result.clips.get(job["perspective"], ()),
-                                      [(h["round"], h["round_start_tick"]) for h in highlights])
-            except JoinError as exc:
-                result = RenderResult(ok=False, failure=str(exc))
-            else:
-                ids = {h["round"]: h["id"] for h in highlights}
-                for number, clips in groups.items():
-                    for clip in clips:
-                        self.index.add_clip(job["id"], ids[number], clip,
-                                            self.cfg.store_path(clip.path))
+        failed = False
+        for job in jobs:
+            failure = self._save_clips(demo, highlights, job, result)
+            if failure is None:
                 self.index.finish_render(job["id"], "done")
-                self.index.set_flag("consecutive_failures", "0")
-                return
-        self.index.finish_render(job["id"], "failed", result.failure)
-        log.warning("demo #%s (%s): %s render attempt %s of %s failed: %s", demo["id"], match["map"],
-                    job["perspective"], job["attempt"], MAX_RENDER_ATTEMPTS, result.failure)
-        failures = int(self.index.get_flag("consecutive_failures", "0")) + 1
+                continue
+            failed = True
+            self.index.finish_render(job["id"], "failed", failure)
+            log.warning("demo #%s (%s): %s render attempt %s of %s failed: %s", demo["id"], match["map"],
+                        job["perspective"], job["attempt"], MAX_RENDER_ATTEMPTS, failure)
+        if not failed:
+            self.index.set_flag("consecutive_failures", "0")
+            return
+        failures = int(self.index.get_flag("consecutive_failures", "0")) + 1    # one per launch that failed
         self.index.set_flag("consecutive_failures", str(failures))
         if failures >= PAUSE_AFTER_FAILURES:
             self.index.pause("failures")
@@ -484,6 +492,22 @@ class Worker:
                 f"{failures} renders failed in a row. Check HLAE/CS2 compatibility,"
                 f" then resume rendering from the tray or the Status page.",
             )
+
+    def _save_clips(self, demo, highlights, job, result: RenderResult) -> str | None:
+        """Keeps the Clips `result` gives for `job`'s view, each under its Highlight. Returns why the view failed,
+        or None when its Clips are kept. A view the launch did not record fails with the launch's reason."""
+        if job["perspective"] not in result.clips:
+            return result.failure or f"no Clips of the {job['perspective']} view"
+        try:
+            groups = assign_clips(result.clips[job["perspective"]],
+                                  [(h["round"], h["round_start_tick"]) for h in highlights])
+        except JoinError as exc:
+            return str(exc)
+        ids = {h["round"]: h["id"] for h in highlights}
+        for number, clips in groups.items():
+            for clip in clips:
+                self.index.add_clip(job["id"], ids[number], clip, self.cfg.store_path(clip.path))
+        return None
 
     def _back_to_back(self, demo_id: int) -> bool:
         """True when the last render not aborted was of this same Demo and ended less than BACK_TO_BACK_SECONDS

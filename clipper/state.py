@@ -17,7 +17,7 @@ from clipper.alerts import map_label
 @dataclass(frozen=True)
 class Rendering:
     map_name: str          # the analysis's map name, e.g. "de_mirage"
-    perspective: str       # "player" | "enemy"
+    perspective: str       # "player" | "enemy" | "both" (one CS2 launch records both views)
     started_at: float      # time.time() when the Render Job started
 
 
@@ -29,6 +29,11 @@ class Snapshot:
     rendering: Rendering | None = None
     quitting: str | None = None         # "now" | "after_render" | None
     pages_off: str | None = None        # why the web server has no port (the tray adds it to its tooltip)
+
+
+def views_label(perspective: str) -> str:
+    """What the app calls the view(s) a render records: "player view", "enemy view" or "both views"."""
+    return "both views" if perspective == "both" else f"{perspective} view"
 
 
 def summary(snapshot: Snapshot) -> str:
@@ -44,7 +49,7 @@ def summary(snapshot: Snapshot) -> str:
         more = len(snapshot.problems) - 1
         return f"{text} (+{more} more)" if more else text
     if snapshot.rendering is not None:
-        return f"Rendering {map_label(snapshot.rendering.map_name)} ({snapshot.rendering.perspective} view)"
+        return f"Rendering {map_label(snapshot.rendering.map_name)} ({views_label(snapshot.rendering.perspective)})"
     if snapshot.paused_by == "you":
         return "Paused by you"
     if snapshot.paused_by == "failures":

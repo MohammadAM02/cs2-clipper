@@ -8,8 +8,8 @@ its GitHub Release, and the app shows those notes on the Status page when it off
 ### New: choose which views to render
 
 Settings → Picture → **Views to render** picks **Both** (as before), **Your view** or **Enemy POV**. With one view,
-CS2 opens once per match instead of twice, so a match renders in about half the time. A change applies to every
-match not rendered yet, including the ones already waiting; matches that are done keep their Reels.
+each match records half as much, so it renders faster. A change applies to every match not rendered yet, including
+the ones already waiting; matches that are done keep their Reels.
 
 With **One Clip per: Round**, matches now render your view only. A whole round has no one enemy to follow, so its
 Enemy POV was your view again, recorded in a second CS2 run.
@@ -25,6 +25,12 @@ Demo that failed keeps its Clips, so **Retry** on the Status page can still make
 When CS2 has just closed after rendering a match, the next render of that match starts right away, without another
 30-second heads-up or notification. A new match still gets the heads-up, and so does a render after CS2 or FACEIT AC
 was open in between.
+
+### New: both views in one CS2 launch
+
+When both views are due, CS2 opens once and records your view, then starts the demo again for the Enemy POV, saving a
+CS2 start-up per match. If CS2 fails during the Enemy POV, your view is kept and the Enemy POV is tried again on its
+own; retries go one view at a time.
 
 ## 0.3.0
 

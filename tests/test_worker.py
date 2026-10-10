@@ -79,7 +79,8 @@ def clips_of(request):
 
 
 class FakeRender:
-    """Succeeds with one Clip per requested round, unless canned results are queued."""
+    """Succeeds with one Clip per requested round, unless canned results are queued: a RenderResult, or a function
+    of the request that gives one (for a partial result, whose Clips depend on the request)."""
 
     def __init__(self):
         self.calls = []
@@ -88,7 +89,8 @@ class FakeRender:
     def __call__(self, request, should_abort):
         self.calls.append(request)
         if self.results:
-            return self.results.pop(0)
+            result = self.results.pop(0)
+            return result(request) if callable(result) else result
         return RenderResult(ok=True, clips=clips_of(request))
 
 
@@ -163,7 +165,7 @@ def test_a_demo_goes_from_spotted_to_done(world):
     demo_id = world.add_demo()
     world.ticks(8)
     assert world.index.demo(demo_id)["state"] == "done"
-    assert [call.perspectives[0] for call in world.render.calls] == ["player", "enemy"]
+    assert [call.perspectives for call in world.render.calls] == [("player", "enemy")]   # one CS2 launch, both views
     assert world.render.calls[0].rounds == (3, 4, 8, 12, 14)
     first = world.render.calls[0]
     assert (first.event, first.width, first.height) == ("kills", 1920, 1080)
@@ -171,13 +173,94 @@ def test_a_demo_goes_from_spotted_to_done(world):
     assert world.titles() == ["Rendering highlights", "Highlights ready"]   # one heads-up for both views
 
 
+def test_both_views_are_recorded_in_one_cs2_launch(world):
+    demo_id = world.add_demo()
+    world.ticks(5)                                    # queued on tick 4, then the one launch that records both views
+    assert len(world.render.calls) == 1
+    request = world.render.calls[0]
+    assert request.perspectives == ("player", "enemy")
+    assert request.outputs == {"player": world.cfg.renders_dir / MATCH_CHECKSUM / "player" / "attempt-1",
+                               "enemy": world.cfg.renders_dir / MATCH_CHECKSUM / "enemy" / "attempt-1"}
+    assert request.log_path.name == f"demo-{demo_id}-render-both-1.log"
+    assert [world.index.latest_render(demo_id, p)["state"] for p in ("player", "enemy")] == ["done", "done"]
+    world.ticks(3)
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert world.index.reel_count(MATCH_CHECKSUM) == 10
+
+
+@pytest.mark.parametrize(("perspectives", "named"),
+                         [("player", "(player view)"), ("enemy", "(enemy view)"), ("both", "(both views)")])
+def test_the_heads_up_names_the_views_the_launch_records(world, perspectives, named):
+    world.use(perspectives=perspectives)
+    world.add_demo()
+    world.ticks(5)
+    assert world.notices[0][1].count(named) == 1
+
+
+def test_a_failed_two_view_launch_is_tried_again_one_view_at_a_time(world):
+    world.render.results = [RenderResult(ok=False, failure="CS2 closed before the render finished")]
+    demo_id = world.add_demo()
+    world.ticks(5)                                    # both views fail in the one launch
+    assert [world.index.latest_render(demo_id, p)["state"] for p in ("player", "enemy")] == ["failed", "failed"]
+    world.ticks(2)                                    # then each view on its own: the player's, then the enemy's
+    assert [call.perspectives for call in world.render.calls] == [("player", "enemy"), ("player",), ("enemy",)]
+    assert [call.log_path.name for call in world.render.calls] == [
+        f"demo-{demo_id}-render-both-1.log", f"demo-{demo_id}-render-player-2.log",
+        f"demo-{demo_id}-render-enemy-2.log",
+    ]
+    assert world.index.latest_render(demo_id, "enemy")["attempt"] == 2
+    world.ticks(3)
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert world.index.reel_count(MATCH_CHECKSUM) == 10
+    assert world.index.get_flag("consecutive_failures") == "0"
+
+
+def test_a_partial_two_view_launch_keeps_the_view_that_recorded(world):
+    def player_recorded_enemy_stalled(request):
+        return RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran",
+                            clips={"player": clips_of(request)["player"]})
+
+    world.render.results = [player_recorded_enemy_stalled]
+    demo_id = world.add_demo()
+    world.ticks(5)                                    # the player view is kept; the enemy view failed
+    assert world.index.latest_render(demo_id, "player")["state"] == "done"
+    assert world.index.latest_render(demo_id, "enemy")["state"] == "failed"
+    world.ticks(2)                                    # the enemy view alone, at attempt 2
+    assert [call.perspectives for call in world.render.calls] == [("player", "enemy"), ("enemy",)]
+    assert world.index.latest_render(demo_id, "enemy")["attempt"] == 2
+    assert world.index.latest_render(demo_id, "enemy")["state"] == "done"
+    world.ticks(3)
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert world.index.reel_count(MATCH_CHECKSUM) == 10
+
+
+def test_an_aborted_two_view_launch_is_tried_again_as_one_launch(world):
+    world.render.results = [RenderResult(ok=False, aborted=True, failure=ABORTED)]
+    demo_id = world.add_demo()
+    world.ticks(9)
+    assert [call.perspectives for call in world.render.calls] == [("player", "enemy")] * 2
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert world.index.get_flag("consecutive_failures", "0") == "0"
+    assert world.titles() == ["Rendering highlights", "Rendering highlights", "Highlights ready"]   # retry: heads-up
+
+
+def test_one_failed_two_view_launch_adds_one_to_the_consecutive_failures(world):
+    world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran")] * 2
+    demo_id = world.add_demo()
+    world.ticks(5)                                    # one launch, both views failed
+    assert [world.index.latest_render(demo_id, p)["state"] for p in ("player", "enemy")] == ["failed", "failed"]
+    assert world.index.get_flag("consecutive_failures") == "1"
+    world.ticks(1)                                    # the player view alone fails again
+    assert world.index.get_flag("consecutive_failures") == "2"
+    assert world.index.paused_by() is None
+
+
 def test_one_demo_renders_both_views_before_the_next_demo_starts(world):
     first = world.add_demo()
     second = world.add_demo(SECOND_DEMO, "1" * 64)
     world.ticks(12)
-    assert [(call.demo_path.name, call.perspectives[0]) for call in world.render.calls] == [
-        (f"{DEMO_NAME}.dem", "player"), (f"{DEMO_NAME}.dem", "enemy"),
-        (f"{SECOND_DEMO}.dem", "player"), (f"{SECOND_DEMO}.dem", "enemy"),
+    assert [(call.demo_path.name, call.perspectives) for call in world.render.calls] == [
+        (f"{DEMO_NAME}.dem", ("player", "enemy")), (f"{SECOND_DEMO}.dem", ("player", "enemy")),
     ]
     assert world.index.demo(first)["state"] == world.index.demo(second)["state"] == "done"
 
@@ -205,23 +288,23 @@ def test_round_clips_are_rendered_from_the_players_view_only(world):
 def test_turning_a_view_off_takes_it_off_every_waiting_demos_queue(world, caplog):
     first = world.add_demo()
     second = world.add_demo(SECOND_DEMO, "1" * 64)
-    world.ticks(5)                                    # the first Demo's player view is rendered
+    world.ticks(4)                                    # both Demos are rendering, each with both views queued
     world.use(perspectives="player")
     with caplog.at_level(logging.INFO, logger="clipper.worker"):
-        world.ticks(1)
+        world.ticks(1)                                # the enemy views come off; the first Demo's player view renders
     assert world.index.demo(second)["state"] == "rendering"
     assert world.index.latest_render(first, "enemy") is None
     assert world.index.latest_render(second, "enemy") is None
     assert "the enemy view is off in Settings: 2 queued renders taken off the queue" in caplog.messages
     world.ticks(6)
-    assert [(call.demo_path.name, call.perspectives[0]) for call in world.render.calls] == [
-        (f"{DEMO_NAME}.dem", "player"), (f"{SECOND_DEMO}.dem", "player")]
+    assert [(call.demo_path.name, call.perspectives) for call in world.render.calls] == [
+        (f"{DEMO_NAME}.dem", ("player",)), (f"{SECOND_DEMO}.dem", ("player",))]
     assert world.index.demo(first)["state"] == world.index.demo(second)["state"] == "done"
 
 
 def test_a_view_rendered_before_it_was_turned_off_still_becomes_reels(world):
     demo_id = world.add_demo()
-    world.ticks(6)                                    # both views are rendered
+    world.ticks(5)                                    # both views are rendered, not yet joined
     world.use(perspectives="enemy")
     world.ticks(2)
     assert world.index.demo(demo_id)["state"] == "done"
@@ -233,8 +316,7 @@ def test_each_render_is_given_the_checksum_the_analysis_gave_its_demo(world):
     world.add_demo(SECOND_DEMO, "1" * 64)
     world.ticks(12)
     assert [(call.demo_path.name, call.checksum) for call in world.render.calls] == [
-        (f"{DEMO_NAME}.dem", MATCH_CHECKSUM), (f"{DEMO_NAME}.dem", MATCH_CHECKSUM),
-        (f"{SECOND_DEMO}.dem", SECOND_CHECKSUM), (f"{SECOND_DEMO}.dem", SECOND_CHECKSUM),
+        (f"{DEMO_NAME}.dem", MATCH_CHECKSUM), (f"{SECOND_DEMO}.dem", SECOND_CHECKSUM),
     ]
 
 
@@ -243,9 +325,9 @@ def test_the_next_demo_waits_while_the_first_retries_a_failed_view(world):
     world.add_demo()
     world.add_demo(SECOND_DEMO, "1" * 64)
     world.ticks(13)
-    assert [(call.demo_path.name, call.perspectives[0]) for call in world.render.calls] == [
-        (f"{DEMO_NAME}.dem", "player"), (f"{DEMO_NAME}.dem", "player"), (f"{DEMO_NAME}.dem", "enemy"),
-        (f"{SECOND_DEMO}.dem", "player"), (f"{SECOND_DEMO}.dem", "enemy"),
+    assert [(call.demo_path.name, call.perspectives) for call in world.render.calls] == [
+        (f"{DEMO_NAME}.dem", ("player", "enemy")), (f"{DEMO_NAME}.dem", ("player",)),
+        (f"{DEMO_NAME}.dem", ("enemy",)), (f"{SECOND_DEMO}.dem", ("player", "enemy")),
     ]
 
 
@@ -271,7 +353,7 @@ def test_a_demo_with_no_analysis_kept_is_analyzed_again_before_it_is_rendered(wo
     world.facts.kept.clear()
     world.ticks(1)
     assert world.facts.analyzed == [f"{DEMO_NAME}.dem"] * 2
-    assert [call.perspectives[0] for call in world.render.calls] == ["player"]
+    assert [call.perspectives for call in world.render.calls] == [("player", "enemy")]
     assert world.index.demo(demo_id)["state"] == "rendering"
 
 
@@ -327,17 +409,20 @@ def test_every_failed_render_attempt_gets_its_own_log_line(world, caplog):
     assert [r.getMessage() for r in caplog.records if r.name == "clipper.worker"] == [
         f"demo #{demo_id} (de_inferno): player render attempt 1 of 3 failed: "
         "stalled: no ffmpeg for 180s while CS2 ran",
+        f"demo #{demo_id} (de_inferno): enemy render attempt 1 of 3 failed: "
+        "stalled: no ffmpeg for 180s while CS2 ran",
         f"demo #{demo_id} (de_inferno): player render attempt 2 of 3 failed: HLAE error: HLAE.exe exited with code 1",
     ]
 
 
 def test_an_aborted_render_is_tried_again_without_counting(world):
+    world.use(perspectives="player")                  # one view: the abort and its retry are that view's launches
     world.render.results = [RenderResult(ok=False, aborted=True,
                                          failure="aborted: FACEIT AC started during the render")]
     demo_id = world.add_demo()
     world.ticks(9)
     assert world.index.demo(demo_id)["state"] == "done"
-    assert [call.perspectives[0] for call in world.render.calls] == ["player", "player", "enemy"]
+    assert [call.perspectives for call in world.render.calls] == [("player",), ("player",)]
     assert world.index.get_flag("consecutive_failures", "0") == "0"
 
 
@@ -545,10 +630,10 @@ def test_state_reports_rendering_during_a_render_then_clears_it_after_the_tick(w
 
     world.services.render = render_and_snapshot
     world.add_demo()
-    world.ticks(5)   # spotted -> unpacked -> analyzed -> scored -> rendering (queues) -> the player render
+    world.ticks(5)   # spotted -> unpacked -> analyzed -> scored -> rendering (queues) -> the render of both views
     rendering = seen["rendering"]
     assert rendering is not None
-    assert (rendering.map_name, rendering.perspective) == ("de_inferno", "player")
+    assert (rendering.map_name, rendering.perspective) == ("de_inferno", "both")
     snap = world.state.snapshot()
     assert snap.rendering is None   # cleared by the end of the tick that started it
     assert snap.waiting == ()
@@ -599,31 +684,31 @@ def test_a_stop_during_the_heads_up_skips_the_render_and_ends_early(world):
 
 
 def test_quit_after_render_finishes_it_then_takes_no_further_step(world):
-    calls = []
-
-    def render_then_request_stop(request, should_abort):
-        calls.append(request)
+    def quit_after_this_render(request):
         world.stop.request("after_render")
         return RenderResult(ok=True, clips=clips_of(request))
 
-    world.services.render = render_then_request_stop
+    world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran"),
+                            quit_after_this_render]   # both views fail; then the player view alone, and quit
     alerts = _CountingAlerts()
     world.services.alerts = alerts
     demo_id = world.add_demo()
-    world.ticks(5)
+    world.ticks(6)
     assert world.index.latest_render(demo_id, "player")["state"] == "done"
-    assert world.index.demo(demo_id)["state"] == "rendering"   # the enemy Perspective was not started
-    assert len(calls) == 1
-    assert alerts.ticks == 4   # ticks 1-4 ran alerts; tick 5's alerts step was skipped once stopping
-    world.ticks(3)   # nothing more should ever happen
-    assert len(calls) == 1
+    assert world.index.latest_render(demo_id, "enemy")["state"] == "queued"   # the enemy view was not started
     assert world.index.demo(demo_id)["state"] == "rendering"
-    assert alerts.ticks == 4
+    assert len(world.render.calls) == 2
+    assert alerts.ticks == 5   # ticks 1-5 ran alerts; tick 6's alerts step was skipped once stopping
+    world.ticks(3)   # nothing more should ever happen
+    assert len(world.render.calls) == 2
+    assert world.index.demo(demo_id)["state"] == "rendering"
+    assert alerts.ticks == 5
 
 
 def test_quit_now_during_a_render_aborts_it_like_a_faceit_ac_abort(world):
     """The renderer asks `should_abort` at every poll (test_hlae_render) and stops the way a FACEIT AC
     abort stops it; here Quit now arrives from the tray or the Status page mid-render."""
+    world.use(perspectives="player")                  # one view: the render Quit now stops is that view's
 
     def render_until_quit(request, should_abort):
         assert not should_abort()
@@ -639,8 +724,21 @@ def test_quit_now_during_a_render_aborts_it_like_a_faceit_ac_abort(world):
     job = world.index.latest_render(demo_id, "player")
     assert (job["state"], job["failure"]) == ("aborted", QUIT_ABORT)
     assert world.index.demo(demo_id)["state"] == "rendering"
-    assert world.index.latest_render(demo_id, "enemy")["state"] == "queued"   # not started
     assert alerts.ticks == 4   # this tick's alerts step was skipped once the abort set stop
+
+
+def test_quit_now_during_a_two_view_launch_aborts_both_views(world):
+    def render_until_quit(request, should_abort):
+        world.stop.request("now")
+        assert should_abort()
+        return RenderResult(ok=False, aborted=True, failure=ABORTED)
+
+    world.services.render = render_until_quit
+    demo_id = world.add_demo()
+    world.ticks(5)
+    jobs = [world.index.latest_render(demo_id, perspective) for perspective in ("player", "enemy")]
+    assert [(job["state"], job["failure"]) for job in jobs] == [("aborted", QUIT_ABORT)] * 2
+    assert world.index.demo(demo_id)["state"] == "rendering"
 
 
 # --- raw Clips: deleted once their Reels are made ------------------------------------------------
@@ -716,7 +814,7 @@ def test_a_failed_render_retried_straight_away_gets_no_new_heads_up(world, caplo
     world.add_demo()
     with caplog.at_level(logging.INFO, logger="clipper.worker"):
         world.ticks(9)
-    assert [call.perspectives[0] for call in world.render.calls] == ["player", "player", "enemy"]
+    assert [call.perspectives for call in world.render.calls] == [("player", "enemy"), ("player",), ("enemy",)]
     assert world.titles() == ["Rendering highlights", "Highlights ready"]
     assert sum("no heads-up" in message for message in caplog.messages) == 2   # the retry and the enemy view
 
@@ -725,17 +823,18 @@ def test_a_failed_render_retried_straight_away_gets_no_new_heads_up(world, caplo
 def test_a_retry_gets_a_heads_up_again_only_once_two_minutes_have_passed(world, seconds_later, heads_up_again):
     world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran")]
     world.add_demo()
-    world.ticks(5)                                    # the player view fails: one heads-up so far
+    world.ticks(5)                                    # both views fail in one launch: one heads-up so far
     world.clock.now += seconds_later
-    world.ticks(1)                                    # its retry
+    world.ticks(1)                                    # the player view, tried again on its own
     assert world.titles() == ["Rendering highlights"] * (2 if heads_up_again else 1)
 
 
 def test_the_retry_after_an_aborted_render_gets_a_heads_up(world):
+    world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran"),
+                            RenderResult(ok=False, aborted=True, failure=ABORTED)]
     demo_id = world.add_demo()
-    world.ticks(5)                                    # the player view renders: CS2 has just closed
-    world.render.results = [RenderResult(ok=False, aborted=True, failure=ABORTED)]
-    world.ticks(2)                                    # the enemy view is aborted, then tried again
+    world.ticks(6)                                    # both views fail, then the player view is aborted
+    world.ticks(3)                                    # the player view, tried again with a heads-up; then the enemy
     assert world.titles() == ["Rendering highlights", "Rendering highlights"]
     assert world.index.latest_render(demo_id, "enemy")["state"] == "done"
 
@@ -748,26 +847,28 @@ def test_a_second_demo_gets_its_own_heads_up(world):
 
 
 def test_a_render_straight_after_another_still_waits_for_the_gate_and_a_pause(world):
+    world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran")]
     world.add_demo()
-    world.ticks(5)                                    # the player view renders: CS2 has just closed
+    world.ticks(5)                                    # both views fail in one launch: CS2 has just closed
     world.gate.reasons = ("FACEIT AC is running",)
-    world.ticks(1)
-    assert [call.perspectives[0] for call in world.render.calls] == ["player"]
+    world.ticks(1)                                    # the player view's retry, straight after
+    assert len(world.render.calls) == 1
     assert world.state.snapshot().waiting == ("FACEIT AC is running",)
     world.gate.reasons = ()
     world.index.pause("you")
     world.ticks(1)
-    assert [call.perspectives[0] for call in world.render.calls] == ["player"]
+    assert len(world.render.calls) == 1
     world.index.resume()
     world.ticks(1)
-    assert [call.perspectives[0] for call in world.render.calls] == ["player", "enemy"]
+    assert [call.perspectives for call in world.render.calls] == [("player", "enemy"), ("player",)]
     assert world.titles() == ["Rendering highlights"] * 2        # the Gate closed: someone was at the PC
 
 
 def test_a_stop_asked_while_the_analysis_is_made_again_keeps_cs2_closed(world):
+    world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran")]
     demo_id = world.add_demo()
-    world.ticks(5)                                    # the player view renders: CS2 has just closed
-    world.facts.kept.clear()                          # the next view needs its Demo analyzed again
+    world.ticks(5)                                    # both views fail in one launch: CS2 has just closed
+    world.facts.kept.clear()                          # the next launch needs its Demo analyzed again
     analyze = world.services.analyze
 
     def analyze_while_stopped(dem, log_path):
@@ -776,16 +877,18 @@ def test_a_stop_asked_while_the_analysis_is_made_again_keeps_cs2_closed(world):
 
     world.services.analyze = analyze_while_stopped
     world.ticks(1)
-    assert [call.perspectives[0] for call in world.render.calls] == ["player"]
+    assert len(world.render.calls) == 1
+    assert world.index.latest_render(demo_id, "player")["state"] == "queued"
     assert world.index.latest_render(demo_id, "enemy")["state"] == "queued"
 
 
 def test_a_gate_that_closes_between_views_brings_the_heads_up_back(world):
+    world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran")]
     world.add_demo()
-    world.ticks(5)                                    # the player view is rendered, after one heads-up
+    world.ticks(6)                                    # both views fail in one launch; then the player view alone
     world.gate.reasons = ("CS2 is running",)          # someone is at the PC
-    world.ticks(1)
+    world.ticks(1)                                    # the enemy view waits
     world.gate.reasons = ()
-    world.ticks(1)                                    # the enemy view
-    assert [call.perspectives[0] for call in world.render.calls] == ["player", "enemy"]
+    world.ticks(1)                                    # the enemy view, with a heads-up again
+    assert [call.perspectives for call in world.render.calls] == [("player", "enemy"), ("player",), ("enemy",)]
     assert world.titles().count("Rendering highlights") == 2

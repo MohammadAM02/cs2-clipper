@@ -432,9 +432,8 @@ class Worker:
         self.state.set_rendering(Rendering(match["map"], job["perspective"], time.time()))
         request = RenderRequest(
             demo_path=Path(demo["dem_path"]),
-            perspective=job["perspective"],
+            outputs={job["perspective"]: output_dir},
             rounds=tuple(h["round"] for h in highlights),
-            output_dir=output_dir,
             log_path=log_path,
             steamid=self.cfg.subject_steamid,
             padding_before_s=self.cfg.padding_before_s,
@@ -460,7 +459,8 @@ class Worker:
         self._last_render = (demo["id"], self.services.clock())   # CS2 has just closed
         if result.ok:
             try:
-                groups = assign_clips(result.clips, [(h["round"], h["round_start_tick"]) for h in highlights])
+                groups = assign_clips(result.clips.get(job["perspective"], ()),
+                                      [(h["round"], h["round_start_tick"]) for h in highlights])
             except JoinError as exc:
                 result = RenderResult(ok=False, failure=str(exc))
             else:

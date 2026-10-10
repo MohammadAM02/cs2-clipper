@@ -15,14 +15,15 @@ import subprocess
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import IO, Literal
 
 from clipper import cs2_paths, hlae_files, hlae_plan, winjob
 from clipper.hlae_files import MuxError
-from clipper.hlae_plan import PlanError, RenderInputs
+from clipper.hlae_plan import PlanError, RenderInputs, Sequence
 from clipper.media import MediaError
+from clipper.model import ClipFile
 from clipper.procs import HOOKED_FLAG, ProcessProbe
 from clipper.render import ABORTED, RenderRequest, RenderResult, find_clips
 from clipper.windows import keep_awake
@@ -228,6 +229,9 @@ def _note(env: _Env, game: _Launch, kind: str, number: int | None, now: float) -
 def _watch(env: _Env, game: _Launch) -> _Outcome:
     """Follows one launch until the game has recorded, the Render Job has failed or been aborted, or the launch has come
     to nothing. Steps in only to close the game: on a stall, an error, a stop, or a game that does not close itself."""
+    def failed(text: str) -> _Outcome:
+        return _Outcome("failed", text, done=frozenset(game.done))      # what was recorded before still counts
+
     while True:
         now = env.clock()
         if env.should_abort():
@@ -250,12 +254,12 @@ def _watch(env: _Env, game: _Launch) -> _Outcome:
         code = game.proc.poll()
         if code not in (None, 0) and game.quit_at is None:
             _stop(env, game, f"HLAE.exe exited with code {code}")
-            return _Outcome("failed", f"HLAE error: HLAE.exe exited with code {code}")
+            return failed(f"HLAE error: HLAE.exe exited with code {code}")
         if not game.playing:
             if env.hlae_error_shown():
                 _stop(env, game, f"the '{HLAE_ERROR_TITLE}' window is open")
-                return _Outcome("failed", f"HLAE error: the '{HLAE_ERROR_TITLE}' window opened "
-                                          f"(often an HLAE older than this CS2 build)")
+                return failed(f"HLAE error: the '{HLAE_ERROR_TITLE}' window opened "
+                              f"(often an HLAE older than this CS2 build)")
             if now - game.started >= env.launch_timeout_seconds:
                 _stop(env, game, f"no 'playing' in console.log after {env.launch_timeout_seconds:g} s")
                 return _Outcome("retry")
@@ -272,10 +276,10 @@ def _watch(env: _Env, game: _Launch) -> _Outcome:
             if env.numbers <= game.done:        # the 'quit' line may not have reached the disk before the game went
                 env.say("CS2 closed before its 'quit' marker, but every Sequence is recorded")
                 return _Outcome("finished", done=frozenset(game.done))
-            return _Outcome("failed", f"CS2 closed before the recording finished (last marker: {game.last_marker})")
+            return failed(f"CS2 closed before the recording finished (last marker: {game.last_marker})")
         elif now - game.last_progress >= env.stall_seconds:
             _stop(env, game, f"no progress for {env.stall_seconds:g} s after '{game.last_marker}'")
-            return _Outcome("failed", f"stalled: no progress for {env.stall_seconds:g}s after '{game.last_marker}'")
+            return failed(f"stalled: no progress for {env.stall_seconds:g}s after '{game.last_marker}'")
         env.sleep(env.poll_seconds)
 
 
@@ -330,9 +334,10 @@ def _record(env: _Env, command: list[str], max_launches: int) -> _Outcome:
 
 def _prepare(req: RenderRequest, raw_dir: Path, hlae_exe: Path, hlae_ffmpeg: Path, cfgs: Path,
              files: dict[str, str], cs2_settings_dir: Path) -> None:
-    """Gets the PC ready for a launch: no recording of an earlier attempt, HLAE told where FFmpeg is, the cfg files in
-    CS2's folder, and a folder for CS2's settings."""
-    req.output_dir.mkdir(parents=True, exist_ok=True)
+    """Gets the PC ready for a launch: a folder for the Clips of each view, no recording of an earlier attempt, HLAE
+    told where FFmpeg is, the cfg files in CS2's folder, and a folder for CS2's settings."""
+    for output in req.outputs.values():
+        output.mkdir(parents=True, exist_ok=True)
     cs2_settings_dir.mkdir(parents=True, exist_ok=True)
     if raw_dir.exists():
         shutil.rmtree(raw_dir)
@@ -374,11 +379,13 @@ def render(
     abort_sweep_seconds: float = 30.0,
     max_launches: int = 3,
 ) -> RenderResult:
-    """Records the Clips of `req` through HLAE, or says why it could not. `cs2_exe`, `hlae_exe` and `hlae_ffmpeg`, the
-    FFmpeg HLAE records with, are where they were found (None: nowhere); `load_inputs` gives what the plan needs from the
-    analysis of a Demo's match, by its checksum, and `ffmpeg` is the FFmpeg that joins the recordings. CS2 keeps its
-    settings in `cs2_settings_dir` while it records, so the player's own are left as they are. What happens goes into
-    `req.log_path` as it happens."""
+    """Records the Clips of `req`'s views through HLAE, or says why it could not. The views are recorded in one launch
+    of CS2, the second after the first (`hlae_plan.script`). `cs2_exe`, `hlae_exe` and `hlae_ffmpeg`, the FFmpeg HLAE
+    records with, are where they were found (None: nowhere); `load_inputs` gives what the plan needs from the analysis
+    of a Demo's match, by its checksum, and `ffmpeg` is the FFmpeg that joins the recordings. CS2 keeps its settings in
+    `cs2_settings_dir` while it records, so the player's own are left as they are. What happens goes into
+    `req.log_path` as it happens. A launch that fails once the first view is recorded keeps that view's Clips in the
+    result."""
     req.log_path.parent.mkdir(parents=True, exist_ok=True)
     with keep_awake(), open(req.log_path, "w", encoding="utf-8", errors="replace", newline="\n") as log_file:
 
@@ -386,7 +393,8 @@ def render(
             log_file.write(text + "\n")
             log_file.flush()                # the Status page shows the log while the Render Job runs
 
-        def fail(text: str, console: _Console | None = None) -> RenderResult:
+        def fail(text: str, console: _Console | None = None,
+                 clips: dict[str, tuple[ClipFile, ...]] | None = None) -> RenderResult:
             say(f"failed: {text}")
             if console is not None:
                 lines = console.tail()
@@ -396,7 +404,37 @@ def render(
                         say(f"    {line}")
                 else:
                     say("nothing written to console.log since the launch")
-            return RenderResult(ok=False, failure=text)
+            return RenderResult(ok=False, failure=text, clips=clips or {})
+
+        def join(views: list[tuple[str, list[Sequence]]]) -> tuple[dict[str, tuple[ClipFile, ...]], str | None]:
+            """Joins what HLAE recorded for each of `views`, in order, into the Clips of its output folder. Returns the
+            Clips of the views joined and what stopped the join, or None when nothing did. The raw folder goes once
+            every mux has worked: a mux that fails keeps it, as the only copy of what was recorded."""
+            joined: list[str] = []
+            problem: str | None = None
+            for perspective, sequences in views:
+                say(f"mux: joining {_plural(len(sequences), 'Sequence')} of the {perspective} view into Clips")
+                try:
+                    hlae_files.mux(ffmpeg, raw_dir, sequences, req.outputs[perspective],
+                                   record_audio=SETTINGS.record_audio, run=run_ffmpeg)
+                except MuxError as exc:
+                    problem = f"mux failed: {exc}"
+                    break
+                joined.append(perspective)
+            if problem is None:
+                shutil.rmtree(raw_dir, ignore_errors=True)
+            clips: dict[str, tuple[ClipFile, ...]] = {}
+            for perspective in joined:
+                try:
+                    found = find_clips(req.outputs[perspective], duration_of)
+                except MediaError as exc:
+                    return clips, f"unreadable clip: {exc}"
+                if not found:
+                    return clips, "no sequence-*.mp4 in the output folder"
+                for clip in found:
+                    say(f"  {clip.path.name}, {clip.duration_s:.1f} s")
+                clips[perspective] = tuple(found)
+            return clips, problem
 
         if cs2_exe is None:
             return fail("CS2 not found: no cs2.exe in any Steam library")
@@ -409,20 +447,34 @@ def render(
         inputs = load_inputs(req.checksum)
         if inputs is None:
             return fail("the app has no analysis of this Demo")
-        raw_dir = req.output_dir / "raw"
+        raw_dir = req.outputs[req.perspectives[0]] / "raw"        # the first view's folder keeps the raw recordings
+        planned: list[tuple[str, list[Sequence]]] = []          # each view's Sequences, in the order they are recorded
         try:
-            sequences = hlae_plan.build_sequences(
-                inputs, req.steamid, event=req.event, perspective=req.perspective, rounds=req.rounds,
-                padding_before_s=req.padding_before_s, padding_after_s=req.padding_after_s)
-            if not sequences:
-                return fail("nothing to record")
-            files = hlae_plan.script(sequences, inputs, demo_path=req.demo_path, raw_dir=raw_dir, settings=SETTINGS)
+            for perspective in req.perspectives:
+                sequences = hlae_plan.build_sequences(
+                    inputs, req.steamid, event=req.event, perspective=perspective, rounds=req.rounds,
+                    padding_before_s=req.padding_before_s, padding_after_s=req.padding_after_s)
+                if not sequences:
+                    return fail("nothing to record")
+                if planned:         # the second view's Sequences are numbered on from the first view's
+                    offset = len(planned[0][1])
+                    sequences = [replace(sequence, number=sequence.number + offset) for sequence in sequences]
+                planned.append((perspective, sequences))
+            files = hlae_plan.script(
+                planned[0][1], inputs, demo_path=req.demo_path, raw_dir=raw_dir, settings=SETTINGS,
+                second_pass=[sequence for _, sequences in planned[1:] for sequence in sequences])
         except (PlanError, ValueError) as exc:
             return fail(f"plan failed: {exc}")
-        say(f"plan: {_plural(len(sequences), 'Sequence')}")
-        for sequence in sequences:
-            say(f"  Sequence {sequence.number}: ticks {sequence.start_tick} to {sequence.end_tick}, "
-                f"{_plural(len(sequence.cameras), 'camera')}")
+        all_sequences = [sequence for _, sequences in planned for sequence in sequences]
+        for index, (perspective, sequences) in enumerate(planned):
+            if index == 0:
+                say(f"plan: {_plural(len(sequences), 'Sequence')} of the {perspective} view")
+            else:
+                say(f"then {_plural(len(sequences), 'Sequence')} of the {perspective} view, "
+                    f"after the demo starts again")
+            for sequence in sequences:
+                say(f"  Sequence {sequence.number}: ticks {sequence.start_tick} to {sequence.end_tick}, "
+                    f"{_plural(len(sequence.cameras), 'camera')}")
 
         cfgs = cs2_paths.cfg_dir(cs2_exe)
         try:
@@ -435,7 +487,7 @@ def render(
             probe=probe, should_abort=should_abort, hlae_error_shown=hlae_error_shown, launch=launch,
             environment={**os.environ, USRLOCAL_VARIABLE: str(cs2_settings_dir)}, guard=guard,
             clock=clock, sleep=sleep, say=say, log=log_file, console=console, raw_dir=raw_dir,
-            numbers=frozenset(sequence.number for sequence in sequences), stall_seconds=stall_seconds,
+            numbers=frozenset(sequence.number for sequence in all_sequences), stall_seconds=stall_seconds,
             launch_timeout_seconds=launch_timeout_seconds, poll_seconds=poll_seconds,
             exit_grace_seconds=exit_grace_seconds,
         )
@@ -447,27 +499,27 @@ def render(
             _sweep(env, abort_sweep_seconds)
             say("stopped: the Render Job was asked to stop")
             return RenderResult(ok=False, aborted=True, failure=ABORTED)
+        missing = [sequence.number for sequence in all_sequences if sequence.number not in outcome.done]
+        failure: str | None = None
         if outcome.kind == "failed":
-            return fail(outcome.text, console)
-
-        for sequence in sequences:
-            if sequence.number not in outcome.done:
-                return fail(f"Sequence {sequence.number} never finished recording", console)
+            failure = outcome.text
+        elif missing:
+            failure = f"Sequence {missing[0]} never finished recording"
+        # a launch that failed after the first view was recorded whole keeps that view's Clips
+        whole_first = len(planned) == 2 and all(sequence.number in outcome.done for sequence in planned[0][1])
+        if failure is not None and not whole_first:
+            return fail(failure, console)
         _wait_for_ffmpeg(env, FFMPEG_WAIT_S)
-        say(f"mux: joining {_plural(len(sequences), 'Sequence')} into Clips")
-        try:
-            hlae_files.mux(ffmpeg, raw_dir, sequences, req.output_dir, record_audio=SETTINGS.record_audio,
-                           run=run_ffmpeg)
-        except MuxError as exc:
-            return fail(f"mux failed: {exc}", console)
-        shutil.rmtree(raw_dir, ignore_errors=True)
-        try:
-            clips = find_clips(req.output_dir, duration_of)
-        except MediaError as exc:
-            return fail(f"unreadable clip: {exc}", console)
-        if not clips:
-            return fail("no sequence-*.mp4 in the output folder", console)
-        for clip in clips:
-            say(f"  {clip.path.name}, {clip.duration_s:.1f} s")
-        say(f"done: {_plural(len(clips), 'Clip')}")
-        return RenderResult(ok=True, clips=tuple(clips))
+        clips, problem = join(planned if failure is None else planned[:1])
+        if failure is not None:
+            first, second = planned[0][0], planned[1][0]
+            if problem is None:
+                say(f"kept: {_plural(len(clips[first]), 'Clip')} of the {first} view; "
+                    f"the {second} view was not recorded")
+            else:
+                say(f"the {first} view was not kept: {problem}")
+            return fail(failure, console, clips)
+        if problem is not None:
+            return fail(problem, console, clips)
+        say(f"done: {_plural(sum(len(found) for found in clips.values()), 'Clip')}")
+        return RenderResult(ok=True, clips=clips)

@@ -145,7 +145,7 @@ def _touch(path):
 
 def _render_request(tmp_path) -> RenderRequest:
     return RenderRequest(
-        demo_path=tmp_path / "match.dem", perspective="player", rounds=(3, 12), output_dir=tmp_path / "out",
+        demo_path=tmp_path / "match.dem", outputs={"player": tmp_path / "out"}, rounds=(3, 12),
         log_path=tmp_path / "render.log", steamid="76561198192858303", padding_before_s=4.0, padding_after_s=2.0,
         checksum="aea4e59ccfc6c962",
     )

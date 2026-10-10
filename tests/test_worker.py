@@ -67,6 +67,17 @@ class FakeGate:
         return False
 
 
+def clips_of(request):
+    """What a render of `request` gives back: one Clip per round asked for, in the folder of each of its views."""
+    return {
+        perspective: tuple(
+            ClipFile(sequence=n, start_tick=ROUND_START[r] + 1000, end_tick=ROUND_START[r] + 1256,
+                     path=folder / f"sequence-{n}.mp4", duration_s=4.0)
+            for n, r in enumerate(request.rounds, start=1))
+        for perspective, folder in request.outputs.items()
+    }
+
+
 class FakeRender:
     """Succeeds with one Clip per requested round, unless canned results are queued."""
 
@@ -78,12 +89,7 @@ class FakeRender:
         self.calls.append(request)
         if self.results:
             return self.results.pop(0)
-        clips = tuple(
-            ClipFile(sequence=n, start_tick=ROUND_START[r] + 1000, end_tick=ROUND_START[r] + 1256,
-                     path=request.output_dir / f"sequence-{n}.mp4", duration_s=4.0)
-            for n, r in enumerate(request.rounds, start=1)
-        )
-        return RenderResult(ok=True, clips=clips)
+        return RenderResult(ok=True, clips=clips_of(request))
 
 
 class FakeClock:
@@ -157,7 +163,7 @@ def test_a_demo_goes_from_spotted_to_done(world):
     demo_id = world.add_demo()
     world.ticks(8)
     assert world.index.demo(demo_id)["state"] == "done"
-    assert [call.perspective for call in world.render.calls] == ["player", "enemy"]
+    assert [call.perspectives[0] for call in world.render.calls] == ["player", "enemy"]
     assert world.render.calls[0].rounds == (3, 4, 8, 12, 14)
     first = world.render.calls[0]
     assert (first.event, first.width, first.height) == ("kills", 1920, 1080)
@@ -169,7 +175,7 @@ def test_one_demo_renders_both_views_before_the_next_demo_starts(world):
     first = world.add_demo()
     second = world.add_demo(SECOND_DEMO, "1" * 64)
     world.ticks(12)
-    assert [(call.demo_path.name, call.perspective) for call in world.render.calls] == [
+    assert [(call.demo_path.name, call.perspectives[0]) for call in world.render.calls] == [
         (f"{DEMO_NAME}.dem", "player"), (f"{DEMO_NAME}.dem", "enemy"),
         (f"{SECOND_DEMO}.dem", "player"), (f"{SECOND_DEMO}.dem", "enemy"),
     ]
@@ -182,7 +188,7 @@ def test_a_demo_renders_and_joins_only_the_chosen_view(world, perspective):
     demo_id = world.add_demo()
     world.ticks(8)
     assert world.index.demo(demo_id)["state"] == "done"
-    assert [call.perspective for call in world.render.calls] == [perspective]
+    assert [call.perspectives[0] for call in world.render.calls] == [perspective]
     reels = world.index.match_reels(MATCH_CHECKSUM)
     assert [(r["player_reel_id"] is not None, r["enemy_reel_id"] is not None) for r in reels] == [
         (perspective == "player", perspective == "enemy")] * 5
@@ -193,7 +199,7 @@ def test_round_clips_are_rendered_from_the_players_view_only(world):
     world.use(sequence_event="rounds")
     world.add_demo()
     world.ticks(8)
-    assert [(call.perspective, call.event) for call in world.render.calls] == [("player", "rounds")]
+    assert [(call.perspectives[0], call.event) for call in world.render.calls] == [("player", "rounds")]
 
 
 def test_turning_a_view_off_takes_it_off_every_waiting_demos_queue(world, caplog):
@@ -208,7 +214,7 @@ def test_turning_a_view_off_takes_it_off_every_waiting_demos_queue(world, caplog
     assert world.index.latest_render(second, "enemy") is None
     assert "the enemy view is off in Settings: 2 queued renders taken off the queue" in caplog.messages
     world.ticks(6)
-    assert [(call.demo_path.name, call.perspective) for call in world.render.calls] == [
+    assert [(call.demo_path.name, call.perspectives[0]) for call in world.render.calls] == [
         (f"{DEMO_NAME}.dem", "player"), (f"{SECOND_DEMO}.dem", "player")]
     assert world.index.demo(first)["state"] == world.index.demo(second)["state"] == "done"
 
@@ -237,7 +243,7 @@ def test_the_next_demo_waits_while_the_first_retries_a_failed_view(world):
     world.add_demo()
     world.add_demo(SECOND_DEMO, "1" * 64)
     world.ticks(13)
-    assert [(call.demo_path.name, call.perspective) for call in world.render.calls] == [
+    assert [(call.demo_path.name, call.perspectives[0]) for call in world.render.calls] == [
         (f"{DEMO_NAME}.dem", "player"), (f"{DEMO_NAME}.dem", "player"), (f"{DEMO_NAME}.dem", "enemy"),
         (f"{SECOND_DEMO}.dem", "player"), (f"{SECOND_DEMO}.dem", "enemy"),
     ]
@@ -265,7 +271,7 @@ def test_a_demo_with_no_analysis_kept_is_analyzed_again_before_it_is_rendered(wo
     world.facts.kept.clear()
     world.ticks(1)
     assert world.facts.analyzed == [f"{DEMO_NAME}.dem"] * 2
-    assert [call.perspective for call in world.render.calls] == ["player"]
+    assert [call.perspectives[0] for call in world.render.calls] == ["player"]
     assert world.index.demo(demo_id)["state"] == "rendering"
 
 
@@ -331,7 +337,7 @@ def test_an_aborted_render_is_tried_again_without_counting(world):
     demo_id = world.add_demo()
     world.ticks(9)
     assert world.index.demo(demo_id)["state"] == "done"
-    assert [call.perspective for call in world.render.calls] == ["player", "player", "enemy"]
+    assert [call.perspectives[0] for call in world.render.calls] == ["player", "player", "enemy"]
     assert world.index.get_flag("consecutive_failures", "0") == "0"
 
 
@@ -535,12 +541,7 @@ def test_state_reports_rendering_during_a_render_then_clears_it_after_the_tick(w
 
     def render_and_snapshot(request, should_abort):
         seen["rendering"] = world.state.snapshot().rendering
-        clips = tuple(
-            ClipFile(sequence=n, start_tick=ROUND_START[r] + 1000, end_tick=ROUND_START[r] + 1256,
-                     path=request.output_dir / f"sequence-{n}.mp4", duration_s=4.0)
-            for n, r in enumerate(request.rounds, start=1)
-        )
-        return RenderResult(ok=True, clips=clips)
+        return RenderResult(ok=True, clips=clips_of(request))
 
     world.services.render = render_and_snapshot
     world.add_demo()
@@ -580,7 +581,7 @@ def test_a_stop_during_the_heads_up_skips_the_render_and_ends_early(world):
 
     def render_spy(request, should_abort):
         calls.append(request)
-        return RenderResult(ok=True, clips=())
+        return RenderResult(ok=True, clips={})
 
     world.services.render = render_spy
     sleep_calls = []
@@ -603,12 +604,7 @@ def test_quit_after_render_finishes_it_then_takes_no_further_step(world):
     def render_then_request_stop(request, should_abort):
         calls.append(request)
         world.stop.request("after_render")
-        clips = tuple(
-            ClipFile(sequence=n, start_tick=ROUND_START[r] + 1000, end_tick=ROUND_START[r] + 1256,
-                     path=request.output_dir / f"sequence-{n}.mp4", duration_s=4.0)
-            for n, r in enumerate(request.rounds, start=1)
-        )
-        return RenderResult(ok=True, clips=clips)
+        return RenderResult(ok=True, clips=clips_of(request))
 
     world.services.render = render_then_request_stop
     alerts = _CountingAlerts()
@@ -677,7 +673,7 @@ def test_a_view_added_to_a_finished_match_joins_alone(world):
     world.services.join = record_join
     world.index.advance(demo_id, "rendering")       # back to rendering: the enemy view is rendered now
     world.ticks(3)
-    assert [call.perspective for call in world.render.calls] == ["player", "enemy"]
+    assert [call.perspectives[0] for call in world.render.calls] == ["player", "enemy"]
     assert joined == [f"r{round_}-enemy.mp4" for round_ in (3, 4, 8, 12, 14)]
     assert world.index.demo(demo_id)["state"] == "done"
     assert world.index.reel_count(MATCH_CHECKSUM) == 10
@@ -720,7 +716,7 @@ def test_a_failed_render_retried_straight_away_gets_no_new_heads_up(world, caplo
     world.add_demo()
     with caplog.at_level(logging.INFO, logger="clipper.worker"):
         world.ticks(9)
-    assert [call.perspective for call in world.render.calls] == ["player", "player", "enemy"]
+    assert [call.perspectives[0] for call in world.render.calls] == ["player", "player", "enemy"]
     assert world.titles() == ["Rendering highlights", "Highlights ready"]
     assert sum("no heads-up" in message for message in caplog.messages) == 2   # the retry and the enemy view
 
@@ -756,15 +752,15 @@ def test_a_render_straight_after_another_still_waits_for_the_gate_and_a_pause(wo
     world.ticks(5)                                    # the player view renders: CS2 has just closed
     world.gate.reasons = ("FACEIT AC is running",)
     world.ticks(1)
-    assert [call.perspective for call in world.render.calls] == ["player"]
+    assert [call.perspectives[0] for call in world.render.calls] == ["player"]
     assert world.state.snapshot().waiting == ("FACEIT AC is running",)
     world.gate.reasons = ()
     world.index.pause("you")
     world.ticks(1)
-    assert [call.perspective for call in world.render.calls] == ["player"]
+    assert [call.perspectives[0] for call in world.render.calls] == ["player"]
     world.index.resume()
     world.ticks(1)
-    assert [call.perspective for call in world.render.calls] == ["player", "enemy"]
+    assert [call.perspectives[0] for call in world.render.calls] == ["player", "enemy"]
     assert world.titles() == ["Rendering highlights"] * 2        # the Gate closed: someone was at the PC
 
 
@@ -780,7 +776,7 @@ def test_a_stop_asked_while_the_analysis_is_made_again_keeps_cs2_closed(world):
 
     world.services.analyze = analyze_while_stopped
     world.ticks(1)
-    assert [call.perspective for call in world.render.calls] == ["player"]
+    assert [call.perspectives[0] for call in world.render.calls] == ["player"]
     assert world.index.latest_render(demo_id, "enemy")["state"] == "queued"
 
 
@@ -791,5 +787,5 @@ def test_a_gate_that_closes_between_views_brings_the_heads_up_back(world):
     world.ticks(1)
     world.gate.reasons = ()
     world.ticks(1)                                    # the enemy view
-    assert [call.perspective for call in world.render.calls] == ["player", "enemy"]
+    assert [call.perspectives[0] for call in world.render.calls] == ["player", "enemy"]
     assert world.titles().count("Rendering highlights") == 2

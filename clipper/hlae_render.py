@@ -9,6 +9,7 @@ It starts only what it is handed -- HLAE.exe (`launch`) and FFmpeg (`run_ffmpeg`
 `sleep` are parameters too, so tests run a whole Render Job against a scripted world."""
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import time
@@ -31,11 +32,15 @@ LEFTOVER_PAUSE_S = 2.0          # after closing a hooked CS2 an earlier run left
 HLAE_ERROR_TITLE = "Error - AfxHookSource"      # the title of the window HLAE opens when it cannot hook this CS2
 FFMPEG_WAIT_S = 60.0            # the longest the mux waits for HLAE's FFmpeg to finish the videos after the game
 SETTINGS = hlae_plan.VideoSettings()            # what the cfg files record with, which the mux has to expect too
+# CS2 keeps its video settings, convars and keys in this folder when the variable names one, instead of the player's
+# Steam userdata (CS:DM's `define-cfg-folder-location.ts`); HLAE's -afxDisableSteamStorage is meant to go with it.
+USRLOCAL_VARIABLE = "USRLOCALCSGO"
 
 
-def _launch(command: list[str], log: IO[str]) -> subprocess.Popen:
-    """Starts HLAE.exe without a window; whatever it prints goes into the log."""
-    return subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+def _launch(command: list[str], log: IO[str], environment: dict[str, str]) -> subprocess.Popen:
+    """Starts HLAE.exe without a window, with `environment`, which the CS2 it starts gets too; whatever it prints goes
+    into the log."""
+    return subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, env=environment,
                             creationflags=subprocess.CREATE_NO_WINDOW)
 
 
@@ -135,7 +140,8 @@ class _Env:
     probe: ProcessProbe
     should_abort: Callable[[], bool]
     hlae_error_shown: Callable[[], bool]
-    launch: Callable[[list[str], IO[str]], subprocess.Popen]
+    launch: Callable[[list[str], IO[str], dict[str, str]], subprocess.Popen]
+    environment: dict[str, str]         # HLAE.exe's and CS2's: the app's, with CS2's settings in their own folder
     guard: Callable[[subprocess.Popen], None]
     clock: Callable[[], float]
     sleep: Callable[[float], None]
@@ -297,7 +303,7 @@ def _launch_once(env: _Env, command: list[str], number: int, total: int) -> _Out
     env.console.begin()
     env.say(f"launch {number} of {total}: {subprocess.list2cmdline(command)}")
     try:
-        proc = env.launch(command, env.log)
+        proc = env.launch(command, env.log, env.environment)
     except OSError as exc:
         return _Outcome("failed", f"HLAE could not be started: {exc}")
     started = env.clock()
@@ -323,10 +329,11 @@ def _record(env: _Env, command: list[str], max_launches: int) -> _Outcome:
 
 
 def _prepare(req: RenderRequest, raw_dir: Path, hlae_exe: Path, hlae_ffmpeg: Path, cfgs: Path,
-             files: dict[str, str]) -> None:
+             files: dict[str, str], cs2_settings_dir: Path) -> None:
     """Gets the PC ready for a launch: no recording of an earlier attempt, HLAE told where FFmpeg is, the cfg files in
-    CS2's folder."""
+    CS2's folder, and a folder for CS2's settings."""
     req.output_dir.mkdir(parents=True, exist_ok=True)
+    cs2_settings_dir.mkdir(parents=True, exist_ok=True)
     if raw_dir.exists():
         shutil.rmtree(raw_dir)
     hlae_files.ensure_ffmpeg_ini(hlae_exe, hlae_ffmpeg)
@@ -355,7 +362,8 @@ def render(
     hlae_exe: Path | None,
     hlae_ffmpeg: Path | None,
     ffmpeg: str,
-    launch: Callable[[list[str], IO[str]], subprocess.Popen] = _launch,
+    cs2_settings_dir: Path,
+    launch: Callable[[list[str], IO[str], dict[str, str]], subprocess.Popen] = _launch,
     guard: Callable[[subprocess.Popen], None] = winjob.guard,
     hlae_error_shown: Callable[[], bool] = _hlae_error_shown,
     run_ffmpeg: Callable[..., subprocess.CompletedProcess] = subprocess.run,
@@ -368,8 +376,9 @@ def render(
 ) -> RenderResult:
     """Records the Clips of `req` through HLAE, or says why it could not. `cs2_exe`, `hlae_exe` and `hlae_ffmpeg`, the
     FFmpeg HLAE records with, are where they were found (None: nowhere); `load_inputs` gives what the plan needs from the
-    analysis of a Demo's match, by its checksum, and `ffmpeg` is the FFmpeg that joins the recordings. What happens
-    goes into `req.log_path` as it happens."""
+    analysis of a Demo's match, by its checksum, and `ffmpeg` is the FFmpeg that joins the recordings. CS2 keeps its
+    settings in `cs2_settings_dir` while it records, so the player's own are left as they are. What happens goes into
+    `req.log_path` as it happens."""
     req.log_path.parent.mkdir(parents=True, exist_ok=True)
     with keep_awake(), open(req.log_path, "w", encoding="utf-8", errors="replace", newline="\n") as log_file:
 
@@ -417,13 +426,14 @@ def render(
 
         cfgs = cs2_paths.cfg_dir(cs2_exe)
         try:
-            _prepare(req, raw_dir, hlae_exe, hlae_ffmpeg, cfgs, files)
+            _prepare(req, raw_dir, hlae_exe, hlae_ffmpeg, cfgs, files, cs2_settings_dir)
         except OSError as exc:
             _remove_cfgs(say, cfgs)         # a few of the files may be in place
             return fail(f"could not set up the HLAE files: {exc}")
         console = _Console(cs2_paths.console_log(cs2_exe))
         env = _Env(
-            probe=probe, should_abort=should_abort, hlae_error_shown=hlae_error_shown, launch=launch, guard=guard,
+            probe=probe, should_abort=should_abort, hlae_error_shown=hlae_error_shown, launch=launch,
+            environment={**os.environ, USRLOCAL_VARIABLE: str(cs2_settings_dir)}, guard=guard,
             clock=clock, sleep=sleep, say=say, log=log_file, console=console, raw_dir=raw_dir,
             numbers=frozenset(sequence.number for sequence in sequences), stall_seconds=stall_seconds,
             launch_timeout_seconds=launch_timeout_seconds, poll_seconds=poll_seconds,

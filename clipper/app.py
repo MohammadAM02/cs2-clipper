@@ -159,7 +159,7 @@ def build_worker(cfg: Config, index: Index, *, state: AppState, stop: StopReques
             request, probe=probe, should_abort=should_abort, stall_seconds=cfg.stall_seconds,
             launch_timeout_seconds=cfg.launch_timeout_seconds, duration_of=duration_of,
             load_inputs=analyses.render_inputs, cs2_exe=cs2_paths.find_cs2_exe(), hlae_exe=checks.hlae_exe(cfg),
-            hlae_ffmpeg=_program(cfg.ffmpeg), ffmpeg=cfg.ffmpeg)
+            hlae_ffmpeg=_program(cfg.ffmpeg), ffmpeg=cfg.ffmpeg, cs2_settings_dir=cfg.cs2_settings_dir)
 
     services = Services(
         intake=Intake(cfg.downloads_dir, cfg.demos_dir),

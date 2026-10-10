@@ -38,6 +38,7 @@ class Config:
     logs_dir: Path = field(default_factory=paths.logs_dir)
     tools_dir: Path = field(default_factory=paths.tools_dir)
     analyses_dir: Path = field(default_factory=paths.analyses_dir)
+    cs2_settings_dir: Path = field(default_factory=paths.cs2_settings_dir)
     ffmpeg: str = "ffmpeg"
     ffprobe: str = "ffprobe"
     hlae_exe: str = ""              # blank: the HLAE Setup installs

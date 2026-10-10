@@ -62,6 +62,7 @@ class World:
         self.csgo = tmp_path / "steam" / "game" / "csgo"
         self.console = self.csgo / "console.log"
         self.cfg_dir = self.csgo / "cfg"
+        self.cs2_settings = tmp_path / "app-data" / "cs2-settings"
         self.raw_dir = req.output_dir / "raw"
         self.now = 1000.0
         self.steam = True
@@ -81,6 +82,7 @@ class World:
         self.kills = 0                          # hooked CS2s that were running when told to stop
         self.hlae_ended = 0
         self.launches: list[list[str]] = []
+        self.environments: list[dict[str, str]] = []
         self.launched_at: list[float] = []
         self.at_launch: list[dict] = []
         self.guarded: list[HlaeProc] = []
@@ -139,11 +141,12 @@ class World:
         self.asked_for.append(checksum)
         return self.inputs
 
-    def launch(self, command: list[str], log) -> HlaeProc:
+    def launch(self, command: list[str], log, environment: dict[str, str]) -> HlaeProc:
         if self.launch_error is not None:
             raise self.launch_error
         self.trace.append("launch")
         self.launches.append(list(command))
+        self.environments.append(dict(environment))
         self.launched_at.append(self.now)
         self.at_launch.append(self._look())
         self.hlae_code = None
@@ -234,6 +237,7 @@ class World:
             "ini": self.ini(),
             "raw_dir": self.raw_dir.exists(),
             "cs2": self.cs2,
+            "cs2_settings": self.cs2_settings.is_dir(),
         }
 
 
@@ -290,6 +294,7 @@ def run(world, req, **overrides):
         "probe": world, "should_abort": world.should_abort, "stall_seconds": 30.0, "launch_timeout_seconds": 60.0,
         "duration_of": lambda path: 4.0, "load_inputs": world.load_inputs, "cs2_exe": world.cs2_exe,
         "hlae_exe": world.hlae_exe, "hlae_ffmpeg": world.hlae_ffmpeg, "ffmpeg": "the-ffmpeg-to-mux-with",
+        "cs2_settings_dir": world.cs2_settings,
         "launch": world.launch, "guard": world.guard, "hlae_error_shown": world.hlae_error_shown,
         "run_ffmpeg": world.run_ffmpeg, "clock": world.clock, "sleep": world.sleep, "poll_seconds": 1.0,
         "exit_grace_seconds": 10.0, "abort_sweep_seconds": 5.0,
@@ -397,6 +402,17 @@ def test_hlae_is_started_with_this_command_line(world, req):
         "-cmdLine", "-insecure -novid -condebug -width 1280 -height 960 -sw +exec cs2clipper",
     ]]
     assert len(world.guarded) == 1
+
+
+def test_cs2_keeps_its_settings_in_the_apps_folder_not_in_the_players(world, req, monkeypatch):
+    """CS2 saves its video settings, convars and keys in USRLOCALCSGO when that is set (CS:DM's
+    `define-cfg-folder-location.ts`), and in Steam's userdata, the player's own, when it is not."""
+    monkeypatch.setenv("CLIPPER_TEST_INHERITED", "kept")
+    world.scripts = [[(4, "cs2_up"), (10, "cs2_down")], game()]        # two launches
+    assert run(world, req).ok
+    assert [environment["USRLOCALCSGO"] for environment in world.environments] == [str(world.cs2_settings)] * 2
+    assert all(environment["CLIPPER_TEST_INHERITED"] == "kept" for environment in world.environments)
+    assert world.at_launch[0]["cs2_settings"] is True
 
 
 def test_the_run_is_kept_awake_from_before_the_launch_until_after_the_mux(world, req):
@@ -901,7 +917,8 @@ def test_hlae_is_started_without_a_window_and_its_output_goes_to_the_log(monkeyp
 
     monkeypatch.setattr(hlae_render, "subprocess", SimpleNamespace(
         Popen=popen, CREATE_NO_WINDOW=0x08000000, STDOUT=subprocess.STDOUT, DEVNULL=subprocess.DEVNULL))
-    assert hlae_render._launch(["HLAE.exe", "-noGui"], "the log") == "the process"
+    assert hlae_render._launch(["HLAE.exe", "-noGui"], "the log", {"USRLOCALCSGO": "the folder"}) == "the process"
     assert started["command"] == ["HLAE.exe", "-noGui"]
+    assert started["env"] == {"USRLOCALCSGO": "the folder"}
     assert started["stdout"] == "the log" and started["stderr"] == subprocess.STDOUT
     assert started["creationflags"] == 0x08000000

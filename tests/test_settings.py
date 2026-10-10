@@ -61,7 +61,7 @@ def test_defaults_match_configs_own_defaults():
 
 
 def test_defaults_excludes_the_app_data_fields():
-    assert {"index_path", "logs_dir", "tools_dir", "analyses_dir"}.isdisjoint(defaults())
+    assert {"index_path", "logs_dir", "tools_dir", "analyses_dir", "cs2_settings_dir"}.isdisjoint(defaults())
 
 
 # --- json_values(): the Settings page's GET, without the protected key (Task 13) ---------------------

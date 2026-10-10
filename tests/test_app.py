@@ -126,7 +126,8 @@ def built(tmp_path, renderer):
     def build(**settings):
         cfg = Config(downloads_dir=tmp_path / "downloads", data_root=tmp_path / "clips",
                      index_path=tmp_path / "clipper.sqlite", tools_dir=tmp_path / "tools",
-                     analyses_dir=tmp_path / "analyses", match_alerts=False, **settings)
+                     analyses_dir=tmp_path / "analyses", cs2_settings_dir=tmp_path / "cs2-settings",
+                     match_alerts=False, **settings)
         indexes.append(Index(cfg.index_path))
         return build_worker(cfg, indexes[-1], state=AppState(), stop=StopRequest(), deletes=DeleteRequest(),
                             page_url=None, pages_off=None)
@@ -168,13 +169,14 @@ def test_a_render_job_goes_to_hlae_with_what_it_drives_cs2_with(built, renderer,
     [(given, kwargs)] = renderer.calls
     assert given is request
     assert set(kwargs) == {"probe", "should_abort", "stall_seconds", "launch_timeout_seconds", "duration_of",
-                           "load_inputs", "cs2_exe", "hlae_exe", "hlae_ffmpeg", "ffmpeg"}
+                           "load_inputs", "cs2_exe", "hlae_exe", "hlae_ffmpeg", "ffmpeg", "cs2_settings_dir"}
     assert kwargs["should_abort"] is abort
     assert (kwargs["stall_seconds"], kwargs["launch_timeout_seconds"]) == (90.0, 240.0)
     assert kwargs["cs2_exe"] == cs2_exe
     assert kwargs["hlae_exe"] == hlae               # the setting's
     assert kwargs["hlae_ffmpeg"] == ffmpeg          # the FFmpeg HLAE records with is ours, found
     assert kwargs["ffmpeg"] == str(ffmpeg)          # and the mux's is the setting as it is
+    assert kwargs["cs2_settings_dir"] == tmp_path / "cs2-settings"     # CS2's settings while it records
 
 
 def test_hlae_and_ffmpeg_that_are_nowhere_reach_the_renderer_as_none(built, renderer, tmp_path):

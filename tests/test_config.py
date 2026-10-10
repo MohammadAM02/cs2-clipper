@@ -108,3 +108,4 @@ def test_the_app_data_folders_default_from_the_app_data_folder():
     assert cfg.logs_dir == paths.logs_dir()
     assert cfg.tools_dir == paths.tools_dir()
     assert cfg.analyses_dir == paths.analyses_dir()
+    assert cfg.cs2_settings_dir == paths.cs2_settings_dir()

@@ -41,7 +41,8 @@ def test_the_file_layout(tmp_path, monkeypatch):
     assert logs == paths.data_dir() / "logs"
     assert logs.is_dir()
 
-    for folder, name in ((paths.tools_dir(), "tools"), (paths.analyses_dir(), "analyses")):
+    for folder, name in ((paths.tools_dir(), "tools"), (paths.analyses_dir(), "analyses"),
+                         (paths.cs2_settings_dir(), "cs2-settings")):
         assert folder == paths.data_dir() / name
         assert not folder.exists()          # made when something goes in
 

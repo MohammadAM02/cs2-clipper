@@ -121,6 +121,7 @@ class World:
 
     def add_demo(self, name: str = DEMO_NAME, sha256: str = "0" * 64) -> int:
         file_name = f"{name}.dem.zst"
+        _write(self.cfg.demos_dir / file_name)        # the kept download, as the Download step leaves it
         return self.index.add_demo(file_name, sha256, self.cfg.demos_dir / file_name)
 
     def ticks(self, count: int) -> None:
@@ -146,7 +147,7 @@ def world(tmp_path):
     state, stop, deletes, clock = AppState(), StopRequest(), DeleteRequest(), FakeClock()
     services = Services(
         intake=FakeIntake(),
-        unpack=lambda archive, out_dir: out_dir / archive.name.removesuffix(".zst"),
+        unpack=lambda archive, out_dir: _write(out_dir / archive.name.removesuffix(".zst")),
         analyze=facts.analyze,
         facts=facts,
         gate=gate,
@@ -786,6 +787,7 @@ def test_a_view_added_to_a_finished_match_joins_alone(world):
         return 4.0 * len(clips)
 
     world.services.join = record_join
+    _write(world.cfg.demos_dir / f"{DEMO_NAME}.dem")  # back to rendering with its .dem in place (`_finish` took it)
     world.index.advance(demo_id, "rendering")       # back to rendering: the enemy view is rendered now
     world.ticks(3)
     assert [call.perspectives[0] for call in world.render.calls] == ["player", "enemy"]
@@ -909,3 +911,116 @@ def test_a_gate_that_closes_between_views_brings_the_heads_up_back(world):
     world.ticks(1)                                    # the enemy view, with a heads-up again
     assert [call.perspectives for call in world.render.calls] == [("player", "enemy"), ("player",), ("enemy",)]
     assert world.titles().count("Rendering highlights") == 2
+
+
+# --- asking for the other view of a done Demo (render the other view later) -----------------------
+
+
+def _done_with_the_player_view(world) -> int:
+    """A match rendered with the player's view alone and done: its .dem is gone, its download kept."""
+    world.use(perspectives="player")
+    demo_id = world.add_demo()
+    world.ticks(7)
+    assert world.index.demo(demo_id)["state"] == "done"
+    world.clock.now += 3600                           # CS2 closed long ago: the asked view gets its heads-up
+    return demo_id
+
+
+def test_an_asked_view_renders_from_the_kept_download_and_joins_alone(world):
+    demo_id = _done_with_the_player_view(world)
+    joined = []
+
+    def record_join(clips, out):
+        joined.append(out.name)
+        return 4.0 * len(clips)
+
+    world.services.join = record_join
+    unpacked, unpack = [], world.services.unpack
+
+    def record_unpack(archive, out_dir):
+        unpacked.append(archive.name)
+        return unpack(archive, out_dir)
+
+    world.services.unpack = record_unpack
+    world.index.ask_render(demo_id, "enemy")
+    world.ticks(4)                                    # unpacked again, the enemy view rendered, joined, finished
+
+    assert unpacked == [f"{DEMO_NAME}.dem.zst"]
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert [call.perspectives for call in world.render.calls] == [("player",), ("enemy",)]
+    assert set(world.render.calls[-1].outputs) == {"enemy"}
+    assert joined == [f"r{round_}-enemy.mp4" for round_ in (3, 4, 8, 12, 14)]
+    assert world.index.reel_count(MATCH_CHECKSUM) == 10
+    assert world.titles() == ["Rendering highlights", "Highlights ready", "Rendering highlights", "Enemy POV ready"]
+    assert world.notices[-1][1] == "5 Highlights from de_inferno now have the Enemy POV."
+    assert world.index.asked_renders(demo_id) == ()
+    assert not (world.cfg.demos_dir / f"{DEMO_NAME}.dem").exists()
+
+
+def test_the_settings_do_not_take_an_asked_view_off_the_queue(world):
+    demo_id = _done_with_the_player_view(world)
+    world.index.ask_render(demo_id, "enemy")
+    world.ticks(1)                                    # the unpack step: the sweep runs too, the settings say player
+    job = world.index.latest_render(demo_id, "enemy")
+    assert job is not None and job["state"] == "queued"
+    world.ticks(4)
+    assert [call.perspectives for call in world.render.calls] == [("player",), ("enemy",)]
+    assert world.index.demo(demo_id)["state"] == "done"
+
+
+def test_an_asked_view_that_fails_three_times_leaves_the_demo_done_with_its_reels(world):
+    demo_id = _done_with_the_player_view(world)
+    world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran")] * 3
+    world.index.ask_render(demo_id, "enemy")
+    world.ticks(6)
+
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert world.index.latest_render(demo_id, "enemy")["attempt"] == 3
+    assert world.index.asked_renders(demo_id) == ()
+    assert world.index.reel_count(MATCH_CHECKSUM) == 5           # the player view's Reels, intact
+    title, body = world.notices[-1]
+    assert title == "Couldn't render the Enemy POV"
+    assert "de_inferno" in body and "stalled: no ffmpeg for 180s while CS2 ran" in body
+    assert "Enemy POV ready" not in world.titles()
+
+
+def test_an_asked_view_whose_download_is_gone_is_dropped_with_a_notification(world):
+    demo_id = _done_with_the_player_view(world)
+    world.index.ask_render(demo_id, "enemy")
+    (world.cfg.demos_dir / f"{DEMO_NAME}.dem.zst").unlink()
+    world.ticks(1)
+
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert world.index.asked_renders(demo_id) == ()
+    assert len(world.render.calls) == 1                          # the player view's launch only
+    title, body = world.notices[-1]
+    assert title == "Couldn't render the Enemy POV"
+    assert "de_inferno" in body and "its download is gone" in body
+    assert world.index.reel_count(MATCH_CHECKSUM) == 5
+
+
+def test_in_round_mode_an_asked_enemy_view_is_dropped_without_a_render(world):
+    world.use(sequence_event="rounds")
+    demo_id = world.add_demo()
+    world.ticks(7)                                    # done with the player's view, as Round mode renders
+    assert world.index.demo(demo_id)["state"] == "done"
+    titles = world.titles()
+    world.index.ask_render(demo_id, "enemy")
+    world.ticks(4)
+
+    assert [call.perspectives for call in world.render.calls] == [("player",)]
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert world.index.asked_renders(demo_id) == ()
+    assert world.titles() == titles                   # no heads-up, and no "ready" either
+
+
+def test_a_demo_that_is_not_asked_fails_when_its_download_is_gone(world):
+    demo_id = world.add_demo()
+    world.ticks(4)                                    # rendering, nothing rendered yet
+    (world.cfg.demos_dir / f"{DEMO_NAME}.dem.zst").unlink()
+    (world.cfg.demos_dir / f"{DEMO_NAME}.dem").unlink()
+    world.ticks(1)
+
+    demo = world.index.demo(demo_id)
+    assert (demo["state"], demo["last_error"]) == ("failed", "its download is gone")
+    assert world.render.calls == []

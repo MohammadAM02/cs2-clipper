@@ -38,6 +38,11 @@ def views_label(perspective: str) -> str:
     return "both views" if perspective == "both" else f"{perspective} view"
 
 
+def view_name(perspective: str) -> str:
+    """What the notifications and the Reels page call one view: "your view" or "the Enemy POV"."""
+    return "your view" if perspective == "player" else "the Enemy POV"
+
+
 def summary(snapshot: Snapshot) -> str:
     """The one line the tray tooltip and the Status page show. First match wins: quitting beats a
     start-up problem, which beats a render in progress, which beats being paused, which beats waiting

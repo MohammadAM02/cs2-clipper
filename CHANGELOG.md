@@ -37,6 +37,12 @@ own; retries go one view at a time.
 The Status page shows which view and Sequence CS2 is recording, and about how long is left. The Demo's bar moves with
 the render, instead of holding at the same place for the whole of it.
 
+### New: render the other view later
+
+On the Reels page, a match rendered with one view has a button to render the other. The match goes back in the queue
+for that view only, using the download the app kept. If that view cannot be rendered, the match keeps its Reels and
+you get a notification.
+
 ## 0.3.0
 
 ### Fixed: rendering changed your CS2 video settings

@@ -22,12 +22,14 @@ from clipper.join import JoinError, assign_clips
 from clipper.model import MatchInfo, RoundFacts
 from clipper.render import RenderProgress, RenderRequest, RenderResult
 from clipper.scoring import score_match, select
-from clipper.state import AppState, Rendering, views_label
+from clipper.state import AppState, Rendering, view_name, views_label
 
 log = logging.getLogger(__name__)
 
 ACTIVE_STATES = ("spotted", "unpacked", "analyzed", "scored", "rendering", "joined")
 PERSPECTIVES = ("player", "enemy")
+READY_TITLES = {"player": "Your view ready", "enemy": "Enemy POV ready"}
+FAILED_TITLES = {"player": "Couldn't render your view", "enemy": "Couldn't render the Enemy POV"}
 MAX_STEP_ATTEMPTS = 3
 MAX_RENDER_ATTEMPTS = 3
 PAUSE_AFTER_FAILURES = 3
@@ -237,7 +239,8 @@ class Worker:
     def tick(self) -> None:
         """Take any new Demos, move every unfinished Demo on by at most one step, then run match
         alerts. Only the oldest Demo in rendering gets a step there, so one map has every view it renders
-        done before the next map's first. A view the settings no longer render comes off every Demo's queue.
+        done before the next map's first. A view the settings no longer render comes off every Demo's queue,
+        except the one a Demo asked for (`ask_render`).
         Once a stop is requested, no new step starts (a running one, a render included,
         finishes on its own terms); publishes the "what it's doing" summary throughout, and always
         ends idle or waiting, never stuck saying "rendering"."""
@@ -377,9 +380,21 @@ class Worker:
 
     # --- step 5: rendering -----------------------------------------------------------------------
 
+    def _wanted(self, demo) -> tuple[str, ...]:
+        """The views `demo`'s render steps are for: the views it was asked for (`ask_render`), else the views the
+        settings render. Round mode has no enemy view. Player first."""
+        wanted = self.index.asked_renders(demo["id"]) or self.cfg.perspectives_to_render
+        if self.cfg.sequence_event == "rounds":
+            wanted = tuple(perspective for perspective in wanted if perspective != "enemy")
+        return tuple(perspective for perspective in PERSPECTIVES if perspective in wanted)
+
     def _render(self, demo) -> None:
+        if demo["dem_path"] is None or not Path(demo["dem_path"]).is_file():
+            self._unpack_again(demo)                  # the Demo is back for a view: `_finish` took its .dem
+            return
+        asked = self.index.asked_renders(demo["id"])
         jobs = []                                     # the Render Jobs of the views not done yet, player first
-        for perspective in self.cfg.perspectives_to_render:
+        for perspective in self._wanted(demo):
             job = self.index.latest_render(demo["id"], perspective)
             if job is None:
                 self.index.queue_render(demo["id"], perspective, attempt=1)
@@ -391,6 +406,10 @@ class Worker:
                 job = self.index.latest_render(demo["id"], perspective)
             if job["state"] == "failed":
                 if job["attempt"] >= MAX_RENDER_ATTEMPTS:
+                    if perspective in asked:          # a view asked for gives up: the Demo keeps the Reels it has
+                        self._drop_asks(demo, (perspective,),
+                                        f"it failed {job['attempt']} times, last with: {job['failure']}")
+                        return
                     raise GiveUp(f"{perspective} render failed {job['attempt']} times: {job['failure']}")
                 self.index.queue_render(demo["id"], perspective, attempt=job["attempt"] + 1)
                 job = self.index.latest_render(demo["id"], perspective)
@@ -407,6 +426,30 @@ class Worker:
             self._try_render(demo, jobs)              # at most one CS2 launch per tick
         else:
             self._try_render(demo, jobs[:1])
+
+    def _unpack_again(self, demo) -> None:
+        """Unpack the download the Demo kept, again, once its .dem is gone: one step per tick. With no download
+        left, a Demo asked for a view drops its asks (`_drop_asks`); any other Demo fails."""
+        archive = Path(demo["archive_path"])
+        if not archive.is_file():
+            asked = self.index.asked_renders(demo["id"])
+            if asked:
+                self._drop_asks(demo, asked, "its download is gone")
+                return
+            raise GiveUp("its download is gone")
+        dem = self.services.unpack(archive, self.cfg.demos_dir)
+        self.index.advance(demo["id"], "rendering", dem_path=dem)
+
+    def _drop_asks(self, demo, perspectives, why: str) -> None:
+        """The views the Demo was asked for cannot be rendered (`why`): says so, forgets the asks, and finishes the
+        Demo as it was, done with the Reels it has. It stays done rather than failed, so its match keeps its Reels."""
+        match = self.index.match(demo["match_checksum"])
+        for perspective in perspectives:
+            self.services.notify(FAILED_TITLES[perspective], f"{match['map']}: {why}. The match keeps its Reels.")
+        log.warning("demo #%s (%s): not rendering %s, so the Demo stays done without it: %s",
+                    demo["id"], match["map"], " and ".join(perspectives), why)
+        self.index.clear_asked_renders(demo["id"])
+        self._settle(demo)
 
     def _try_render(self, demo, jobs) -> None:
         """One CS2 launch for `jobs`: a view, or both views of the Demo, which share one heads-up and one log."""
@@ -563,13 +606,33 @@ class Worker:
                 self.index.save_reel(highlight["id"], perspective, self.cfg.store_path(out), duration)
 
     def _finish(self, demo) -> None:
+        asked = self.index.asked_renders(demo["id"])
+        if asked:
+            self._notify_ready(demo, asked)           # the view asked for is ready, not the whole match
+        else:
+            count = len(self.index.selected_highlights(demo["match_checksum"])) if demo["match_checksum"] else 0
+            if count:
+                match = self.index.match(demo["match_checksum"])
+                self.services.notify("Highlights ready", f"{count} Highlights from {match['map']} are ready.")
+        self.index.clear_asked_renders(demo["id"])
+        self._settle(demo)
+
+    def _notify_ready(self, demo, asked) -> None:
+        """Says each view the Demo was asked for is ready, once it has Reels: how many Highlights have them."""
+        match = self.index.match(demo["match_checksum"])
+        highlights = self.index.selected_highlights(demo["match_checksum"])
+        for perspective in asked:
+            count = sum(self.index.has_reel(highlight["id"], perspective) for highlight in highlights)
+            if count:
+                self.services.notify(READY_TITLES[perspective],
+                                     f"{count} Highlights from {match['map']} now have {view_name(perspective)}.")
+
+    def _settle(self, demo) -> None:
+        """The Demo is done: its unpacked .dem goes (the compressed download stays), and its match's raw Clips go
+        once every Demo of the match is done. Shared by a finished Demo and one whose asks were dropped."""
         dem, archive = demo["dem_path"], demo["archive_path"]
         if dem and Path(dem) != Path(archive):
             Path(dem).unlink(missing_ok=True)         # the compressed download stays
-        count = len(self.index.selected_highlights(demo["match_checksum"])) if demo["match_checksum"] else 0
-        if count:
-            match = self.index.match(demo["match_checksum"])
-            self.services.notify("Highlights ready", f"{count} Highlights from {match['map']} are ready.")
         self.index.advance(demo["id"], "done")
         if demo["match_checksum"]:
             prune_renders(self.index, self.cfg, demo["match_checksum"])   # the Reels are made: the raw Clips go

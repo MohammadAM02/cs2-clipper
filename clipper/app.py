@@ -46,8 +46,8 @@ from functools import partial
 from pathlib import Path
 
 from clipper import (
-    analysis, applog, checks, cs2_paths, faceit_oauth, hlae_render, move_in, packaged, paths, protect, provision,
-    settings, tray, update, web,
+    analysis, applog, checks, cs2_paths, faceit_oauth, hlae_plan, hlae_render, move_in, packaged, paths, protect,
+    provision, settings, tray, update, web,
 )
 from clipper.alerts import MatchAlerts
 from clipper.config import Config
@@ -141,6 +141,13 @@ def start_match_alerts(cfg: Config, index: Index, probe: SystemProbe, *,
                        stopped_playing_minutes=cfg.stopped_playing_minutes)
 
 
+def _video_settings(cfg: Config) -> hlae_plan.VideoSettings:
+    """What a Render Job records with: the HUD settings, and the plan's own defaults for the rest."""
+    return hlae_plan.VideoSettings(
+        show_xray=cfg.show_xray, show_assists=cfg.show_assists, show_only_death_notices=cfg.hud == "killfeed",
+        death_notices_duration=cfg.kill_feed_seconds, player_voices_enabled=cfg.player_voices)
+
+
 def _program(name: str) -> Path | None:
     """Where `name`, a program on PATH or a full path to one, is; None: nowhere."""
     found = shutil.which(name)
@@ -161,7 +168,7 @@ def build_worker(cfg: Config, index: Index, *, state: AppState, stop: StopReques
             launch_timeout_seconds=cfg.launch_timeout_seconds, duration_of=duration_of,
             load_inputs=analyses.render_inputs, cs2_exe=cs2_paths.find_cs2_exe(), hlae_exe=checks.hlae_exe(cfg),
             hlae_ffmpeg=_program(cfg.ffmpeg), ffmpeg=cfg.ffmpeg, cs2_settings_dir=cfg.cs2_settings_dir,
-            progress=progress)
+            progress=progress, video=_video_settings(cfg))
 
     services = Services(
         intake=Intake(cfg.downloads_dir, cfg.demos_dir),

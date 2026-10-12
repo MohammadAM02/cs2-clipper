@@ -3,6 +3,19 @@
 What changed in each release of CS2 Clipper. The release workflow publishes a version's section as the notes of
 its GitHub Release, and the app shows those notes on the Status page when it offers that version.
 
+## 0.5.0
+
+### New: HUD settings
+
+Settings → **HUD** chooses what shows over the picture in Clips rendered from now on. Reels already made keep their
+look, and the defaults are the look every Clip had before.
+
+- **HUD**: **Kill feed only** (the default) or **Full HUD**, with the radar, health, ammo and round timer.
+- **X-Ray**: players outlined through walls, as when you spectate. On by default.
+- **Assists in the kill feed**: a kill a teammate helped with shows both names. On by default.
+- **Kill feed time**: how long each kill stays in the kill feed, from 1 to 30 seconds (5 by default).
+- **Player voices**: voice chat from the Demo in each Clip's sound. On by default.
+
 ## 0.4.0
 
 ### New: choose which views to render

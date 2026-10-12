@@ -16,7 +16,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 
 from clipper import paths, protect
-from clipper.config import PERSPECTIVE_CHOICES, RATIOS, SEQUENCE_EVENTS, Config
+from clipper.config import HUD_CHOICES, PERSPECTIVE_CHOICES, RATIOS, SEQUENCE_EVENTS, Config
 from clipper.faceit_oauth import RELAY_URL
 
 KEY_FIELD = "faceit_api_key"                  # write-only: never stored or read back under this name
@@ -66,6 +66,13 @@ FIELDS: tuple[Field, ...] = (
     Field("perspectives", "Picture", "Views to render", "choice", choices=tuple(PERSPECTIVE_CHOICES)),
     Field("padding_before_s", "Picture", "Seconds before each Frag", "number", minimum=0, maximum=30),
     Field("padding_after_s", "Picture", "Seconds after each Frag", "number", minimum=0, maximum=30),
+    Field("hud", "HUD", "HUD", "choice", choices=HUD_CHOICES),
+    Field("show_xray", "HUD", "X-Ray", "bool", help="Outlines players through walls, as when you spectate."),
+    Field("show_assists", "HUD", "Assists in the kill feed", "bool",
+          help="A kill a teammate helped with shows both names."),
+    Field("kill_feed_seconds", "HUD", "Kill feed time (s)", "number", minimum=1, maximum=30,
+          help="How long each kill stays in the kill feed."),
+    Field("player_voices", "HUD", "Player voices", "bool", help="Voice chat from the Demo is in each Clip's sound."),
     Field("top_n", "Rendering", "Highlights per match", "int", minimum=1, maximum=50),
     Field("stall_seconds", "Rendering", "Stall timeout (s)", "number", minimum=30, maximum=3600),
     Field("launch_timeout_seconds", "Rendering", "Launch timeout (s)", "number", minimum=30, maximum=3600),

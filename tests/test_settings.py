@@ -44,6 +44,19 @@ def test_the_views_to_render_are_a_choice_after_one_clip_per():
     assert (views.label, views.kind, views.choices) == ("Views to render", "choice", ("both", "player", "enemy"))
 
 
+def test_the_hud_settings_are_a_group_of_their_own_after_picture():
+    groups = list(dict.fromkeys(f.group for f in FIELDS))
+    assert groups[groups.index("Picture") + 1] == "HUD"
+    hud = {f.name: f for f in FIELDS if f.group == "HUD"}
+    assert list(hud) == ["hud", "show_xray", "show_assists", "kill_feed_seconds", "player_voices"]
+    assert (hud["hud"].label, hud["hud"].kind, hud["hud"].choices) == ("HUD", "choice", ("killfeed", "full"))
+    assert (hud["show_xray"].label, hud["show_xray"].kind) == ("X-Ray", "bool")
+    assert (hud["show_assists"].label, hud["show_assists"].kind) == ("Assists in the kill feed", "bool")
+    seconds = hud["kill_feed_seconds"]
+    assert (seconds.label, seconds.kind, seconds.minimum, seconds.maximum) == ("Kill feed time (s)", "number", 1, 30)
+    assert (hud["player_voices"].label, hud["player_voices"].kind) == ("Player voices", "bool")
+
+
 # --- defaults() ----------------------------------------------------------------------------------------
 
 
@@ -62,6 +75,8 @@ def test_defaults_match_configs_own_defaults():
     assert values["page_port"] == cfg.page_port == 8765
     assert values["aspect_ratio"] == "16:9"
     assert values["perspectives"] == cfg.perspectives == "both"
+    assert (values["hud"], values["show_xray"], values["show_assists"], values["kill_feed_seconds"],
+            values["player_voices"]) == ("killfeed", True, True, 5.0, True)
     assert values["hlae_exe"] == cfg.hlae_exe == ""
     assert values["match_alerts"] is True
     assert isinstance(values["downloads_dir"], str)
@@ -242,6 +257,12 @@ def test_the_stored_protected_key_loads_as_is_and_a_corrupt_one_falls_back(tmp_p
     ("sequence_event", "rounds"),
     ("perspectives", "player"),
     ("perspectives", "enemy"),
+    ("hud", "full"),
+    ("show_xray", False),
+    ("show_assists", False),
+    ("kill_feed_seconds", 8),
+    ("kill_feed_seconds", 1.5),
+    ("player_voices", False),
     ("hlae_exe", ""),
     ("hlae_exe", "C:/HLAE/hlae.exe"),
     ("top_n", 25),
@@ -265,6 +286,11 @@ def test_valid_values_pass(name, value):
     ("sequence_event", "frags"),
     ("perspectives", "neither"),
     ("perspectives", ""),
+    ("hud", "minimal"),
+    ("show_xray", "off"),
+    ("kill_feed_seconds", 0),
+    ("kill_feed_seconds", 31),
+    ("player_voices", 0),
     ("hlae_exe", 1),
     ("ffmpeg", ""),
     ("top_n", 0),

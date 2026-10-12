@@ -117,6 +117,17 @@ def test_an_unknown_perspectives_choice_is_rejected():
         Config(perspectives="neither")
 
 
+def test_the_hud_settings_default_to_the_look_every_render_had():
+    cfg = Config()
+    assert (cfg.hud, cfg.show_xray, cfg.show_assists, cfg.kill_feed_seconds, cfg.player_voices) == (
+        "killfeed", True, True, 5.0, True)
+
+
+def test_an_unknown_hud_is_rejected():
+    with pytest.raises(ValueError, match="hud"):
+        Config(hud="minimal")
+
+
 def test_match_alert_settings_have_defaults():
     cfg = Config()
     assert (cfg.match_alerts, cfg.stopped_playing_minutes, cfg.page_port) == (True, 5.0, 8765)

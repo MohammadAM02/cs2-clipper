@@ -16,7 +16,7 @@ from types import SimpleNamespace
 import pytest
 
 from clipper import hlae_render
-from clipper.hlae_plan import Kill, Player, RenderInputs, Round
+from clipper.hlae_plan import Kill, Player, RenderInputs, Round, VideoSettings
 from clipper.media import MediaError
 from clipper.render import ABORTED, RenderRequest
 from tests.fixtures import MATCH_CHECKSUM, SUBJECT
@@ -389,6 +389,24 @@ def test_the_defaults_are_the_ones_the_job_runs_with():
     parameters = inspect.signature(hlae_render.render).parameters
     assert [parameters[name].default for name in
             ("poll_seconds", "exit_grace_seconds", "abort_sweep_seconds", "max_launches")] == [5.0, 120.0, 30.0, 3]
+    assert parameters["video"].default == VideoSettings()
+
+
+def test_the_cfg_files_follow_the_video_settings_it_is_given(world, req):
+    seen: dict[str, str] = {}
+
+    def launch(command, log, environment):
+        seen.update({path.name: path.read_text(encoding="utf-8") for path in world.cfg_dir.glob("cs2clipper*.cfg")})
+        return world.launch(command, log, environment)
+
+    world.scripts = [game()]
+    video = VideoSettings(show_xray=False, show_only_death_notices=False, show_assists=False,
+                          death_notices_duration=8, player_voices_enabled=False)
+    assert run(world, req, launch=launch, video=video).ok
+    lines = "\n".join(seen.values()).splitlines()
+    for line in ("spec_show_xray 0", "cl_draw_only_deathnotices 0", "mp_display_kill_assists 0",
+                 "mirv_deathmsg lifetime 8", "tv_listen_voice_indices 0"):
+        assert line in lines
 
 
 # --- staging ------------------------------------------------------------------------------------------

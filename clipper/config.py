@@ -28,6 +28,8 @@ PERSPECTIVE_CHOICES: dict[str, tuple[str, ...]] = {
     "player": ("player",),
     "enemy": ("enemy",),
 }
+# hud -> what CS2 shows over the picture: the kill feed alone, or its whole HUD (radar, health, ammo, round timer).
+HUD_CHOICES = ("killfeed", "full")
 
 
 @dataclass(frozen=True)
@@ -59,6 +61,11 @@ class Config:
     aspect_ratio: str = "16:9"
     sequence_event: str = "kills"
     perspectives: str = "both"
+    hud: str = "killfeed"
+    show_xray: bool = True
+    show_assists: bool = True
+    kill_feed_seconds: float = 5.0
+    player_voices: bool = True
     match_alerts: bool = True
     stopped_playing_minutes: float = 5.0
     page_port: int = 8765
@@ -74,6 +81,8 @@ class Config:
             raise ValueError(
                 f"perspectives must be one of {', '.join(PERSPECTIVE_CHOICES)} (got {self.perspectives!r})"
             )
+        if self.hud not in HUD_CHOICES:
+            raise ValueError(f"hud must be one of {', '.join(HUD_CHOICES)} (got {self.hud!r})")
 
     @property
     def perspectives_to_render(self) -> tuple[str, ...]:

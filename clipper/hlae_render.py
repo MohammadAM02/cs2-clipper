@@ -32,7 +32,6 @@ CONSOLE_TAIL_LINES = 40         # how many of console.log's last lines go into t
 LEFTOVER_PAUSE_S = 2.0          # after closing a hooked CS2 an earlier run left, so it lets go of its files
 HLAE_ERROR_TITLE = "Error - AfxHookSource"      # the title of the window HLAE opens when it cannot hook this CS2
 FFMPEG_WAIT_S = 60.0            # the longest the mux waits for HLAE's FFmpeg to finish the videos after the game
-SETTINGS = hlae_plan.VideoSettings()            # what the cfg files record with, which the mux has to expect too
 # CS2 keeps its video settings, convars and keys in this folder when the variable names one, instead of the player's
 # Steam userdata (CS:DM's `define-cfg-folder-location.ts`); HLAE's -afxDisableSteamStorage is meant to go with it.
 USRLOCAL_VARIABLE = "USRLOCALCSGO"
@@ -415,6 +414,7 @@ def render(
     abort_sweep_seconds: float = 30.0,
     max_launches: int = 3,
     progress: Callable[[RenderProgress], None] = lambda progress: None,
+    video: hlae_plan.VideoSettings = hlae_plan.VideoSettings(),
 ) -> RenderResult:
     """Records the Clips of `req`'s views through HLAE, or says why it could not. The views are recorded in one launch
     of CS2, the second after the first (`hlae_plan.script`). `cs2_exe`, `hlae_exe` and `hlae_ffmpeg`, the FFmpeg HLAE
@@ -423,7 +423,7 @@ def render(
     `cs2_settings_dir` while it records, so the player's own are left as they are. What happens goes into
     `req.log_path` as it happens. A launch that fails once the first view is recorded keeps that view's Clips in the
     result. `progress` is told how far the launch has got; one that raises is said once in the log, and the job goes
-    on."""
+    on. `video` is what the cfg files record with (the HUD settings among them), which the mux has to expect too."""
     req.log_path.parent.mkdir(parents=True, exist_ok=True)
     with keep_awake(), open(req.log_path, "w", encoding="utf-8", errors="replace", newline="\n") as log_file:
 
@@ -466,7 +466,7 @@ def render(
                 say(f"mux: joining {_plural(len(sequences), 'Sequence')} of the {perspective} view into Clips")
                 try:
                     hlae_files.mux(ffmpeg, raw_dir, sequences, req.outputs[perspective],
-                                   record_audio=SETTINGS.record_audio, run=run_ffmpeg)
+                                   record_audio=video.record_audio, run=run_ffmpeg)
                 except MuxError as exc:
                     problem = f"mux failed: {exc}"
                     break
@@ -511,7 +511,7 @@ def render(
                     sequences = [replace(sequence, number=sequence.number + offset) for sequence in sequences]
                 planned.append((perspective, sequences))
             files = hlae_plan.script(
-                planned[0][1], inputs, demo_path=req.demo_path, raw_dir=raw_dir, settings=SETTINGS,
+                planned[0][1], inputs, demo_path=req.demo_path, raw_dir=raw_dir, settings=video,
                 second_pass=[sequence for _, sequences in planned[1:] for sequence in sequences])
         except (PlanError, ValueError) as exc:
             return fail(f"plan failed: {exc}")

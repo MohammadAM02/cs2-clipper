@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from clipper import checks, cs2_paths, hlae_render, packaged, paths, update, web
+from clipper import checks, cs2_paths, hlae_plan, hlae_render, packaged, paths, update, web
 from clipper.app import (
     PAGES, AlreadyRunning, App, ask_to_quit, build_worker, find_running, gate_reasons, hand_over, quit_running, run,
     run_headless, single_instance, start_match_alerts,
@@ -170,7 +170,7 @@ def test_a_render_job_goes_to_hlae_with_what_it_drives_cs2_with(built, renderer,
     assert given is request
     assert set(kwargs) == {"probe", "should_abort", "stall_seconds", "launch_timeout_seconds", "duration_of",
                            "load_inputs", "cs2_exe", "hlae_exe", "hlae_ffmpeg", "ffmpeg", "cs2_settings_dir",
-                           "progress"}
+                           "progress", "video"}
     assert kwargs["should_abort"] is abort
     assert kwargs["progress"] is progress           # the Status page's progress is told the render's progress
     assert (kwargs["stall_seconds"], kwargs["launch_timeout_seconds"]) == (90.0, 240.0)
@@ -179,6 +179,17 @@ def test_a_render_job_goes_to_hlae_with_what_it_drives_cs2_with(built, renderer,
     assert kwargs["hlae_ffmpeg"] == ffmpeg          # the FFmpeg HLAE records with is ours, found
     assert kwargs["ffmpeg"] == str(ffmpeg)          # and the mux's is the setting as it is
     assert kwargs["cs2_settings_dir"] == tmp_path / "cs2-settings"     # CS2's settings while it records
+    assert kwargs["video"] == hlae_plan.VideoSettings()     # the HUD settings' defaults are the look it always had
+
+
+def test_a_render_job_records_with_the_hud_settings(built, renderer, tmp_path):
+    renderer.cs2_exes = [None]
+    worker = built(hud="full", show_xray=False, show_assists=False, kill_feed_seconds=8.0, player_voices=False)
+    worker.services.render(_render_request(tmp_path), lambda: False, lambda report: None)
+    [(_, kwargs)] = renderer.calls
+    assert kwargs["video"] == hlae_plan.VideoSettings(
+        show_only_death_notices=False, show_xray=False, show_assists=False, death_notices_duration=8.0,
+        player_voices_enabled=False)
 
 
 def test_hlae_and_ffmpeg_that_are_nowhere_reach_the_renderer_as_none(built, renderer, tmp_path):

@@ -20,7 +20,7 @@ import psutil
 Check = tuple[str, Callable[[], object]]
 
 PAGE_FILES = ("status.html", "demos.html", "reels.html", "settings.html", "app.css", "app.js", "touches.css",
-              "touches.js")
+              "touches.js", "nugget.js", "fonts/Bangers.woff2", "fonts/HankenGrotesk.woff2")
 
 
 def frozen() -> bool:

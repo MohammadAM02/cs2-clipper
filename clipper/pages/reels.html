@@ -9,19 +9,24 @@
 </head>
 <body>
 <script src="/app.js"></script>
+<script src="/nugget.js"></script>
 <script src="/touches.js" defer></script>
 <script>renderNav("/reels");</script>
 <main>
-  <section class="rise" style="display:flex;align-items:flex-end;gap:24px;flex-wrap:wrap">
-    <div style="flex-grow:1">
-      <h1 class="title">Reels</h1>
-      <p class="lead" id="sum">Loading…</p>
-    </div>
-    <div id="filters" role="group" aria-label="Show" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+  <section class="pagehead rise">
+    <h1 class="title">Reels</h1>
+    <div class="saybox"><span id="sum-nugget"></span><p class="say" id="sum">Loading…</p></div>
   </section>
-  <section class="hero tall cut rise" id="hero" aria-label="Your best Highlights" tabindex="0" hidden style="animation-delay:.06s"></section>
+  <div id="filters" role="group" aria-label="Show" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+  <section class="hero tall rise" id="hero" aria-label="Your best Highlights" tabindex="0" hidden style="animation-delay:.06s"></section>
   <div class="sechead" id="mhead" hidden><h2 class="h2">Matches</h2><span class="lbl">Newest first</span></div>
-  <div id="matches" style="display:flex;flex-direction:column;gap:14px"></div>
+  <div id="matches" style="display:flex;flex-direction:column;gap:18px"></div>
+  <div class="emptybig rise" id="empty" hidden>
+    <span data-nugget-full="idle"></span>
+    <h2>No Reels yet</h2>
+    <p>Grab a Demo with a 3K or better and Nugget films its Highlights. They land here once they're rendered.</p>
+    <a class="primary" href="/demos">Demos to grab</a>
+  </div>
 </main>
 <script>
 // Reels (spec: Pages -> Reels): every match's Highlights, each watchable from the player's view or the
@@ -39,6 +44,11 @@ const closed = new Set(JSON.parse(sessionStorage.getItem("closed") || "[]"));
 const carousel = Carousel(document.getElementById("hero"), {onPlay: id => playById(id, true)});
 
 const typeOf = h => String(h.type).toUpperCase();
+document.querySelectorAll("[data-nugget-full]").forEach(n => { n.outerHTML = NUGGET.svg(n.dataset.nuggetFull, "Nugget, asleep on his egg"); });
+// Each Highlight's kind as a comic burst: an Ace is the loudest.
+const BURST_FILL = {ACE: "#FF5500", "5K": "#FF5500", "4K": "#F2EFEA", "3K": "#FFB27A", "2K": "#8F857A"};
+const hitBurst = type => `<span class="hitb" title="${esc(type)}">${NUGGET.burst(type === "5K" ? "ACE!" : esc(type) + "!", BURST_FILL[type] || "#8F857A")}</span>`;
+let sumMood = "";
 const keep = h => filter === "all" || (filter === "hs" ? (h.reasons || []).some(r => /all headshots/i.test(r)) : typeOf(h) === filter);
 function resultLabel(result) { return result ? result.charAt(0).toUpperCase() + result.slice(1) : ""; }
 function rounds(score) {
@@ -51,7 +61,7 @@ function highlightRow(h) {
   // What the hover scrub flicks through (touches.js): your view's Reel, else the Enemy POV's.
   const scrub = h.player ?? h.enemy, secs = h.player !== null ? h.player_s : h.enemy_s;
   return `<div class="hl" data-round="${+h.round}"${scrub !== null ? ` data-scrub="${+scrub}" data-secs="${+secs || 0}"` : ""}>
-    <span class="rd">Round ${+h.round}</span>${badge(h.type)}
+    <span class="rd">Round ${+h.round}</span>${hitBurst(typeOf(h))}
     <span class="tags">${tags}</span>
     <span class="povs" role="group" aria-label="Watch round ${+h.round} from">
       <button class="pov l" data-reel="${h.player}" ${h.player === null ? 'disabled title="No Player view for this round"' : ""}>${ICON.play}Player</button>
@@ -82,11 +92,11 @@ function matchBlock(m) {
     return h ? `<span class="cell ${keep(h) ? "on" : "dim"}" style="height:${HEIGHT[typeOf(h)] || 18}px" title="Round ${i + 1}"></span>` : '<span class="cell"></span>';
   }).join("");
   const won = m.result === "win";
-  return `<section class="mcard cut${closed.has(m.checksum) ? "" : " open"}" data-checksum="${esc(m.checksum)}" aria-label="${esc(m.map)}, ${dateLabel(m.played_at)}">
+  return `<section class="mcard${closed.has(m.checksum) ? "" : " open"}" data-checksum="${esc(m.checksum)}" aria-label="${esc(m.map)}, ${dateLabel(m.played_at)}">
     <button class="mhead" data-toggle aria-expanded="${!closed.has(m.checksum)}">
       <span class="maptile" style="width:54px;height:54px;font-size:21px">${mapAbbr(m.map)}</span>
       <span class="nm"><b>${esc(m.map)}</b><small>${dateLabel(m.played_at)}, ${plural(m.highlights.length, "Highlight")}</small></span>
-      <span class="sc" style="color:${won ? "#F2EFEA" : "#8F8F8F"}"><b>${esc(m.score)}</b><small>${esc(resultLabel(m.result))}</small></span>
+      <span class="sc" style="color:${won ? "#F2EFEA" : "#8F857A"}"><b>${esc(m.score)}</b><small>${esc(resultLabel(m.result))}</small></span>
       <span class="strip-w" aria-hidden="true"><span class="rstrip">${cells}</span><span class="ends"><span>Round 1</span><span>Round ${rounds(m.score)}</span></span></span>
       ${ICON.chev}
     </button>
@@ -124,7 +134,10 @@ function render() {
   document.getElementById("sum").textContent = data.length
     ? `${plural(all.length, "Highlight")} from ${plural(data.length, "match", "matches")}. Watch each from your view or the Enemy POV.`
     : "No Reels yet. Finished Demos show up here.";
+  const mood = data.length ? "ace" : "idle";
+  if (mood !== sumMood) { sumMood = mood; document.getElementById("sum-nugget").innerHTML = NUGGET.head(mood); }
   document.getElementById("mhead").hidden = !data.length;
+  document.getElementById("empty").hidden = data.length > 0;
   renderFilters();
   renderSlides();
   sync(document.getElementById("matches"), data.filter(m => filter === "all" || m.highlights.some(keep)), m => m.checksum, matchBlock);

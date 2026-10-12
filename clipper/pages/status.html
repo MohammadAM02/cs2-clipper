@@ -9,30 +9,49 @@
 </head>
 <body>
 <script src="/app.js"></script>
+<script src="/nugget.js"></script>
 <script src="/touches.js" defer></script>
 <script>renderNav("/status");</script>
 <main>
-  <section class="greet rise">
-    <div style="flex-grow:1;min-width:0">
-      <h1 id="greet">Status</h1>
-      <p class="lead" id="intro">Loading…</p>
+  <section class="stage rise" aria-label="Now">
+    <div class="art" id="art">
+      <div id="scene"></div>
+      <h1 id="greet" class="cap">Status</h1>
+      <div class="cap" id="elapsed" aria-hidden="true"></div>
+      <span class="sfx" id="sfx" aria-hidden="true"></span>
     </div>
-    <div class="ctl">
-      <div class="row">
-        <button class="ghost" id="pause" hidden>${PAUSE}Pause rendering</button>
-        <button class="primary" id="resume" hidden>${PLAY}Resume rendering</button>
-        <button class="ghost" id="quit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>Quit</button>
+    <div class="talk">
+      <div class="bubble"><p id="say">Loading…</p></div>
+      <div class="facts">
+        <div class="nowline"><span class="dot" id="now-dot"></span><span id="now" aria-live="polite">Loading…</span><span class="file" id="now-file"></span></div>
+        <div id="now-sub"></div>
+        <p class="lead" id="intro"></p>
       </div>
-      <div class="split" id="quit-choice" role="group" aria-label="A render is running" hidden>
-        <button class="ghost" id="quit-now">Quit now (the render is redone later)</button>
-        <button class="primary" id="quit-after">Quit when this render finishes</button>
+      <div class="ctl">
+        <div class="row">
+          <button class="ghost" id="pause" hidden>${PAUSE}Pause rendering</button>
+          <button class="primary" id="resume" hidden>${PLAY}Resume rendering</button>
+          <button class="ghost" id="quit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>Quit</button>
+        </div>
+        <div class="split" id="quit-choice" role="group" aria-label="A render is running" hidden>
+          <button class="ghost" id="quit-now">Quit now (the render is redone later)</button>
+          <button class="primary" id="quit-after">Quit when this render finishes</button>
+        </div>
       </div>
     </div>
   </section>
 
-  <section class="setup cut" id="setup" aria-labelledby="h-setup" hidden>
+  <div id="current" hidden>
+    <div class="cstrip" id="strip" role="list" aria-label="Pipeline"></div>
+    <div class="jobs" id="jobs"></div>
+  </div>
+
+  <section id="notice" aria-label="Needs attention" style="display:flex;flex-direction:column;gap:8px"></section>
+
+  <section class="setup" id="setup" aria-labelledby="h-setup" hidden>
     <div class="head">
-      <div style="flex-grow:1;min-width:0">
+      <span data-nugget="problem"></span>
+      <div class="say">
         <h2 id="h-setup" class="h2">Set up this PC</h2>
         <p class="lead" id="setup-lead" aria-live="polite"></p>
       </div>
@@ -43,9 +62,10 @@
     <div class="notice p" id="setup-error" role="alert" hidden></div>
   </section>
 
-  <section class="setup cut" id="update" aria-labelledby="h-update" hidden>
+  <section class="setup" id="update" aria-labelledby="h-update" hidden>
     <div class="head">
-      <div style="flex-grow:1;min-width:0">
+      <span data-nugget="rendering"></span>
+      <div class="say">
         <h2 id="h-update" class="h2">A new CS2 Clipper is out</h2>
         <p class="lead" id="update-lead" aria-live="polite"></p>
       </div>
@@ -56,51 +76,33 @@
     <div class="notice p" id="update-error" role="alert" hidden></div>
   </section>
 
-  <section id="notice" aria-label="Needs attention" style="display:flex;flex-direction:column;gap:8px"></section>
-
-  <section class="hero cut rise" id="hero" aria-label="Your latest Highlights" tabindex="0" style="animation-delay:.06s"></section>
-
-  <section class="nowcard cut rise" aria-label="Now" style="animation-delay:.12s">
-    <div class="nowhead">
-      <div style="flex-grow:1;min-width:0">
-        <div class="nowmeta"><span class="dot" id="now-dot"></span><span>Now</span><span class="file" id="now-file"></span></div>
-        <div id="now" aria-live="polite">Loading…</div>
-        <div id="now-sub"></div>
-      </div>
-      <span id="elapsed" hidden></span>
-    </div>
-    <div id="current" hidden>
-      <div class="track" role="list" aria-label="Pipeline" style="margin-bottom:20px">
-        <div class="rail" id="rail"><i></i></div>
-      </div>
-      <div class="jobs" id="jobs"></div>
-    </div>
-  </section>
+  <div class="sechead"><h2 class="h2">Fresh in your Reels</h2><a class="more" href="/reels">All Reels${NEXT}</a></div>
+  <section class="hero rise" id="hero" aria-label="Your latest Highlights" tabindex="0" style="animation-delay:.06s"></section>
 
   <div class="cols">
     <section aria-labelledby="h-demos">
       <div class="sechead"><h2 id="h-demos" class="h2">In progress</h2><span class="lbl" id="demo-sum"></span></div>
-      <div class="panel cut" id="demos"><p class="empty">Nothing in progress.</p></div>
+      <div class="panel" id="demos"><p class="empty">Nothing in progress.</p></div>
     </section>
     <section aria-labelledby="h-grab">
       <div class="sechead"><h2 id="h-grab" class="h2">Demos to grab</h2><a class="more" href="/demos">All${NEXT}</a></div>
-      <div class="panel cut" style="padding:4px 18px 10px"><div id="grab"></div><p class="help" id="grab-note" style="margin:10px 0 0">Download a Demo and it's taken from Downloads on its own.</p></div>
+      <div class="panel" style="padding:14px 14px 12px"><div id="grab"></div><p class="help" id="grab-note" style="margin:14px 0 0">Download a Demo and Nugget takes it from your Downloads.</p></div>
     </section>
     <section aria-labelledby="h-checks">
-      <div class="sechead"><h2 id="h-checks" class="h2">Checks</h2><span class="lbl" id="check-sum"></span></div>
-      <div class="panel cut" style="padding:4px" id="checks"></div>
+      <div class="sechead"><h2 id="h-checks" class="h2">The crew</h2><span class="lbl" id="check-sum"></span></div>
+      <div class="panel" style="padding:4px" id="checks"></div>
     </section>
   </div>
 
-  <section aria-labelledby="h-log" style="display:flex;flex-direction:column;gap:10px">
+  <section aria-labelledby="h-log" style="display:flex;flex-direction:column;gap:12px">
     <div class="loghead">
-      <h2 id="h-log" class="h2" style="margin-right:10px">Log</h2>
+      <h2 id="h-log" class="cap" style="margin-right:10px">Previously…</h2>
       <span id="log-filters" role="group" aria-label="Show" style="display:flex;gap:8px"></span>
       <span class="spacer"></span>
       <button class="chip" id="copy-log" disabled><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy</button>
       <button class="chip on" id="follow" aria-pressed="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>Follow new lines</button>
     </div>
-    <div class="cut" id="log" role="log" aria-label="Log"></div>
+    <div id="log" role="log" aria-label="Log"></div>
   </section>
 </main>
 <script>
@@ -118,9 +120,9 @@ const opened = new Set(JSON.parse(sessionStorage.getItem("opened") || "[]"));
 document.querySelectorAll("main button, main a").forEach(el => {
   el.innerHTML = el.innerHTML.replace("${PAUSE}", ICON.pause).replace("${PLAY}", ICON.play).replace("${NEXT}", ICON.next);
 });
-const track = document.querySelector(".track");
-track.insertAdjacentHTML("beforeend", STAGE_LABEL.map(l =>
-  `<div class="st" role="listitem"><span class="node">${ICON.check.replace('stroke="currentColor"', 'stroke="#000"')}</span><span class="t">${l}</span></div>`).join(""));
+const strip = document.getElementById("strip");
+strip.innerHTML = STAGE_LABEL.map((l, i) => `<div class="mini" role="listitem"><small>${i + 1}.</small><b>${l}</b></div>`).join("");
+document.querySelectorAll("[data-nugget]").forEach(n => { n.outerHTML = NUGGET.head(n.dataset.nugget); });
 const carousel = Carousel(document.getElementById("hero"));
 
 function greeting() {
@@ -154,6 +156,89 @@ function progressLine(p) {
   const left = p.seconds_left < 60 ? "less than a minute left" : `about ${Math.ceil(p.seconds_left / 60)} min left`;
   return `${sequence} · ${left}`;
 }
+
+// --- Nugget: the rooftop he films from, what he says, and the sound it makes --------------------------------
+// His mood comes from what the app is doing; an Ace (touches.js says so with `clipper:ace`) has him crowing a while.
+const READING = ["spotted", "unpacked", "analyzed", "scored"];
+const SFX = {rendering: ["REC!", "#FF5500"], idle: ["zzz…", "#F2EFEA"], paused: ["HOLD!", "#F2EFEA"], problem: ["CLUNK!", "#FFB27A"],
+  ace: ["POW!", "#FF5500"]};
+let stageKey = "", aceUntil = 0, aceNews = null;
+NUGGET.follow(document.getElementById("art"), [0.29, 0.52]);
+const nightNow = () => { const h = new Date().getHours(); return h >= 20 || h < 6; };
+
+function nuggetMood(data) {
+  if (Date.now() < aceUntil) return "ace";
+  if (data.problems.length || data.paused_by === "failures") return "problem";
+  return data.rendering ? "rendering" : "idle";
+}
+
+function nuggetSays(data, mood) {
+  if (mood === "ace" && aceNews) {
+    return aceNews.count > 1 ? `Bawk bawk! ${aceNews.count} new Aces, and every one is in your Reels.`
+      : `Bawk bawk! An Ace on ${aceNews.map}. Five frags in one round, and it's in your Reels.`;
+  }
+  if (data.quitting) return data.quitting === "after_render" ? "I'll finish this take, then the app closes." : "Packing up the camera. See you next match.";
+  if (data.paused_by === "failures") return "Bawk! My renders kept failing, so I stopped filming. Check the log, then resume.";
+  if (data.problems.length) {
+    const more = data.problems.length > 1 ? ` (+${data.problems.length - 1} more below)` : "";
+    return `Bawk! I can't film yet. ${data.problems[0]}${/[.!?]$/.test(data.problems[0]) ? "" : "."}${more}`;
+  }
+  const r = data.rendering;
+  if (r) {
+    const p = r.progress, map = r.map || "match";
+    if (p && p.stage === "starting") return `Starting CS2 for your ${map} Highlights. Hands off for a few minutes!`;
+    if (p && p.stage === "joining") return `Stitching your ${map} Clips into a Reel. Nearly there!`;
+    const enemy = (p && p.perspective || r.perspective) === "enemy";
+    const next = r.perspective === "both" && !enemy;
+    return `Filming your ${map} Highlights from ${enemy ? "the Enemy POV" : "your view"}.`
+      + (next ? " Enemy POV is next, so keep CS2 closed for a few minutes." : " Keep CS2 closed for a few minutes!");
+  }
+  if (data.paused_by === "you") return "Camera's down. Demos keep coming in, and I'll film them when you resume.";
+  if (/^Waiting/.test(data.summary)) return `${data.summary}. I'll start filming once that clears.`;
+  const reading = data.demos.find(d => READING.includes(d.state));
+  if (reading) return `Reading your ${reading.map || "new"} Demo for Highlights. Notebook out!`;
+  const pending = pendingRows(grabRows).length;
+  if (pending) return `${plural(pending, "match", "matches")} worth clipping on FACEIT. Download ${pending === 1 ? "its Demo" : "a Demo"} and I'll take it from your Downloads.`;
+  return "All quiet. Go play, I'll watch your Downloads and check FACEIT.";
+}
+
+// The caption over his panel: where the story is, or the greeting when nothing is going on.
+function captionOf(data, mood) {
+  if (mood === "ace" && aceNews) return aceNews.round ? `${aceNews.map}, round ${aceNews.round}…` : `Meanwhile, on ${aceNews.map}…`;
+  if (mood === "problem") return "Uh-oh…";
+  if (data.rendering) return `Meanwhile, on ${data.rendering.map || "the server"}…`;
+  if (data.paused_by === "you") return "Hold the presses…";
+  return greeting();
+}
+const restingCaption = (data, mood) => mood === "ace" ? "In your Reels now" : mood === "problem" ? "Rendering on hold"
+  : data.paused_by === "you" ? "Paused" : "Standing by";
+
+function renderStage(data) {
+  const mood = nuggetMood(data), night = mood === "idle" && nightNow();
+  const sfx = mood === "idle" && data.paused_by === "you" ? "paused" : mood;
+  const key = `${mood}|${night}|${sfx}`;
+  if (key !== stageKey) {
+    stageKey = key;
+    const scene = document.getElementById("scene");
+    scene.innerHTML = NUGGET.scene(mood, night);
+    scene.firstElementChild.classList.add("in");
+    document.getElementById("sfx").innerHTML = NUGGET.burst(...SFX[sfx]);
+  }
+  document.getElementById("greet").textContent = captionOf(data, mood);
+  if (!data.rendering) document.getElementById("elapsed").textContent = restingCaption(data, mood);
+  const say = document.getElementById("say"), line = nuggetSays(data, mood);
+  if (say.textContent !== line) {
+    say.textContent = line;
+    say.classList.remove("said"); void say.offsetWidth; say.classList.add("said");
+  }
+}
+
+addEventListener("clipper:ace", e => {
+  aceNews = e.detail;
+  aceUntil = Date.now() + 8000;
+  if (lastStatus) renderStage(lastStatus);
+  setTimeout(() => { if (lastStatus) renderStage(lastStatus); }, 8100);
+});
 
 // --- Now: the summary, the current Demo's pipeline, its Render Jobs -----------------------------------
 // The list is newest first, but the worker renders the oldest Demo in rendering first (maps first).
@@ -193,11 +278,10 @@ function renderNow(data) {
 
   const elapsed = document.getElementById("elapsed");
   clearInterval(elapsedTimer);
-  elapsed.hidden = !data.rendering;
   if (data.rendering) {
     const tick = () => {
       const s = Math.max(0, Math.floor(Date.now() / 1000 - data.rendering.started_at));
-      elapsed.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+      elapsed.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} and counting`;
     };
     tick();
     elapsedTimer = setInterval(tick, 1000);
@@ -207,15 +291,37 @@ function renderNow(data) {
   document.getElementById("current").hidden = !d;
   document.getElementById("now-file").textContent = d ? `#${d.id} ${d.map || ""}` : "";
   if (!d) return;
-  const {index, frac} = progressOf(d, overallOf(data));
-  const rail = document.getElementById("rail");
-  rail.className = "rail" + (d.state === "rendering" && data.rendering ? " live" : "");
-  rail.firstElementChild.style.width = (frac * 100) + "%";
-  [...track.querySelectorAll(".st")].forEach((st, i) => {
-    st.className = "st" + (i < index ? " done" : i === index ? (d.state === "failed" ? " fail" : " now") : "");
-    st.setAttribute("aria-current", i === index ? "step" : "false");
+  const {index} = progressOf(d, overallOf(data));
+  const live = d.state === "rendering" && !!data.rendering, overall = overallOf(data);
+  [...strip.children].forEach((mini, i) => {
+    const cls = i < index ? "mini d" : i === index ? (d.state === "failed" ? "mini x" : "mini n" + (live ? " live" : "")) : "mini";
+    if (mini.className !== cls) mini.className = cls;
+    mini.setAttribute("aria-current", i === index ? "step" : "false");
   });
+  placeBuddy(strip.children[index], d.state === "failed" ? "problem" : "rendering", live && overall != null ? overall : null);
   sync(document.getElementById("jobs"), d.jobs, j => j.perspective, jobPill);
+}
+
+// Nugget's head on the panel of the strip he is at, and how far its render has got when it says.
+let buddy = null, buddyMood = "";
+function placeBuddy(panel, mood, overall) {
+  if (!panel) return;
+  if (mood !== buddyMood) {
+    buddyMood = mood;
+    const t = document.createElement("template");
+    t.innerHTML = NUGGET.head(mood);
+    buddy?.remove();
+    buddy = t.content.firstElementChild;
+  }
+  if (buddy.parentElement !== panel) panel.appendChild(buddy);
+  let bar = panel.querySelector(".mbar");
+  document.querySelectorAll("#strip .mbar").forEach(b => { if (b !== bar || overall === null) b.remove(); });
+  if (overall === null) return;
+  if (!bar || !bar.isConnected) {
+    panel.insertAdjacentHTML("beforeend", '<i class="mbar" aria-hidden="true"><i></i></i>');
+    bar = panel.querySelector(".mbar");
+  }
+  bar.firstElementChild.style.width = (Math.min(1, Math.max(0, overall)) * 100).toFixed(1) + "%";
 }
 
 // --- In progress ------------------------------------------------------------------------------------------
@@ -228,16 +334,16 @@ function demoCard(d) {
   const {frac} = progressOf(d);       // not the live progress: a card whose HTML changes flashes, Sequence by Sequence
   const going = deleted.has(d.id), asking = askingDelete.has(d.id) && !going;
   const label = going ? "Deleting…" : d.state === "failed" ? "Failed" : STAGE_LABEL[STAGES.indexOf(d.state)] || d.state;
-  const color = going ? "#8F8F8F" : d.state === "failed" ? "#FF8A3D" : d.state === "rendering" ? "#FFB27A" : "#D6D3CE";
+  const color = going ? "#8F857A" : d.state === "failed" ? "#FF8A3D" : d.state === "rendering" ? "#FFB27A" : "#D6CBBE";
   const bar = d.state === "failed" ? "pbar fail" : d.state === "rendering" && !going ? "pbar live" : "pbar";
   // A joined Demo is in Reels already, past deleting from here.
   const bin = going || d.state === "joined" ? '<span class="nobin"></span>' :
     `<button class="del" data-delete="${+d.id}" aria-expanded="${asking}" aria-label="Delete ${demoName(d)}" title="Delete">${ICON.bin}</button>`;
   return `<div class="dcard">
     <div class="top"><span class="maptile">${mapAbbr(d.map || "?")}</span>
-      <span style="flex-grow:1;min-width:0"><span style="display:block;font-weight:600;font-size:14px">${esc(d.map || "Reading the Demo…")} <span style="font-weight:400;color:#8F8F8F;font-family:var(--mono);font-size:12px">#${+d.id}</span></span>
+      <span style="flex-grow:1;min-width:0"><span class="dname">${esc(d.map || "Reading the Demo…")} <em>#${+d.id}</em></span>
         <span class="${bar}" style="display:block;margin-top:6px" aria-hidden="true"><i data-w="${(frac * 100).toFixed(1)}%"></i></span></span>
-      <span style="font-size:13px;font-weight:600;color:${color};width:72px;text-align:right">${esc(label)}</span>${bin}</div>
+      <span class="dstate" style="color:${color}">${esc(label)}</span>${bin}</div>
     ${asking ? `<div class="ask"><span>Delete ${demoName(d)}? ${d.state === "rendering" ? "Its render stops, and its" : "Its"} download and clips are removed.</span>
       <div class="acts"><button class="ghost sm" data-delete-no="${+d.id}">Keep</button><button class="primary sm" data-delete-yes="${+d.id}">Delete</button></div></div>` : ""}
     ${d.error ? `<div class="err"><span>${esc(d.error)}</span>${d.retry && !going ? `<button class="primary sm" data-retry="${+d.id}">Retry</button>` : ""}</div>` : ""}
@@ -296,23 +402,23 @@ function left(iso) {
 }
 const GRAB_WORDS = [["5k", "ACE", "b-ace"], ["4k", "4K", "b-4k"], ["3k", "3K", "b-3k"]];
 function grabRow(r) {
-  const days = (new Date(r.expires_at) - Date.now()) / 86400000, soon = days <= 3;
+  const hours = (new Date(r.expires_at) - Date.now()) / 3600000, days = hours / 24, soon = days <= 3;
   const hl = GRAB_WORDS.filter(([k]) => r.highlights[k]).map(([k, w, c]) =>
-    `<span class="badge ${c}" style="font-size:12px;padding:0 7px">${r.highlights[k] > 1 ? r.highlights[k] + "× " : ""}${w}</span>`).join("");
+    `<span class="badge ${c}">${r.highlights[k] > 1 ? r.highlights[k] + "× " : ""}${w}</span>`).join("");
   const act = opened.has(r.id) ? '<span class="wait"><i></i><i></i><i></i>Waiting</span>'
-    : `<a class="primary sm" href="${esc(r.url)}" target="_blank" rel="noopener" data-open="${esc(r.id)}">Open</a>`;
-  return `<div class="mrow"><span class="maptile" style="width:36px;height:36px;font-size:14px">${mapAbbr(r.map)}</span>
-    <span style="flex-grow:1;min-width:0"><span style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><b style="font-size:14px">${esc(r.map)}</b>${hl}</span>
-      <span style="display:block;font-size:12px;color:${soon ? "#FFB27A" : "#9A9A9A"}">Link expires in ${left(r.expires_at)}</span>
-      <span class="life${soon ? " soon" : ""}" style="display:block"><i data-w="${Math.max(2, Math.min(100, days / 30 * 100)).toFixed(1)}%"></i></span></span>
-    ${act}</div>`;
+    : `<a class="primary dark sm" href="${esc(r.url)}" target="_blank" rel="noopener" data-open="${esc(r.id)}">Open</a>`;
+  return `<article class="wanted"><div class="w">Wanted</div>
+    <div class="mid"><span class="m">${esc(r.map)}</span><span class="r">${hl}</span><span class="go">${act}</span></div>
+    <div class="e${soon ? " soon" : ""}">Link expires in ${left(r.expires_at)}</div>
+    <span class="life${soon ? " soon" : ""}" style="display:block"><i data-w="${Math.max(2, Math.min(100, days / 30 * 100)).toFixed(1)}%"></i></span>
+    ${hours <= 24 ? '<span class="stamp">Last call</span>' : ""}</article>`;
 }
 
 function renderGrab() {
   const pending = pendingRows(grabRows).sort((a, b) => a.expires_at.localeCompare(b.expires_at));
   setNavCount(pending.length);
   const box = document.getElementById("grab");
-  if (!pending.length) { box.innerHTML = '<p class="empty" style="padding:18px 0 8px">All caught up.</p>'; box._ready = false; }
+  if (!pending.length) { box.innerHTML = `<div class="empty nug-empty" style="padding:10px 0 6px">${NUGGET.head("idle")}<span>All caught up. Go queue.</span></div>`; box._ready = false; }
   else sync(box, pending.slice(0, 3), r => r.id, grabRow);
   document.getElementById("grab-note").hidden = !pending.length;
 }
@@ -499,11 +605,10 @@ function renderStatus(data) {
 
 function renderIntro() {
   if (!lastStatus) return;
-  document.getElementById("greet").textContent = greeting();
+  renderStage(lastStatus);
   const pending = pendingRows(grabRows).length, n = lastStatus.demos.length;
-  document.getElementById("intro").textContent = lastStatus.problems.length
-    ? "Nothing renders until the problems below are fixed."
-    : `${pending ? plural(pending, "Demo") + " to grab" : "No Demos to grab"}${n ? ` and ${n} in progress.` : ". Nothing in progress."}`;
+  document.getElementById("intro").textContent =
+    `${pending ? plural(pending, "Demo") + " to grab" : "No Demos to grab"}${n ? ` and ${n} in progress.` : ". Nothing in progress."}`;
 }
 
 function stopPolling() {

@@ -86,7 +86,9 @@ _MATCH_ID_PATTERN = r"1-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 _CHECKSUM_PATTERN = r"[0-9a-f]{1,16}"         # as csda writes it: hex without its leading zeros
 # Flask endpoint names (not paths) reachable from another device (spec: Reach from other devices).
 _PHONE_ENDPOINTS = frozenset({"demos_page", "demos_json", "demos_action", "app_css", "app_js", "touches_css",
-                              "touches_js"})
+                              "touches_js", "nugget_js", "font"})
+# The fonts the pages load from /fonts/ (their licences sit next to them and are not served).
+_FONTS = frozenset({"Bangers.woff2", "HankenGrotesk.woff2"})
 
 
 class _MatchIdConverter(BaseConverter):
@@ -793,6 +795,16 @@ def create_app(ctx: WebContext) -> Flask:
     @app.get("/touches.js")
     def touches_js():
         return Response((PAGES_DIR / "touches.js").read_bytes(), mimetype="text/javascript")
+
+    @app.get("/nugget.js")
+    def nugget_js():
+        return Response((PAGES_DIR / "nugget.js").read_bytes(), mimetype="text/javascript")
+
+    @app.get("/fonts/<name>")
+    def font(name: str):
+        if name not in _FONTS:
+            return Response(status=404)
+        return Response((PAGES_DIR / "fonts" / name).read_bytes(), mimetype="font/woff2")
 
     @app.post("/api/window")
     def api_window():

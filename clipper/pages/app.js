@@ -84,6 +84,8 @@ function toast(html, ms = 5200) {
   el.className = "toast";
   el.setAttribute("role", "status");
   el.innerHTML = html;
+  // Nugget brings the news (nugget.js): worried for a problem, otherwise all eyes.
+  if (typeof NUGGET !== "undefined") el.insertAdjacentHTML("afterbegin", NUGGET.head(html.startsWith(ICON.info) ? "problem" : "rendering"));
   document.body.appendChild(el);
   setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 400); }, ms);
 }

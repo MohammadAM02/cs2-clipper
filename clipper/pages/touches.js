@@ -83,16 +83,17 @@ function paintGlow() {
 addEventListener("clipper:summary", e => { renderingMap = e.detail.rendering ? e.detail.map || "" : null; paintGlow(); });
 addEventListener("clipper:status", e => { renderingMap = e.detail.rendering ? e.detail.rendering.map || "" : null; paintGlow(); });
 
-// --- the Ace moment: a stamp, a burst of shards and a toast, only for a new Ace --------------------------------
+// --- the Ace moment: Nugget crowing by an ACE!! burst, shards and a toast, only for a new Ace --------------------
 const SHARDS = [[-290, -170, 200, "#FF5500"], [260, -190, -160, "#F2EFEA"], [-330, 70, 320, "#FFB27A"], [310, 100, -280, "#FF5500"],
   [-90, -260, 120, "#F2EFEA"], [140, -280, -220, "#FF8A3D"], [-220, 210, 260, "#FF5500"], [240, 240, -300, "#F2EFEA"],
   [0, 290, 180, "#FFB27A"], [360, -20, 90, "#FF5500"]];
 function aceMoment(ace, count) {
   const text = count > 1 ? `${count} new Aces are in your Reels` : `${ace.map} Ace is in your Reels`;
   toast(`${ICON.check}<span>${esc(text)}</span>${ace.reel !== null ? `<a class="primary dark sm" href="/reels?play=${+ace.reel}">Watch</a>` : ""}`, 6500);
+  dispatchEvent(new CustomEvent("clipper:ace", {detail: {map: ace.map, round: ace.round, count}}));     // Nugget crows on Status
   blip("ace");
   if (quiet() || stillness()) return;                  // quiet hours and calm mode get the toast alone
-  const parts = [el("div", "t-acefl"), el("div", "t-acest", "ACE"),
+  const parts = [el("div", "t-acefl"), el("div", "t-acest", NUGGET.burst("ACE!!")), el("div", "t-acenug", NUGGET.svg("ace", "Nugget crowing")),
     ...SHARDS.map(([dx, dy, r, c]) => { const s = el("i", "t-shard"); s.style.cssText = `--dx:${dx}px;--dy:${dy}px;--r:${r}deg;background:${c}`; return s; })];
   parts.forEach(p => { p.setAttribute("aria-hidden", "true"); document.body.appendChild(p); });
   setTimeout(() => parts.forEach(p => p.remove()), 2800);
@@ -104,7 +105,7 @@ function watchAces() {
     try {
       const aces = [];
       (await getJSON("/api/reels")).forEach(m => m.highlights.forEach(h => {
-        if (["ACE", "5K"].includes(String(h.type).toUpperCase())) aces.push({key: `${m.checksum}-${h.round}`, map: m.map, reel: h.player ?? h.enemy});
+        if (["ACE", "5K"].includes(String(h.type).toUpperCase())) aces.push({key: `${m.checksum}-${h.round}`, map: m.map, round: h.round, reel: h.player ?? h.enemy});
       }));
       if (seen === null) seen = aces.map(a => a.key);
       const fresh = aces.filter(a => !seen.includes(a.key));

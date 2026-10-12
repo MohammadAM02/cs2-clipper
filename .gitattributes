@@ -7,3 +7,4 @@
 *.dem binary
 *.zst binary
 *.mp4 binary
+*.woff2 binary

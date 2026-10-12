@@ -25,10 +25,11 @@ from clipper.faceit import FaceitError
 from clipper.faceit_oauth import OAuthError
 from clipper.index import Index
 from clipper.model import FaceitStats, Highlight, MatchInfo
+from clipper.packaged import PAGE_FILES
 from clipper.render import RenderProgress
 from clipper.settings import FIELDS, KEY_FIELD, SECRET_FIELD, STORED_KEY, Loaded, SettingsStore
 from clipper.state import Rendering, Snapshot
-from clipper.web import MARKER_HEADER, STRIP_FRAMES, WebContext, WebServer, create_app
+from clipper.web import MARKER_HEADER, PAGES_DIR, STRIP_FRAMES, WebContext, WebServer, create_app
 
 NOW = datetime(2026, 9, 25, 20, 0, tzinfo=timezone.utc)
 FIRST = "1-00000000-0000-0000-0000-000000000001"
@@ -1654,6 +1655,34 @@ def test_check_for_demos_says_why_not_with_409(tmp_path):
     response = pc_post(app.test_client(), "/api/faceit/check", headers=MARKED)
 
     assert (response.status_code, response.get_json()) == (409, {"error": "Match alerts are off"})
+
+
+# --- Nugget and the comic look: nugget.js and the two fonts the pages use ---------------------------------
+
+
+def test_nugget_and_the_fonts_are_served_to_the_pc_and_the_phone_like_the_shared_files(client):
+    for path, mimetype in (("/nugget.js", "text/javascript"), ("/fonts/Bangers.woff2", "font/woff2"),
+                           ("/fonts/HankenGrotesk.woff2", "font/woff2")):
+        response = pc_get(client, path)
+        assert (response.status_code, response.mimetype) == (200, mimetype), path
+        assert response.data == (PAGES_DIR / path.lstrip("/")).read_bytes(), path
+        assert phone_get(client, path).status_code == 200, path
+
+
+def test_only_the_two_fonts_come_out_of_the_fonts_folder(client):
+    for path in ("/fonts/Bangers-OFL.txt", "/fonts/HankenGrotesk-OFL.txt", "/fonts/Saira.woff2"):
+        assert pc_get(client, path).status_code == 404, path
+
+
+def test_every_page_loads_nugget_after_the_shared_script(client):
+    for page in ("/status", "/demos", "/reels", "/settings"):
+        html = pc_get(client, page).get_data(as_text=True)
+        assert html.index('src="/app.js"') < html.index('src="/nugget.js"'), page
+
+
+def test_the_exe_carries_nugget_and_the_fonts():
+    for name in ("nugget.js", "fonts/Bangers.woff2", "fonts/HankenGrotesk.woff2"):
+        assert name in PAGE_FILES, name
 
 
 # --- every route Tasks 10-14 added is PC-only: a foreign Host is refused on all of them -------------

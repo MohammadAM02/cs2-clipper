@@ -3,6 +3,27 @@
 What changed in each release of CS2 Clipper. The release workflow publishes a version's section as the notes of
 its GitHub Release, and the app shows those notes on the Status page when it offers that version.
 
+## 0.7.0
+
+### New look: Nugget, and pages like a comic
+
+CS2 Clipper has a mascot. **Nugget** is a war-correspondent chicken: CS maps are full of chickens, and this one lived,
+put on a PRESS helmet with a camera strapped to it, and films your Highlights. The pages around him are drawn like a
+comic: ink borders, halftone dots, caption boxes, speech bubbles and sound effects.
+
+- **Status** opens on a comic panel: Nugget on a rooftop, saying in a speech bubble what he is doing. He films while a
+  render runs (his eye follows your pointer), sleeps on his egg when there is nothing to do, loses feathers when
+  something needs you, and crows when an Ace lands. The sky changes with him: dusk while he films, night after 8 pm,
+  red when something is wrong.
+- The pipeline is a strip of seven panels, with Nugget's head on the step a Demo is at and how far its render has got.
+- **Demos to grab** on Status are Wanted posters, stamped **Last call** when the link runs out within a day.
+- **Reels** tag each Highlight with a burst: ACE!, 4K!, 3K!.
+- Nugget also brings the toasts, explains Set up and Update, sums up Demos to grab, Reels and Settings, sleeps on his
+  egg in an empty list, and joins the Ace moment with an ACE!! burst. Checks are **The crew** now, and the log is
+  **Previously…**.
+- Titles, tabs and buttons are lettered in Bangers and the text is set in Hanken Grotesk. Both fonts ship with the
+  app now, under the SIL Open Font License.
+
 ## 0.6.0
 
 ### New: small touches

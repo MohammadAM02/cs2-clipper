@@ -6,7 +6,7 @@ from PIL import Image
 from clipper.icon import mark, write_ico
 
 CLEAR = (0, 0, 0, 0)
-TILE = (25, 27, 31, 255)      # #191b1f
+TILE = (20, 20, 20, 255)      # #141414, the pages' tile
 ORANGE = (255, 85, 0, 255)    # #ff5500
 
 
@@ -14,9 +14,9 @@ def test_the_tray_mark_is_an_orange_play_triangle_on_a_dark_tile_with_clear_corn
     image = mark(64)
 
     assert image.size == (64, 64)
-    assert image.getpixel((0, 0)) == CLEAR       # outside the rounded corner: the taskbar shows through
+    assert image.getpixel((0, 0)) == CLEAR       # outside the cut corner: the taskbar shows through
     assert image.getpixel((8, 32)) == TILE       # on the tile, left of the triangle
-    assert image.getpixel((32, 32)) == ORANGE    # inside the triangle
+    assert image.getpixel((24, 32)) == ORANGE    # inside the triangle, clear of the Slice's cut
 
 
 def test_a_larger_mark_is_the_same_drawing_scaled_up():

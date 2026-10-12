@@ -5,9 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Status</title>
 <link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/touches.css">
 </head>
 <body>
 <script src="/app.js"></script>
+<script src="/touches.js" defer></script>
 <script>renderNav("/status");</script>
 <main>
   <section class="greet rise">
@@ -492,6 +494,7 @@ function renderStatus(data) {
   document.getElementById("check-sum").textContent = passing === data.checks.length ? `All ${passing} passing` : `${passing} of ${data.checks.length} passing`;
   renderDemos(data.demos);
   renderIntro();
+  dispatchEvent(new CustomEvent("clipper:status", {detail: data}));     // the map glow and the loading lines (touches.js)
 }
 
 function renderIntro() {

@@ -265,6 +265,7 @@ class App:
             update_status=self.updates.status,
             start_update=self.start_update,
             delete_demo=self.delete_demo,
+            check_faceit=self.check_faceit,
         )
         try:
             self._web = web.WebServer(web.create_app(ctx), self.settings.current().config.page_port,
@@ -412,6 +413,16 @@ class App:
                 demo_id, lambda: delete_demo(index, self.settings.current().config, demo_id))
         finally:
             index.close()
+
+    # --- Check for demos (the pages' quick wheel and console) ------------------------------------------
+
+    def check_faceit(self) -> str | None:
+        """Asks Match Alerts to look for new FACEIT matches on the worker's next tick. Why they cannot, or None."""
+        worker = self._worker
+        alerts = worker.services.alerts if worker is not None else None
+        if alerts is None:
+            return "Match alerts are off. They need your FACEIT nickname and key in Settings."
+        return alerts.check_now()
 
     # --- the worker thread -----------------------------------------------------------------------
 

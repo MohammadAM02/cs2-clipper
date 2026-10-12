@@ -225,6 +225,7 @@ class FakeWorker:
     def __init__(self):
         self.ticks = 0
         self.raise_next = False
+        self.services = types.SimpleNamespace(alerts=None)
 
     def tick(self) -> None:
         self.ticks += 1
@@ -876,6 +877,45 @@ def test_the_update_routes_are_answered_by_the_apps_updates(windowed):
 
     assert response.status_code == 202 and windowed.app.updates.starts == 1
     assert client.get("/api/update", base_url=PC).get_json()["running"] is True
+
+
+class FakeAlerts:
+    def __init__(self, refused: str | None = None):
+        self.asked, self.refused = 0, refused
+
+    def check_now(self) -> str | None:
+        self.asked += 1
+        return self.refused
+
+
+def test_check_for_demos_asks_the_workers_match_alerts(world):
+    world.app.step(world.index)
+    alerts = world.build.workers[0].services.alerts = FakeAlerts()
+
+    assert world.app.check_faceit() is None
+    assert alerts.asked == 1
+
+
+def test_check_for_demos_passes_on_why_match_alerts_cannot(world):
+    world.app.step(world.index)
+    world.build.workers[0].services.alerts = FakeAlerts(refused="Match alerts are off: FACEIT rejected the key")
+
+    assert world.app.check_faceit() == "Match alerts are off: FACEIT rejected the key"
+
+
+def test_check_for_demos_says_alerts_are_off_without_a_worker_or_match_alerts(world):
+    assert world.app.check_faceit().startswith("Match alerts are off")       # no worker yet
+    world.app.step(world.index)
+    assert world.app.check_faceit().startswith("Match alerts are off")       # a worker without match alerts
+
+
+def test_the_check_route_is_answered_by_the_apps_match_alerts(windowed):
+    windowed.app.start_web()
+    client = windowed.servers[0].flask_app.test_client()
+
+    response = client.post("/api/faceit/check", base_url=PC, headers={web.MARKER_HEADER: "1"})
+
+    assert response.status_code == 409 and response.get_json()["error"].startswith("Match alerts are off")
 
 
 def test_the_set_up_routes_are_answered_by_the_apps_setup(windowed):

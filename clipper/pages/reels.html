@@ -5,9 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Reels</title>
 <link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/touches.css">
 </head>
 <body>
 <script src="/app.js"></script>
+<script src="/touches.js" defer></script>
 <script>renderNav("/reels");</script>
 <main>
   <section class="rise" style="display:flex;align-items:flex-end;gap:24px;flex-wrap:wrap">
@@ -46,7 +48,9 @@ function rounds(score) {
 
 function highlightRow(h) {
   const tags = reasonTags(h).map(t => `<span class="tag">${esc(t)}</span>`).join("");
-  return `<div class="hl" data-round="${+h.round}">
+  // What the hover scrub flicks through (touches.js): your view's Reel, else the Enemy POV's.
+  const scrub = h.player ?? h.enemy, secs = h.player !== null ? h.player_s : h.enemy_s;
+  return `<div class="hl" data-round="${+h.round}"${scrub !== null ? ` data-scrub="${+scrub}" data-secs="${+secs || 0}"` : ""}>
     <span class="rd">Round ${+h.round}</span>${badge(h.type)}
     <span class="tags">${tags}</span>
     <span class="povs" role="group" aria-label="Watch round ${+h.round} from">

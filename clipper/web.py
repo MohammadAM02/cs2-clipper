@@ -71,12 +71,22 @@ KEEP_DECIDED = timedelta(hours=24)
 IN_PIPELINE = ("spotted", "unpacked", "analyzed", "scored", "rendering", "joined")
 NOT_LISTED = ("done", "skipped")               # Status's Demos list leaves these out (spec: Pages, Status)
 PERSPECTIVES = ("player", "enemy")
+TOUCHES = ("ui_sounds", "map_glow", "calm_mode", "keyboard_shortcuts")    # Settings -> Touches, for touches.js
+WEEK = timedelta(days=7)                       # what the scoreboard (hold Tab) covers
+STRIP_FRAMES = 12                              # frames in a Reel's hover scrub strip; touches.js steps through as many
+STRIP_FRAME = (320, 180)                       # each one's size: the size of the scrub (touches.css, .t-scrub)
+# The scoreboard's Status column: a FACEIT match by its own state, a grabbed one by its Demo's.
+_MATCH_STATUS = {"ready": "To grab", "announced": "To grab", "waiting": "Waiting for FACEIT", "skipped": "Skipped",
+                 "expired": "Link expired", "no_highlights": "No Highlights"}
+_DEMO_STATUS = {"spotted": "Spotted", "unpacked": "Unpacked", "analyzed": "Analyzed", "scored": "Scored",
+                "rendering": "Rendering", "joined": "Joined", "done": "Done", "failed": "Failed", "skipped": "Skipped"}
 
 _WRITE_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 _MATCH_ID_PATTERN = r"1-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
 _CHECKSUM_PATTERN = r"[0-9a-f]{1,16}"         # as csda writes it: hex without its leading zeros
 # Flask endpoint names (not paths) reachable from another device (spec: Reach from other devices).
-_PHONE_ENDPOINTS = frozenset({"demos_page", "demos_json", "demos_action", "app_css", "app_js"})
+_PHONE_ENDPOINTS = frozenset({"demos_page", "demos_json", "demos_action", "app_css", "app_js", "touches_css",
+                              "touches_js"})
 
 
 class _MatchIdConverter(BaseConverter):
@@ -151,6 +161,43 @@ def status_demos(index: Index) -> list[dict]:
     return demos
 
 
+def week_rows(index: Index, now: datetime) -> list[dict]:
+    """The scoreboard every page shows while Tab is held: each match of the last 7 days, newest first. A FACEIT
+    match brings its K–D and its rounds of 3+ Frags, and once grabbed shows its Demo's state; a Demo whose match
+    FACEIT never told the app about (Match alerts off, a Demo dropped in by hand) is a row of its own, with the
+    Highlights picked from it and no K–D."""
+    since = now - WEEK
+    rows, linked = [], set()
+    for f in index.faceit_matches_since(since):
+        if not f["map"]:                          # FACEIT has not sent its stats yet
+            continue
+        if f["demo_checksum"]:
+            linked.add(f["demo_checksum"])
+        counts = json.loads(f["highlights"])
+        status = (_DEMO_STATUS.get(f["demo_state"], "Grabbed") if f["state"] == "grabbed"
+                  else _MATCH_STATUS.get(f["state"], f["state"]))
+        rows.append({"map": map_label(f["map"]), "played_at": f["finished_at"],
+                     "score": f"{f['team_score']}–{f['opponent_score']}", "won": bool(f["won"]),
+                     "kd": f"{f['kills']}–{f['deaths']}", "highlights": sum(counts.values()),
+                     "ace": counts.get("5k", 0) > 0, "status": status, "tone": _tone(status),
+                     "match_id": f["match_id"], "demo_id": f["demo_id"]})
+    for m in index.matches_played_since(since):
+        if m["checksum"] in linked:
+            continue
+        status = _DEMO_STATUS.get(m["demo_state"], "")
+        rows.append({"map": map_label(m["map"]), "played_at": m["played_at"],
+                     "score": f"{m['team_score']}–{m['opponent_score']}", "won": m["result"] == "win", "kd": None,
+                     "highlights": m["picked"], "ace": m["aces"] > 0, "status": status, "tone": _tone(status),
+                     "match_id": None, "demo_id": m["demo_id"]})
+    rows.sort(key=lambda row: datetime.fromisoformat(row["played_at"]), reverse=True)
+    return rows
+
+
+def _tone(status: str) -> str:
+    """How the scoreboard colours a Status: done, out of the way, or plain."""
+    return "done" if status == "Done" else "off" if status in ("Skipped", "Link expired") else ""
+
+
 def field_dict(f: Field) -> dict:
     """One `FIELDS` entry as JSON for the Settings page (spec: Pages, Settings)."""
     return {"name": f.name, "group": f.group, "label": f.label, "kind": f.kind,
@@ -194,7 +241,8 @@ def reels_row(index: Index, match: sqlite3.Row, config: Config) -> dict:
     `rendering` (asked for, not done yet) and `can_render` (see `_render_options`) (spec: Pages, Reels)."""
     highlights = [
         {"round": h["round"], "type": h["type"], "reasons": json.loads(h["reasons"]),
-         "player": h["player_reel_id"], "enemy": h["enemy_reel_id"]}
+         "player": h["player_reel_id"], "enemy": h["enemy_reel_id"],
+         "player_s": h["player_s"], "enemy_s": h["enemy_s"]}             # how long each runs, for the hover scrub
         for h in index.match_reels(match["checksum"])
     ]
     rendering, refusals = _render_options(index, config, match["checksum"])
@@ -225,6 +273,32 @@ def reel_frame_file(video: Path, ffmpeg: str) -> Path | None:
         part.unlink(missing_ok=True)
         return frame if frame.is_file() else None
     return frame
+
+
+def reel_strip_file(video: Path, ffmpeg: str, seconds: float) -> Path | None:
+    """The Reels page's hover scrub for `video`: STRIP_FRAMES frames from across its `seconds`, side by side in one
+    JPEG, cut on the first request and kept beside it like its frame; None when ffmpeg cannot cut one. Each frame
+    is an input of its own, seeked to its time, so ffmpeg decodes a few frames per input, never the whole Reel; a
+    frame that is not 16:9 is shown whole, with bars."""
+    strip = video.with_suffix(".strip.jpg")
+    if strip.is_file() and strip.stat().st_mtime >= video.stat().st_mtime:
+        return strip
+    width, height = STRIP_FRAME
+    inputs, frames = [], []
+    for i in range(STRIP_FRAMES):
+        inputs += ["-ss", f"{seconds * (i + 0.5) / STRIP_FRAMES:.3f}", "-i", str(video)]
+        frames.append(f"[{i}:v]scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                      f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1[f{i}]")
+    graph = ";".join(frames) + ";" + "".join(f"[f{i}]" for i in range(STRIP_FRAMES)) + f"hstack=inputs={STRIP_FRAMES}"
+    part = video.with_name(f"{video.stem}.{threading.get_ident()}.strip.part.jpg")
+    try:
+        subprocess.run([ffmpeg, "-y", *inputs, "-filter_complex", graph, "-frames:v", "1", "-q:v", "5", str(part)],
+                       capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+        os.replace(part, strip)      # no `part` at all when ffmpeg cut nothing
+    except (OSError, subprocess.SubprocessError):
+        part.unlink(missing_ok=True)
+        return strip if strip.is_file() else None
+    return strip
 
 
 def _faceit_not_set_up(token: str, state: str) -> str:
@@ -273,6 +347,7 @@ class WebContext:
     update_status: Callable[[], dict] = _no_update               # update.Updates.status
     start_update: Callable[[], str | None] = lambda: None        # why it was not started, or None
     delete_demo: Callable[[int], str | None] = lambda demo_id: None   # "deleted", "deferred" or None: no such Demo
+    check_faceit: Callable[[], str | None] = lambda: "Match alerts are off"   # why not, or None: they look soon
 
 
 def _client_address() -> str:
@@ -361,9 +436,28 @@ def create_app(ctx: WebContext) -> Flask:
         return _no_store(jsonify(
             summary=summary(snapshot),
             rendering=snapshot.rendering is not None,
+            map=map_label(snapshot.rendering.map_name) if snapshot.rendering is not None else None,   # the glow's
             paused_by=snapshot.paused_by,
             problems=list(snapshot.problems),
         ))
+
+    @app.get("/api/touches")
+    def api_touches():
+        """Settings' Touches switches, which every page's touches.js asks for. Not `/api/settings`: that one mints a
+        new FACEIT sign-in state each time it is asked."""
+        config = ctx.load_settings().config
+        return _no_store(jsonify({name: getattr(config, name) for name in TOUCHES}))
+
+    @app.get("/api/week")
+    def api_week():
+        """The scoreboard every page shows while Tab is held (touches.js), with its totals."""
+        index = Index(ctx.index_path)
+        try:
+            rows = week_rows(index, ctx.clock())
+        finally:
+            index.close()
+        return _no_store(jsonify(rows=rows, matches=len(rows), highlights=sum(row["highlights"] for row in rows),
+                                 aces=sum(row["ace"] for row in rows)))
 
     @app.get("/api/log")
     def api_log():
@@ -491,6 +585,40 @@ def create_app(ctx: WebContext) -> Flask:
             return Response(status=404)
         return send_file(frame, mimetype="image/jpeg", conditional=True)
 
+    @app.get("/reels/<int:reel_id>.strip.jpg")
+    def reel_strip(reel_id: int):
+        """The frames the Reels page flicks through while the pointer moves across a Highlight (touches.js)."""
+        index = Index(ctx.index_path)
+        try:
+            row = index.reel(reel_id)
+        finally:
+            index.close()
+        if row is None:
+            return Response(status=404)
+        config = ctx.load_settings().config
+        video = config.load_path(row["path"])
+        if not video.is_file():
+            return Response(status=404)
+        strip = reel_strip_file(video, config.ffmpeg, row["duration_s"])
+        if strip is None:
+            return Response(status=404)
+        return send_file(strip, mimetype="image/jpeg", conditional=True)
+
+    @app.post("/api/reels/open-folder")
+    def api_open_reels_folder():
+        """The folder every match's Reels are in (the quick wheel, the console's `open reels`); 404 until a Reel
+        has made it."""
+        config = ctx.load_settings().config
+        folder = config.library_dir / "videos" if config.data_root is not None else None
+        if folder is None or not folder.is_dir():
+            return Response(status=404)
+        try:
+            ctx.open_folder(folder)
+        except OSError as exc:
+            log.warning("could not open %s: %s", folder, exc)
+            return Response(status=404)
+        return Response(status=204)
+
     @app.post("/api/reels/<checksum:checksum>/open-folder")
     def api_open_folder(checksum: str):
         """The folder passed to `ctx.open_folder` always comes from the index, never from the
@@ -612,6 +740,17 @@ def create_app(ctx: WebContext) -> Flask:
             return _no_store(response)
         return _no_store(jsonify(**found))
 
+    @app.post("/api/faceit/check")
+    def api_faceit_check():
+        """The quick wheel's Check for demos. 202: Match Alerts look for new FACEIT matches on the worker's next tick
+        (once CS2 has closed). 409 says why they cannot."""
+        refused = ctx.check_faceit()
+        if refused:
+            response = jsonify(error=refused)
+            response.status_code = 409
+            return _no_store(response)
+        return Response(status=202)
+
     @app.get("/demos")
     def demos_page():
         return _no_store(Response((PAGES_DIR / "demos.html").read_bytes(), mimetype="text/html"))
@@ -646,6 +785,14 @@ def create_app(ctx: WebContext) -> Flask:
     @app.get("/app.js")
     def app_js():
         return Response((PAGES_DIR / "app.js").read_bytes(), mimetype="text/javascript")
+
+    @app.get("/touches.css")
+    def touches_css():
+        return Response((PAGES_DIR / "touches.css").read_bytes(), mimetype="text/css")
+
+    @app.get("/touches.js")
+    def touches_js():
+        return Response((PAGES_DIR / "touches.js").read_bytes(), mimetype="text/javascript")
 
     @app.post("/api/window")
     def api_window():

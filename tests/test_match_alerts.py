@@ -265,3 +265,19 @@ def test_the_first_check_of_a_run_looks_back_30_days_not_from_the_last_check(wor
 
     assert world.titles() == ["1 new match has Highlights"]
     assert world.state(1) == "announced"
+
+
+def test_check_now_asks_faceit_on_the_next_tick_without_waiting_for_cs2_to_close(world):
+    world.tick()                                                  # start-up check: nothing yet
+    world.faceit.add(1, START + timedelta(minutes=10), THREE_K)
+    world.tick(minutes=20)
+    assert world.notices == []                                    # nothing has made it look again
+    assert world.alerts.check_now() is None
+    world.tick(seconds=5)
+    assert world.titles() == ["1 new match has Highlights"]
+
+
+def test_check_now_says_why_once_alerts_are_off(world):
+    world.faceit.error = AuthError("HTTP 401 from FACEIT", 401)
+    world.tick()
+    assert world.alerts.check_now() == "Match alerts are off: FACEIT rejected the key (HTTP 401 from FACEIT)"

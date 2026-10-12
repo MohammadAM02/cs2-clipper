@@ -138,6 +138,7 @@ class MatchAlerts:
         self._stopped = StoppedPlaying(stopped_playing_minutes)
         self._player_id: str | None = None
         self._off = False
+        self._off_reason = ""
         self._first = True                             # the start-up check looks back the full 30 days
         self._check_at: datetime | None = clock()      # the start-up check
         self._recheck_at: datetime | None = None
@@ -177,6 +178,15 @@ class MatchAlerts:
             return
         self._send_summary(now)
         self._send_reminders(now)
+
+    def check_now(self) -> str | None:
+        """The quick wheel's Check for demos: ask FACEIT on the next tick instead of waiting for CS2 to close
+        (while it runs, the check still waits). Why it cannot, or None. Called from a web thread, so it never
+        touches the index, which belongs to the worker's thread."""
+        if self._off:
+            return f"Match alerts are off: {self._off_reason}"
+        self._check_at = self._clock()
+        return None
 
     # --- asking FACEIT --------------------------------------------------------------------------
 
@@ -267,5 +277,5 @@ class MatchAlerts:
 
     def _turn_off(self, reason: str) -> None:
         log.warning("match alerts are off: %s", reason)
-        self._off = True
+        self._off, self._off_reason = True, reason
         self._index.set_flag("alerts_status", f"off: {reason}")

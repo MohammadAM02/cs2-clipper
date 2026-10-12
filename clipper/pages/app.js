@@ -35,6 +35,7 @@ const ICON = {
   folder: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
   bin: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="3 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>',
   chev: '<svg class="chev" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>',
+  skip: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/></svg>',
 };
 const BADGE = {ACE: "b-ace", "5K": "b-ace", "4K": "b-4k", "3K": "b-3k", "2K": "b-2k"};
 const badge = type => `<span class="badge ${BADGE[String(type).toUpperCase()] || "b-2k"}">${esc(String(type).toUpperCase())}</span>`;
@@ -219,13 +220,19 @@ function watchDemoCount() {
 }
 
 // Other pages show the summary too once the app has the light /api/summary route (it skips the checks
-// that /api/status runs); without it the pill stays hidden there.
+// that /api/status runs); without it the pill stays hidden there. Each one goes out as a `clipper:summary`
+// event too: the map glow (touches.js) follows the map being rendered.
 async function watchSummary() {
   if (!(await hasRoute("/api/summary"))) return;
   const poll = async () => {
     try {
       const r = await api("/api/summary");
-      if (r.ok) { const s = await r.json(); setNavStatus(s.summary, summaryMode(s)); setSweep(summaryMode(s)); }
+      if (r.ok) {
+        const s = await r.json();
+        setNavStatus(s.summary, summaryMode(s));
+        setSweep(summaryMode(s));
+        dispatchEvent(new CustomEvent("clipper:summary", {detail: s}));
+      }
     } catch (e) { /* ask again */ }
     setTimeout(poll, 4000);
   };

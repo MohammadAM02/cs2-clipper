@@ -57,6 +57,16 @@ def test_the_hud_settings_are_a_group_of_their_own_after_picture():
     assert (hud["player_voices"].label, hud["player_voices"].kind) == ("Player voices", "bool")
 
 
+def test_the_small_touches_are_a_group_of_switches_just_before_app():
+    groups = list(dict.fromkeys(f.group for f in FIELDS))
+    assert groups[groups.index("App") - 1] == "Touches"
+    touches = {f.name: f for f in FIELDS if f.group == "Touches"}
+    assert list(touches) == ["ui_sounds", "map_glow", "calm_mode", "keyboard_shortcuts"]
+    assert [(f.label, f.kind) for f in touches.values()] == [
+        ("UI sounds", "bool"), ("Map glow", "bool"), ("Calm mode", "bool"), ("Keyboard shortcuts", "bool")]
+    assert all(f.help for f in touches.values())
+
+
 # --- defaults() ----------------------------------------------------------------------------------------
 
 
@@ -77,6 +87,8 @@ def test_defaults_match_configs_own_defaults():
     assert values["perspectives"] == cfg.perspectives == "both"
     assert (values["hud"], values["show_xray"], values["show_assists"], values["kill_feed_seconds"],
             values["player_voices"]) == ("killfeed", True, True, 5.0, True)
+    assert (values["ui_sounds"], values["map_glow"], values["calm_mode"], values["keyboard_shortcuts"]) == (
+        False, True, False, True)
     assert values["hlae_exe"] == cfg.hlae_exe == ""
     assert values["match_alerts"] is True
     assert isinstance(values["downloads_dir"], str)
@@ -263,6 +275,10 @@ def test_the_stored_protected_key_loads_as_is_and_a_corrupt_one_falls_back(tmp_p
     ("kill_feed_seconds", 8),
     ("kill_feed_seconds", 1.5),
     ("player_voices", False),
+    ("ui_sounds", True),
+    ("map_glow", False),
+    ("calm_mode", True),
+    ("keyboard_shortcuts", False),
     ("hlae_exe", ""),
     ("hlae_exe", "C:/HLAE/hlae.exe"),
     ("top_n", 25),
@@ -291,6 +307,8 @@ def test_valid_values_pass(name, value):
     ("kill_feed_seconds", 0),
     ("kill_feed_seconds", 31),
     ("player_voices", 0),
+    ("ui_sounds", "on"),
+    ("calm_mode", 1),
     ("hlae_exe", 1),
     ("ffmpeg", ""),
     ("top_n", 0),

@@ -28,7 +28,7 @@ from clipper.model import FaceitStats, Highlight, MatchInfo
 from clipper.render import RenderProgress
 from clipper.settings import FIELDS, KEY_FIELD, SECRET_FIELD, STORED_KEY, Loaded, SettingsStore
 from clipper.state import Rendering, Snapshot
-from clipper.web import MARKER_HEADER, WebContext, WebServer, create_app
+from clipper.web import MARKER_HEADER, STRIP_FRAMES, WebContext, WebServer, create_app
 
 NOW = datetime(2026, 9, 25, 20, 0, tzinfo=timezone.utc)
 FIRST = "1-00000000-0000-0000-0000-000000000001"
@@ -425,7 +425,7 @@ def test_api_summary_is_the_pill_and_never_runs_the_checks(tmp_path):
     assert response.status_code == 200
     assert response.headers["Cache-Control"] == "no-store"
     assert response.get_json() == {"summary": "Rendering Mirage (player view)", "rendering": True,
-                                   "paused_by": None, "problems": []}
+                                   "map": "Mirage", "paused_by": None, "problems": []}
     assert ran == []
 
 
@@ -433,11 +433,12 @@ def test_api_summary_says_idle_paused_and_the_start_up_problems(tmp_path):
     def summary_of(snapshot):
         return pc_get(app_for(tmp_path, snapshot=lambda: snapshot).test_client(), "/api/summary").get_json()
 
-    assert summary_of(Snapshot()) == {"summary": "Idle", "rendering": False, "paused_by": None, "problems": []}
-    assert summary_of(Snapshot(paused_by="you")) == {"summary": "Paused by you", "rendering": False,
+    assert summary_of(Snapshot()) == {"summary": "Idle", "rendering": False, "map": None, "paused_by": None,
+                                      "problems": []}
+    assert summary_of(Snapshot(paused_by="you")) == {"summary": "Paused by you", "rendering": False, "map": None,
                                                      "paused_by": "you", "problems": []}
     assert summary_of(Snapshot(problems=("HLAE is missing", "csda is missing"))) == {
-        "summary": "HLAE is missing (+1 more)", "rendering": False, "paused_by": None,
+        "summary": "HLAE is missing (+1 more)", "rendering": False, "map": None, "paused_by": None,
         "problems": ["HLAE is missing", "csda is missing"]}
 
 
@@ -770,6 +771,7 @@ def test_api_reels_shape(tmp_path, index):
     h = match["highlights"][0]
     assert (h["round"], h["type"], h["reasons"], h["enemy"]) == (8, "4K", ["4k"], None)
     assert isinstance(h["player"], int)
+    assert (h["player_s"], h["enemy_s"]) == (12.5, None)      # how long each Reel runs, for the hover scrub
 
 
 def test_api_reels_refuses_a_phone(client):
@@ -1477,6 +1479,183 @@ def test_faceit_lookup_refuses_a_phone_and_needs_the_marker(tmp_path):
     assert phone_post(client, "/api/faceit/lookup", headers=MARKED, json={"nickname": "x"}).status_code == 403
 
 
+# --- the small touches: touches.css, touches.js and what they ask the app ---------------------------------
+
+THIRD = "1-00000000-0000-0000-0000-000000000003"
+OLD = "1-00000000-0000-0000-0000-000000000004"
+ACE_DUST2 = FaceitStats(map_name="de_dust2", team_score=13, opponent_score=4, won=True, rounds=17, kills=27,
+                        deaths=9, assists=2, adr=121.0, triple_kills=1, penta_kills=1)
+
+
+def test_the_touches_are_served_to_the_pc_and_the_phone_like_the_shared_files(client):
+    for path, mimetype in (("/touches.css", "text/css"), ("/touches.js", "text/javascript")):
+        response = pc_get(client, path)
+        assert (response.status_code, response.mimetype) == (200, mimetype)
+        assert phone_get(client, path).status_code == 200
+
+
+def test_every_page_loads_the_touches_after_the_shared_files(client):
+    for page in ("/status", "/demos", "/reels", "/settings"):
+        html = pc_get(client, page).get_data(as_text=True)
+        assert html.index('href="/app.css"') < html.index('href="/touches.css"'), page
+        assert html.index('src="/app.js"') < html.index('src="/touches.js"'), page
+
+
+def test_the_touches_ask_for_their_four_switches_and_nothing_else(tmp_path):
+    minted = []
+    app = app_for(tmp_path, faceit_login_url=lambda: minted.append(True) or "https://faceit.example/login",
+                  load_settings=lambda: Loaded(Config(ui_sounds=True, calm_mode=True), ()))
+
+    response = pc_get(app.test_client(), "/api/touches")
+
+    assert response.headers["Cache-Control"] == "no-store"
+    assert response.get_json() == {"ui_sounds": True, "map_glow": True, "calm_mode": True, "keyboard_shortcuts": True}
+    assert minted == []          # unlike /api/settings, it never mints a FACEIT sign-in state
+
+
+def test_week_lists_the_last_7_days_newest_first_with_its_totals(tmp_path, index):
+    index.save_faceit_match(THIRD, NOW - timedelta(days=3), "ready", ACE_DUST2, 1.9, ROOM + THIRD)
+    index.skip_match(THIRD, NOW)
+    index.save_faceit_match(OLD, NOW - timedelta(days=8), "no_highlights", THREE_K)       # last week's
+
+    data = pc_get(app_for(tmp_path).test_client(), "/api/week").get_json()
+
+    assert [row["match_id"] for row in data["rows"]] == [SECOND, FIRST, THIRD]
+    assert data["rows"][1] == {
+        "map": "Inferno", "played_at": "2026-09-25T15:00:00+00:00", "score": "13–9", "won": True, "kd": "24–15",
+        "highlights": 3, "ace": False, "status": "To grab", "tone": "", "match_id": FIRST, "demo_id": None,
+    }
+    third = data["rows"][2]
+    assert (third["map"], third["highlights"], third["ace"], third["status"], third["tone"]) == (
+        "Dust2", 2, True, "Skipped", "off")
+    assert (data["matches"], data["highlights"], data["aces"]) == (3, 8, 1)
+
+
+def test_week_shows_a_grabbed_match_once_with_its_demos_state_and_demos_of_its_own(tmp_path, index):
+    name = f"{FIRST}-1-1.dem.zst"
+    grabbed = index.add_demo(name, "a" * 64, Path("E:/cs2clips/demos") / name)
+    index.link_grabbed_matches(NOW)
+    index.save_match(MatchInfo(checksum="abc", map_name="de_inferno", played_at=NOW - timedelta(hours=5),
+                               team_score=13, opponent_score=9))
+    index.advance(grabbed, "rendering", match_checksum="abc")
+    ancient = MatchInfo(checksum="d0d0", map_name="de_ancient", played_at=NOW - timedelta(days=1),
+                        team_score=11, opponent_score=13)
+    index.save_match(ancient)
+    own = _add_demo(index, name="dropped-in.dem.zst", sha="d" * 64)
+    index.advance(own, "done", match_checksum="d0d0")
+    index.save_highlights("d0d0", [Highlight(round=r, type=t, score=50, reasons=(), frag_ticks=(r,),
+                                             round_start_tick=0, round_end_tick=9) for r, t in ((4, "ACE"), (9, "3K"))],
+                          {4, 9})
+
+    rows = pc_get(app_for(tmp_path).test_client(), "/api/week").get_json()["rows"]
+
+    assert [(row["map"], row["status"], row["demo_id"]) for row in rows] == [
+        ("Inferno", "To grab", None), ("Inferno", "Rendering", grabbed), ("Ancient", "Done", own)]
+    assert rows[2] == {
+        "map": "Ancient", "played_at": ancient.played_at.isoformat(), "score": "11–13", "won": False, "kd": None,
+        "highlights": 2, "ace": True, "status": "Done", "tone": "done", "match_id": None, "demo_id": own,
+    }
+
+
+def test_week_refuses_a_phone(client):
+    assert phone_get(client, "/api/week").status_code == 403
+
+
+def test_reel_strip_is_cut_once_from_frames_across_the_reel_and_kept_beside_it(tmp_path, index, monkeypatch):
+    reel_id, video_path = _reel_with_video(tmp_path, index)          # a 12.5 s Reel
+    ffmpeg = FakeFfmpeg(b"\xff\xd8 a strip")
+    monkeypatch.setattr(subprocess, "run", ffmpeg)
+    client = app_for(tmp_path, load_settings=lambda: Loaded(Config(ffmpeg="C:/tools/ffmpeg.exe"), ())).test_client()
+
+    first = pc_get(client, f"/reels/{reel_id}.strip.jpg")
+    second = pc_get(client, f"/reels/{reel_id}.strip.jpg")
+
+    assert (first.status_code, first.mimetype, first.data) == (200, "image/jpeg", ffmpeg.frame)
+    assert second.data == ffmpeg.frame
+    assert len(ffmpeg.commands) == 1                    # the second request found the strip already cut
+    command = ffmpeg.commands[0]
+    assert command[0] == "C:/tools/ffmpeg.exe"
+    seeks = [i for i, arg in enumerate(command) if arg == "-ss"]
+    times = [float(command[i + 1]) for i in seeks]
+    assert len(times) == STRIP_FRAMES and times == sorted(times) and 0 < times[0] and times[-1] < 12.5
+    assert all(command[i + 2:i + 4] == ["-i", str(video_path)] for i in seeks)
+    assert f"hstack=inputs={STRIP_FRAMES}" in command[command.index("-filter_complex") + 1]
+    assert [p.name for p in tmp_path.glob("*.jpg")] == ["clip.strip.jpg"]      # and no half-written file
+
+
+def test_reel_strip_404_when_ffmpeg_cuts_nothing_or_there_is_no_such_reel(tmp_path, index, monkeypatch):
+    reel_id, _ = _reel_with_video(tmp_path, index)
+    monkeypatch.setattr(subprocess, "run", FakeFfmpeg(frame=None))
+    client = app_for(tmp_path).test_client()
+
+    assert pc_get(client, f"/reels/{reel_id}.strip.jpg").status_code == 404
+    assert pc_get(client, "/reels/999999.strip.jpg").status_code == 404
+    assert list(tmp_path.glob("*.jpg")) == []
+
+
+def test_reel_strip_refuses_a_phone(tmp_path, index):
+    reel_id, _ = _reel_with_video(tmp_path, index)
+    assert phone_get(app_for(tmp_path).test_client(), f"/reels/{reel_id}.strip.jpg").status_code == 403
+
+
+@pytest.mark.ffmpeg
+def test_reel_strip_is_a_real_jpeg_of_every_frame_side_by_side(tmp_path, index):
+    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+        pytest.skip("ffmpeg or ffprobe not on PATH")
+    highlight_id = _reels_index(index)
+    video_path = tmp_path / "clip.mp4"
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc=s=320x240:r=30:d=5",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(video_path)], check=True)
+    index.save_reel(highlight_id, "player", video_path, 5.0)
+    reel_id = index.match_reels(REEL_MATCH.checksum)[0]["player_reel_id"]
+
+    response = pc_get(app_for(tmp_path).test_client(), f"/reels/{reel_id}.strip.jpg")
+
+    assert (response.status_code, response.data[:2]) == (200, b"\xff\xd8")
+    size = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height", "-of", "csv=p=0",
+                           str(tmp_path / "clip.strip.jpg")], capture_output=True, text=True, check=True).stdout
+    assert size.strip() == f"{STRIP_FRAMES * 320},180"
+
+
+def test_open_reels_folder_opens_the_folder_every_reel_is_in(tmp_path):
+    videos = tmp_path / "clips" / "library" / "videos"
+    videos.mkdir(parents=True)
+    calls = []
+    app = app_for(tmp_path, open_folder=calls.append,
+                  load_settings=lambda: Loaded(Config(data_root=tmp_path / "clips"), ()))
+
+    assert pc_post(app.test_client(), "/api/reels/open-folder", headers=MARKED).status_code == 204
+    assert calls == [videos]
+
+
+def test_open_reels_folder_404_without_a_clips_folder_or_a_reel_yet(tmp_path):
+    calls = []
+    unset = app_for(tmp_path, open_folder=calls.append).test_client()
+    empty = app_for(tmp_path, open_folder=calls.append,
+                    load_settings=lambda: Loaded(Config(data_root=tmp_path), ())).test_client()
+
+    assert pc_post(unset, "/api/reels/open-folder", headers=MARKED).status_code == 404
+    assert pc_post(empty, "/api/reels/open-folder", headers=MARKED).status_code == 404
+    assert calls == []
+
+
+def test_check_for_demos_asks_the_app_and_answers_202(tmp_path):
+    asked = []
+    app = app_for(tmp_path, check_faceit=lambda: asked.append(True) and None)
+
+    response = pc_post(app.test_client(), "/api/faceit/check", headers=MARKED)
+
+    assert (response.status_code, asked) == (202, [True])
+
+
+def test_check_for_demos_says_why_not_with_409(tmp_path):
+    app = app_for(tmp_path, check_faceit=lambda: "Match alerts are off")
+
+    response = pc_post(app.test_client(), "/api/faceit/check", headers=MARKED)
+
+    assert (response.status_code, response.get_json()) == (409, {"error": "Match alerts are off"})
+
+
 # --- every route Tasks 10-14 added is PC-only: a foreign Host is refused on all of them -------------
 
 PC_ONLY_ROUTES = [
@@ -1488,6 +1667,8 @@ PC_ONLY_ROUTES = [
     ("GET", "/settings"), ("GET", "/api/settings"), ("PUT", "/api/settings"),
     ("POST", "/api/faceit/session"), ("POST", "/api/faceit/lookup"),
     ("GET", "/api/window"), ("POST", "/api/window"),
+    ("GET", "/api/touches"), ("GET", "/api/week"), ("GET", "/reels/1.strip.jpg"), ("POST", "/api/reels/open-folder"),
+    ("POST", "/api/faceit/check"),
 ]
 
 

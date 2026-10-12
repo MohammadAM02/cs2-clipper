@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from clipper.model import ClipFile, FaceitStats, Highlight, MatchInfo
@@ -408,10 +408,10 @@ class Index:
 
     def match_reels(self, checksum: str) -> list[sqlite3.Row]:
         """That match's selected Highlights that have a Reel, in round order, with each
-        Perspective's Reel id (NULL when that Perspective has none)."""
+        Perspective's Reel id and length in seconds (NULL when that Perspective has none)."""
         return self._all(
             "SELECT h.id AS highlight_id, h.round, h.type, h.reasons,"
-            " pr.id AS player_reel_id, er.id AS enemy_reel_id"
+            " pr.id AS player_reel_id, er.id AS enemy_reel_id, pr.duration_s AS player_s, er.duration_s AS enemy_s"
             " FROM highlights h"
             " LEFT JOIN reels pr ON pr.highlight_id = h.id AND pr.perspective = 'player'"
             " LEFT JOIN reels er ON er.highlight_id = h.id AND er.perspective = 'enemy'"
@@ -491,6 +491,33 @@ class Index:
             "UPDATE faceit_matches SET state = 'expired'"
             " WHERE state IN ('waiting', 'ready', 'announced') AND finished_at < ?", (_iso(finished_before),))
         return cursor.rowcount
+
+    def faceit_matches_since(self, since: datetime) -> list[sqlite3.Row]:
+        """FACEIT matches finished since `since`, newest first, each with its grabbed Demo's state and match
+        checksum (`demo_state`, `demo_checksum`; NULL until a Demo is grabbed and analyzed)."""
+        return self._all(
+            "SELECT f.*, d.state AS demo_state, d.match_checksum AS demo_checksum FROM faceit_matches f"
+            " LEFT JOIN demos d ON d.id = f.demo_id WHERE f.finished_at >= ? ORDER BY f.finished_at DESC",
+            (_iso(since),),
+        )
+
+    def matches_played_since(self, since: datetime) -> list[sqlite3.Row]:
+        """Matches played since `since` (by their Demos' own clocks), newest first: each with its newest Demo's id
+        and state, how many Highlights were picked, and how many of those are Aces."""
+        rows = self._all(
+            "SELECT m.*,"
+            " (SELECT d.id FROM demos d WHERE d.match_checksum = m.checksum ORDER BY d.id DESC LIMIT 1) AS demo_id,"
+            " (SELECT d.state FROM demos d WHERE d.match_checksum = m.checksum ORDER BY d.id DESC LIMIT 1)"
+            " AS demo_state,"
+            " (SELECT COUNT(*) FROM highlights h WHERE h.match_checksum = m.checksum AND h.selected = 1) AS picked,"
+            " (SELECT COUNT(*) FROM highlights h WHERE h.match_checksum = m.checksum AND h.selected = 1"
+            " AND h.type = 'ACE') AS aces"
+            " FROM matches m WHERE m.played_at >= ? ORDER BY m.played_at DESC",
+            # played_at keeps the UTC offset of the PC that analyzed it, so the text comparison keeps two days
+            # to spare and the exact cut is made on the parsed time
+            ((since - timedelta(days=2)).isoformat(),),
+        )
+        return [row for row in rows if datetime.fromisoformat(row["played_at"]) >= since]
 
     def page_matches(self, decided_since: datetime) -> list[sqlite3.Row]:
         """What the Demos to grab page lists, newest first: every match still to grab, and those skipped or

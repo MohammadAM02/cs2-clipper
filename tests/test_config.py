@@ -123,6 +123,11 @@ def test_the_hud_settings_default_to_the_look_every_render_had():
         "killfeed", True, True, 5.0, True)
 
 
+def test_the_small_touches_start_quiet_with_the_glow_and_the_keys_on():
+    cfg = Config()
+    assert (cfg.ui_sounds, cfg.map_glow, cfg.calm_mode, cfg.keyboard_shortcuts) == (False, True, False, True)
+
+
 def test_an_unknown_hud_is_rejected():
     with pytest.raises(ValueError, match="hud"):
         Config(hud="minimal")

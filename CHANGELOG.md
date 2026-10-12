@@ -3,6 +3,34 @@
 What changed in each release of CS2 Clipper. The release workflow publishes a version's section as the notes of
 its GitHub Release, and the app shows those notes on the Status page when it offers that version.
 
+## 0.6.0
+
+### New: small touches
+
+Keys borrowed from CS, and a few details with some personality. Settings → **Touches** turns them on and off.
+
+- **Hold Tab** on any page for this week's scoreboard: each match's score, K–D, Highlights and where it is now.
+- **~** opens a console. `help` lists its commands: `status`, `demos`, `retry`, `skip`, `undo`, `pause`, `check`,
+  `open reels`, `goto`, `log` and a couple to find yourself.
+- **Hold B** for the quick wheel: aim at Check for demos, Pause, Retry failed, Open Reels folder, Console or Settings,
+  and let go. **Check for demos** asks FACEIT for new matches at once (if CS2 is open, as soon as it closes).
+- **1** to **4** switch pages, **Q** goes back to the last one, **P** pauses or resumes rendering, and **?** lists
+  every key.
+- **Demos to grab**: drag a match left to skip it, with Undo for 5 seconds. **↑ ↓** pick a match, **S** skips it and
+  **Z** brings it back.
+- **Reels**: move the pointer across a Highlight to flick through its Reel. **← →** pick a Reel, **Space** plays it
+  and **E** opens its folder.
+- **Map glow**: while a match renders, the background glows in its map's colour.
+- **The Ace moment**: a new Ace in Reels gets a stamp, a burst of shards and a toast.
+- **Status** has a line for the time of day, and short lines to read while a Demo is analyzed, rendered or joined.
+  From 10 pm to 5 am it is quiet hours: no sounds and no Ace stamp.
+- **UI sounds** (off by default) click softly on buttons, and **Calm mode** turns most of the animation down.
+
+### New look: the Slice mark
+
+The app's mark is new: the play triangle, cut at the lean of the pages' italic type, on the cut-corner tile. It is
+in the tray, on the taskbar, on the exe and in the pages' nav.
+
 ## 0.5.0
 
 ### New: HUD settings

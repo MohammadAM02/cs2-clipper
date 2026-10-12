@@ -5,9 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Settings</title>
 <link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/touches.css">
 </head>
 <body>
 <script src="/app.js"></script>
+<script src="/touches.js" defer></script>
 <script>renderNav("/settings");</script>
 <main>
   <h1 class="title rise">Settings</h1>
@@ -31,7 +33,8 @@
 // numbers share one timeline. Nothing is sent until Save.
 const BLURB = {"You": "Who the Highlights are for", "Folders": "Where things live on this PC", "Picture": "What each Clip looks like",
   "HUD": "What shows over the picture",
-  "Rendering": "How hard it tries, and when it waits", "Match alerts": "Notifications when a FACEIT match has Highlights", "App": "The pages and the worker"};
+  "Rendering": "How hard it tries, and when it waits", "Match alerts": "Notifications when a FACEIT match has Highlights",
+  "Touches": "Sounds, glow, motion and the keys", "App": "The pages and the worker"};
 const RATIO = {"16:9": ["16:9", "1920×1080", 64, 36], "4:3": ["4:3", "1280×960", 48, 36], "4:3-hd": ["4:3 HD", "1440×1080", 48, 36],
   "4:3-stretched": ["4:3 stretched", "1280×960 shown at 1920×1080", 64, 36]};
 const CHOICE_LABEL = {kills: "Kill", rounds: "Round", both: "Both", player: "Your view", enemy: "Enemy POV",
@@ -356,6 +359,7 @@ document.getElementById("save").addEventListener("click", async () => {
     return;
   }
   await load();
+  dispatchEvent(new Event("clipper:settings"));        // the Touches switches apply at once (touches.js)
   const result = document.getElementById("result");
   result.innerHTML = `${ICON.check.replace('stroke="currentColor"', 'stroke="#FF8A3D"')}<span>${data.restart_needed ? "Saved. The port changes at the next start." : "Saved."}</span>`;
   result.hidden = false;

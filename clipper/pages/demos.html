@@ -5,9 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Demos to grab</title>
 <link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/touches.css">
 </head>
 <body>
 <script src="/app.js"></script>
+<script src="/touches.js" defer></script>
 <script>renderNav("/demos");</script>
 <main>
   <p class="brand" id="brand" hidden></p>
@@ -66,7 +68,9 @@ function row(r) {
   const days = (new Date(r.expires_at) - Date.now()) / 86400000, soon = days <= 3;
   const done = r.state === "skipped" || r.state === "grabbed";
   const resColor = r.won ? "#F2EFEA" : "#8F8F8F";
-  return `<article class="drow dgrid${done ? " done" : ""}" role="listitem">
+  // A match still to grab drags left to skip (touches.js): the track behind it says so.
+  const track = done ? "" : `<div class="t-trk" aria-hidden="true">${ICON.skip}<span>Skip</span></div>`;
+  return `<div class="t-wrap" role="listitem" data-map="${esc(r.map)}">${track}<article class="drow dgrid${done ? " done" : " t-drag"}">
     <div class="who"><span class="maptile">${mapAbbr(r.map)}</span><span style="min-width:0"><b>${esc(r.map)}</b><small>${when(r.finished_at)}</small></span></div>
     <div class="res" style="color:${resColor}"><b class="num">${esc(r.score)}</b><small>${r.won ? "Win" : "Loss"}</small></div>
     <div class="hls" style="display:flex;gap:5px;flex-wrap:wrap">${badges(r.highlights)}</div>
@@ -77,7 +81,7 @@ function row(r) {
     <div class="exp"><span style="font-size:13.5px;color:${soon ? "#FFB27A" : "#BDBDBD"}">${left(r.expires_at)}</span>${r.reminded ? '<span class="pill">Reminder</span>' : ""}
       <div class="life${soon ? " soon" : ""}" title="FACEIT keeps a Demo link for about 30 days"><i data-w="${Math.max(2, Math.min(100, days / 30 * 100)).toFixed(1)}%"></i></div></div>
     <div class="dact">${actions(r)}</div>
-  </article>`;
+  </article></div>`;
 }
 function render() {
   const pending = pendingRows(data.rows);

@@ -63,6 +63,7 @@ class GateLike(Protocol):
 
 class AlertsStep(Protocol):
     def tick(self) -> None: ...
+    def check_now(self) -> str | None: ...
 
 
 class StopRequest:

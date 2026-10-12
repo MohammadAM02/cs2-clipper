@@ -33,7 +33,7 @@ _FOLDER_FIELDS = frozenset({"data_root", "downloads_dir"})
 @dataclass(frozen=True)
 class Field:
     name: str                      # the settings.json key (a Config field), or "faceit_api_key" (write-only)
-    group: str                     # "You" | "Folders" | "Picture" | "Rendering" | "Match alerts" | "App"
+    group: str                     # "You" | "Folders" | "Picture" | "HUD" | "Rendering" | "Match alerts" | "Touches" | "App"
     label: str
     kind: str                      # steamid | text | secret | folder | program | choice | int | number | bool
     minimum: float | None = None
@@ -81,6 +81,14 @@ FIELDS: tuple[Field, ...] = (
     Field("match_alerts", "Match alerts", "Match alerts", "bool"),
     Field("stopped_playing_minutes", "Match alerts", "Minutes after you stop playing", "number",
           minimum=0, maximum=120),
+    Field("ui_sounds", "Touches", "UI sounds", "bool",
+          help="Soft clicks on buttons and switches. Never in quiet hours, 10 pm to 5 am."),
+    Field("map_glow", "Touches", "Map glow", "bool",
+          help="While a match renders, the background glows in its map's colour."),
+    Field("calm_mode", "Touches", "Calm mode", "bool", help="Turns most of the animation down."),
+    Field("keyboard_shortcuts", "Touches", "Keyboard shortcuts", "bool",
+          help="Hold Tab for this week's scoreboard, ~ for the console, hold B for the quick wheel. "
+               "? lists them all."),
     Field("page_port", "App", "Port", "int", minimum=1024, maximum=65535, help="Applies at the next start."),
     Field("poll_seconds", "App", "Check for work every (s)", "number", minimum=1, maximum=300),
 )

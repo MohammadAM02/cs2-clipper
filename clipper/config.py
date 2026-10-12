@@ -68,6 +68,12 @@ class Config:
     player_voices: bool = True
     match_alerts: bool = True
     stopped_playing_minutes: float = 5.0
+    # the small touches the pages add (touches.js): soft clicks, the glow tinted by the map being rendered, less
+    # motion, and the CS-style keys (hold Tab, ~, hold B, 1-4 ...)
+    ui_sounds: bool = False
+    map_glow: bool = True
+    calm_mode: bool = False
+    keyboard_shortcuts: bool = True
     page_port: int = 8765
 
     def __post_init__(self) -> None:

@@ -1,4 +1,4 @@
-"""The app's mark: a play triangle in the pages' orange on a dark tile. The tray draws it at 64 px; the
+"""The app's mark: the Slice mark (a play triangle cut at the italic lean) in the pages' orange on the cut-corner tile. The tray draws it at 64 px; the
 packaged exe carries it as a .ico (its file icon, its taskbar button and the window's icon).
 
 Adapted from thelifeofsuleyman/cs2-clipper's `aegis/app.py` (`_tray_image`) and
@@ -36,16 +36,24 @@ from PIL import Image, ImageDraw
 ICO_SIZES = (16, 24, 32, 48, 64, 128, 256)
 
 
+# Slice: the play triangle cut at the Saira italic lean, tip knocked up and out (64 px grid).
+TILE = ((14, 2), (62, 2), (62, 50), (50, 62), (2, 62), (2, 14))      # the pages' .cut shape
+BODY = ((18, 50), (30.05, 43.22), (36.22, 24.25), (18, 14))
+TIP = ((51.6, 28.4), (40.86, 22.36), (36.06, 37.14))
+TIP_SMALL = ((53.0, 27.6), (42.3, 21.6), (37.5, 36.4))               # wider cut so it survives <= 24 px
+
+
 def mark(size: int) -> Image.Image:
-    """The mark on a clear `size` x `size` image, laid out on a 64 px grid: the tile covers pixels 2 to
-    61 with 12 px corners, and the triangle points right from (24, 16)-(24, 48) to (50, 32)."""
-    scale = size / 64
-    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    """The Slice mark on a clear `size` x `size` image, drawn 4x and downscaled for smooth edges."""
+    big = size * 4
+    scale = big / 64
+    image = Image.new("RGBA", (big, big), (0, 0, 0, 0))
     draw = ImageDraw.Draw(image)
-    first, last = 2 * scale, (61 + 1) * scale - 1      # the tile's first and last pixel
-    draw.rounded_rectangle((first, first, last, last), radius=12 * scale, fill="#191b1f")
-    draw.polygon([(x * scale, y * scale) for x, y in ((24, 16), (24, 48), (50, 32))], fill="#ff5500")
-    return image
+    sc = lambda pts: [(x * scale, y * scale) for x, y in pts]
+    draw.polygon(sc(TILE), fill="#141414")
+    draw.polygon(sc(BODY), fill="#ff5500")
+    draw.polygon(sc(TIP_SMALL if size <= 24 else TIP), fill="#ff5500")
+    return image.resize((size, size), Image.LANCZOS)
 
 
 def write_ico(path: Path) -> None:

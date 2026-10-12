@@ -22,7 +22,7 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "
 const $ = (sel, root = document) => root.querySelector(sel);
 const plural = (n, word, many) => `${n} ${n === 1 ? word : (many || word + "s")}`;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const MARK = '<svg width="28" height="28" viewBox="0 0 64 64" aria-hidden="true"><rect x="2" y="2" width="60" height="60" rx="12" fill="#191B1F"/><polygon points="24,16 24,48 50,32" fill="#FF5500"/></svg>';
+const MARK = '<svg width="28" height="28" viewBox="0 0 64 64" aria-hidden="true"><path d="M14 2H62V50L50 62H2V14Z" fill="#141414"/><polygon points="18,50 30.05,43.22 36.22,24.25 18,14" fill="#FF5500"/><polygon points="51.6,28.4 40.86,22.36 36.06,37.14" fill="#FF5500"/></svg>';
 const ICON = {
   play: '<svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6 4 20 12 6 20 6 4"/></svg>',
   pause: '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="4" width="5" height="16"/><rect x="14" y="4" width="5" height="16"/></svg>',

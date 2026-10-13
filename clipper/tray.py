@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from clipper.footprint import Usage
 from clipper.state import Snapshot, summary
 
 if TYPE_CHECKING:
@@ -53,10 +54,12 @@ REFRESH_SECONDS = 2.0
 TOOLTIP_LIMIT = 127      # Windows cuts a tray icon's tooltip after 127 characters
 
 
-def tooltip(snapshot: Snapshot) -> str:
-    """The summary the Status page shows, and a second line when the web server has no port, cut to
-    what Windows shows."""
+def tooltip(snapshot: Snapshot, usage: Usage | None = None) -> str:
+    """The summary the Status page shows, then what the app itself takes (`usage`: its memory and CPU, which back
+    the zero-FPS promise), and a line when the web server has no port, cut to what Windows shows."""
     text = summary(snapshot)
+    if usage is not None:
+        text += f"\nCS2 Clipper: {usage.line()}"
     if snapshot.pages_off:
         text += f"\nPages are off: {snapshot.pages_off}"
     return text if len(text) <= TOOLTIP_LIMIT else text[:TOOLTIP_LIMIT - 1] + "…"
@@ -98,7 +101,7 @@ def menu(app: App, *, open_folder: Callable[[Path], None] = lambda folder: None)
 
     def items() -> Iterator[pystray.MenuItem]:
         view = _view(app)
-        yield pystray.MenuItem("Open CS2 Clipper", _guarded(lambda: app.open_window("/status")), default=True)
+        yield pystray.MenuItem("Open CS2 Clipper", _guarded(lambda: app.open_window(app.home())), default=True)
         yield pystray.MenuItem("Open clips folder", _guarded(lambda: open_folder(view.folder)),
                                enabled=view.folder is not None)
         yield pystray.MenuItem("Resume rendering" if view.paused else "Pause rendering",
@@ -122,7 +125,7 @@ def _keep_fresh(icon: pystray.Icon, app: App) -> None:
         shown = _view(app)       # pystray built the menu a moment ago, from the same state
         while not app.wait(REFRESH_SECONDS):
             try:
-                icon.title = tooltip(app.state.snapshot())
+                icon.title = tooltip(app.state.snapshot(), app.footprint.usage())
                 view = _view(app)
                 if view != shown:
                     icon.update_menu()
@@ -159,7 +162,8 @@ def run_tray(app: App) -> bool:
         log.warning("the tray icon is not available (%s)", exc)
         return False
     try:
-        icon = pystray.Icon(NAME, image, tooltip(app.state.snapshot()), menu(app, open_folder=os.startfile))
+        icon = pystray.Icon(NAME, image, tooltip(app.state.snapshot(), app.footprint.usage()),
+                            menu(app, open_folder=os.startfile))
         icon.run(setup=lambda icon: _setup(icon, app))
     except Exception:  # noqa: BLE001
         log.exception("the tray icon failed")

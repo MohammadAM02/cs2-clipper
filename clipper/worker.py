@@ -1,22 +1,28 @@
 """The worker: moves each Demo through the Flow, one step per tick (spec: Flow).
 
 spotted → unpacked → analyzed → scored → rendering → joined → done, or skipped / failed.
-Every step can run again safely, so a crash or a reboot resumes where it stopped.
+Every step can run again safely, so a crash or a reboot resumes where it stopped. Nothing moves while CS2 is
+open, so the game keeps every frame; each view is its own CS2 launch, yours first, and gets its Reels as soon as
+it is recorded.
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import re
 import shutil
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
+from clipper import links, share
 from clipper.config import Config
-from clipper.gate import GateStatus
+from clipper.gate import CS2_REASON, FACEIT_REASON, STEAM_REASON, GateStatus
 from clipper.index import Index
 from clipper.join import JoinError, assign_clips
 from clipper.model import MatchInfo, RoundFacts
@@ -35,6 +41,11 @@ MAX_RENDER_ATTEMPTS = 3
 PAUSE_AFTER_FAILURES = 3
 QUIT_ABORT = "aborted: the app was quit"
 BACK_TO_BACK_SECONDS = 120.0       # a view this soon after CS2 closed for its Demo starts without a heads-up
+_OLD_REEL = re.compile(r"r\d+-(player|enemy)\.mp4")      # a Reel named before Reels had readable names
+SNOOZE_MINUTES = 60                # the heads-up toast's Not now
+STUCK_TOAST_SECONDS = 120.0        # how long a Gate held only by what the player can fix waits before a toast says so
+# What the player can fix themselves, and how a toast asks them to.
+_FIXES = {FACEIT_REASON: "close FACEIT AC", STEAM_REASON: "open Steam"}
 
 
 class Skip(Exception):
@@ -58,6 +69,8 @@ class FactsSource(Protocol):
 
 class GateLike(Protocol):
     def check(self) -> GateStatus: ...
+    def faceit_running(self) -> bool: ...
+    def cs2_running(self) -> bool: ...
     def faceit_running(self) -> bool: ...
 
 
@@ -167,6 +180,7 @@ class Services:
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
     alerts: AlertsStep | None = None
+    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
 
 
 def _fresh_dir(path: Path) -> Path:
@@ -205,6 +219,53 @@ def delete_demo(index: Index, cfg: Config, demo_id: int) -> bool:
     return True
 
 
+def reel_path(index: Index, cfg: Config, checksum: str, round_number: int, highlight_type: str,
+              perspective: str) -> Path:
+    """Where a Reel of the match goes: its match's folder under library\\videos ("2026-10-12 Dust2 13-9"), the folder
+    its other Reels are in once it has any, named as it would be posted ("ACE Dust2 R9 s1mple.mp4"). A folder another
+    match has taken already (same day, map and score) gets the match's checksum after its name."""
+    match = index.match(checksum)
+    name = share.reel_name(highlight_type, match["map"], round_number, cfg.faceit_nickname, perspective) + ".mp4"
+    videos = cfg.library_dir / "videos"
+    others: set[Path] = set()
+    for reel in index.all_reel_details():
+        folder = cfg.load_path(reel["path"]).parent
+        if reel["checksum"] != checksum:
+            others.add(folder)
+        elif folder.parent == videos and not _OLD_REEL.fullmatch(cfg.load_path(reel["path"]).name):
+            return folder / name                      # where its other Reels are
+    folder = videos / share.match_folder(match["map"], match["played_at"], match["team_score"],
+                                         match["opponent_score"])
+    return (folder if folder not in others else folder.with_name(f"{folder.name} ({checksum})")) / name
+
+
+def rename_old_reels(index: Index, cfg: Config) -> int:
+    """Gives each Reel made before Reels had readable names ("library\\videos\\<checksum>\\r9-player.mp4") its readable
+    name and folder, and leaves an emptied checksum folder gone. One that cannot move now (being played, say) is
+    logged and tried at the next start. How many moved."""
+    moved = 0
+    for reel in index.all_reel_details():
+        old = cfg.load_path(reel["path"])
+        if not _OLD_REEL.fullmatch(old.name) or not old.is_file():
+            continue
+        new = reel_path(index, cfg, reel["checksum"], reel["round"], reel["type"], reel["perspective"])
+        try:
+            new.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(old, new)
+        except OSError as exc:
+            log.warning("could not give %s its readable name yet: %s", old, exc)
+            continue
+        index.set_reel_path(reel["id"], cfg.store_path(new))
+        moved += 1
+        try:
+            old.parent.rmdir()                        # only once it is empty
+        except OSError:
+            pass
+    if moved:
+        log.info("%s Reel%s got readable names", moved, "" if moved == 1 else "s")
+    return moved
+
+
 def prune_renders(index: Index, cfg: Config, checksum: str) -> bool:
     """Delete a match's raw Clips (its renders folder: every view and attempt) once every Demo of the match is
     done, since its Reels are made and they are all that is kept. True when the folder was removed. The library
@@ -234,6 +295,7 @@ class Worker:
         self._waiting_reasons: tuple[str, ...] = ()
         self._pruned_at_start = False
         self._last_render: tuple[int, float] | None = None   # (Demo id, clock time) of the last render not aborted
+        self._stuck: tuple[tuple[str, ...], float, bool] | None = None   # (reasons, since, said) while only fixable
 
     # --- the loop --------------------------------------------------------------------------------
 
@@ -251,6 +313,7 @@ class Worker:
             if not self._pruned_at_start:
                 self._pruned_at_start = True
                 self._prune_done_matches()
+                rename_old_reels(self.index, self.cfg)
             for path in self.services.intake.ready():
                 if self.stop.stopping():
                     return
@@ -266,7 +329,11 @@ class Worker:
                     log.info("the %s view is off in Settings: %s queued render%s taken off the queue",
                              perspective, removed, "" if removed == 1 else "s")
             render_turn_taken = False
-            for demo in self.index.demos_in(ACTIVE_STATES):
+            demos = self.index.demos_in(ACTIVE_STATES)
+            if demos and self.services.gate.cs2_running():
+                self._waiting_reasons = (CS2_REASON,)  # someone is playing: no unpack, analysis, render or join
+                demos = []
+            for demo in demos:
                 if self.stop.stopping():
                     return
                 if demo["state"] == "rendering":
@@ -313,7 +380,15 @@ class Worker:
             log.warning("demo #%s was not deleted: %s", demo_id, exc)
 
     def _gives_way(self, demo_id: int) -> bool:
-        return self.stop.stopping() or self.deletes.asked(demo_id)
+        return self.stop.stopping() or self.deletes.asked(demo_id) or self._snoozed()
+
+    def _snoozed(self) -> bool:
+        """Whether renders are snoozed (the heads-up toast's Not now); says until when, as the reason to wait."""
+        until = self.index.snoozed_until(self.services.now())
+        if until is None:
+            return False
+        self._waiting_reasons = (f"snoozed until {until.astimezone():%H:%M}",)
+        return True
 
     def _advance(self, demo) -> None:
         steps = {
@@ -407,7 +482,7 @@ class Worker:
                 job = self.index.latest_render(demo["id"], perspective)
             if job["state"] == "failed":
                 if job["attempt"] >= MAX_RENDER_ATTEMPTS:
-                    if perspective in asked:          # a view asked for gives up: the Demo keeps the Reels it has
+                    if perspective in asked or self._shipped(demo):   # the Demo keeps the Reels it has
                         self._drop_asks(demo, (perspective,),
                                         f"it failed {job['attempt']} times, last with: {job['failure']}")
                         return
@@ -422,11 +497,34 @@ class Worker:
             self._join(demo)
             self.index.advance(demo["id"], "joined")
             return
-        # both views at their first attempt: one CS2 launch records both; a retry, or the last view left, goes alone
-        if len(jobs) == 2 and all(job["attempt"] == 1 for job in jobs):
-            self._try_render(demo, jobs)              # at most one CS2 launch per tick
-        else:
-            self._try_render(demo, jobs[:1])
+        if self._ship_rendered_views(demo):
+            return                                    # one step per tick: the next view records on the next
+        self._try_render(demo, jobs[:1])              # one view per CS2 launch, yours first
+
+    def _ship_rendered_views(self, demo) -> bool:
+        """A view recorded while another is still to come gets its Reels now, and a toast says so, rather than
+        waiting for the other: your view is ready before the Enemy POV records. True when it made any. The next
+        view's launch gets its heads-up, since the player may be watching these."""
+        rendered = [perspective for perspective in self._wanted(demo) if self._lacks_reels(demo, perspective)]
+        if not rendered:
+            return False
+        self._join(demo)
+        for perspective in rendered:
+            self._announce(demo, perspective, more_to_come=True)
+        self.index.set_flag(f"shipped:{demo['id']}", ",".join(sorted(self._shipped(demo) | set(rendered))))
+        self._last_render = None
+        return True
+
+    def _shipped(self, demo) -> set[str]:
+        """The views of `demo` whose Reels were made, and announced, while another view was still to record."""
+        return set(filter(None, (self.index.get_flag(f"shipped:{demo['id']}") or "").split(",")))
+
+    def _lacks_reels(self, demo, perspective: str) -> bool:
+        """Whether `perspective` is recorded for `demo` but some selected Highlight has no Reel of it yet."""
+        job = self.index.latest_render(demo["id"], perspective)
+        return job is not None and job["state"] == "done" and any(
+            not self.index.has_reel(highlight["id"], perspective)
+            for highlight in self.index.selected_highlights(demo["match_checksum"]))
 
     def _unpack_again(self, demo) -> None:
         """Unpack the download the Demo kept, again, once its .dem is gone: one step per tick. With no download
@@ -474,6 +572,7 @@ class Worker:
                 "Rendering highlights",
                 f"{len(highlights)} Highlights from {match['map']} ({views_label(perspective)}). "
                 f"CS2 opens in {self.cfg.heads_up_seconds:g} s — please don't start it yourself.",
+                actions=((f"Not now ({SNOOZE_MINUTES // 60} h)", links.to_snooze(SNOOZE_MINUTES)),),
             )
             if not self._gate_stays_clear(self.cfg.heads_up_seconds, demo["id"]):
                 return
@@ -567,7 +666,29 @@ class Worker:
         if not status.ok:
             self._waiting_reasons = status.reasons
             self._last_render = None                  # someone may be at the PC: the next render warns again
+        self._say_when_stuck(status.reasons)
         return status.ok
+
+    def _say_when_stuck(self, reasons: tuple[str, ...]) -> None:
+        """Once the Gate has been held for STUCK_TOAST_SECONDS only by what the player can fix (FACEIT AC left
+        running, Steam closed), a toast says so, once until the reasons change: otherwise the wait is silent and
+        the app looks broken. While CS2 runs or the disk is full there is nothing to ask."""
+        if not reasons or any(reason not in _FIXES for reason in reasons):
+            self._stuck = None
+            return
+        now = self.services.clock()
+        if self._stuck is None or self._stuck[0] != reasons:
+            self._stuck = (reasons, now, False)
+            return
+        _, since, said = self._stuck
+        if said or now - since < STUCK_TOAST_SECONDS:
+            return
+        self._stuck = (reasons, since, True)
+        matches = len({demo["match_checksum"] for demo in self.index.demos_in(("rendering",))})
+        fixes = " and ".join(_FIXES[reason] for reason in reasons)
+        why = " CS2 Clipper never opens CS2 while FACEIT AC runs." if FACEIT_REASON in reasons else ""
+        self.services.notify(f"{matches} match{'' if matches == 1 else 'es'} ready to clip",
+                             f"{fixes[0].upper()}{fixes[1:]} to start.{why}")
 
     def _gate_stays_clear(self, seconds: float, demo_id: int) -> bool:
         """Wait out the heads-up, giving way as soon as the Gate closes, a stop is requested or the
@@ -601,32 +722,51 @@ class Worker:
                     continue
                 clips = [self.cfg.load_path(row["path"])
                          for row in self.index.clips_for(highlight["id"], perspective)]
-                out = (self.cfg.library_dir / "videos" / demo["match_checksum"]
-                       / f"r{highlight['round']}-{perspective}.mp4")
+                out = reel_path(self.index, self.cfg, demo["match_checksum"], highlight["round"], highlight["type"],
+                                perspective)
                 duration = self.services.join(clips, out)
                 self.index.save_reel(highlight["id"], perspective, self.cfg.store_path(out), duration)
 
     def _finish(self, demo) -> None:
         asked = self.index.asked_renders(demo["id"])
+        shipped = self._shipped(demo)
         if asked:
             self._notify_ready(demo, asked)           # the view asked for is ready, not the whole match
-        else:
-            count = len(self.index.selected_highlights(demo["match_checksum"])) if demo["match_checksum"] else 0
-            if count:
-                match = self.index.match(demo["match_checksum"])
-                self.services.notify("Highlights ready", f"{count} Highlights from {match['map']} are ready.")
+        elif shipped:                                 # your view was announced as it landed: the rest now
+            self._notify_ready(demo, tuple(p for p in PERSPECTIVES if p not in shipped))
+        elif demo["match_checksum"] and self.index.selected_highlights(demo["match_checksum"]):
+            first = next((p for p in self._wanted(demo) if self.index.best_reel(demo["match_checksum"], p)), None)
+            self._announce(demo, first or "player", more_to_come=False)
         self.index.clear_asked_renders(demo["id"])
         self._settle(demo)
 
-    def _notify_ready(self, demo, asked) -> None:
-        """Says each view the Demo was asked for is ready, once it has Reels: how many Highlights have them."""
+    def _announce(self, demo, perspective: str, *, more_to_come: bool) -> None:
+        """"Highlights ready", with Watch (the best Highlight's Reel of `perspective`, in the app window) and Show
+        in folder."""
+        match = self.index.match(demo["match_checksum"])
+        count = len(self.index.selected_highlights(demo["match_checksum"]))
+        later = " The Enemy POV records next." if more_to_come else ""
+        self.services.notify("Highlights ready", f"{count} Highlights from {match['map']} are ready.{later}",
+                             actions=self._watch(demo["match_checksum"], perspective))
+
+    def _notify_ready(self, demo, perspectives) -> None:
+        """Says each of `perspectives` is ready, once it has Reels: how many Highlights have them."""
         match = self.index.match(demo["match_checksum"])
         highlights = self.index.selected_highlights(demo["match_checksum"])
-        for perspective in asked:
+        for perspective in perspectives:
             count = sum(self.index.has_reel(highlight["id"], perspective) for highlight in highlights)
             if count:
                 self.services.notify(READY_TITLES[perspective],
-                                     f"{count} Highlights from {match['map']} now have {view_name(perspective)}.")
+                                     f"{count} Highlights from {match['map']} now have {view_name(perspective)}.",
+                                     actions=self._watch(demo["match_checksum"], perspective))
+
+    def _watch(self, checksum: str, perspective: str) -> tuple[tuple[str, str], ...]:
+        """A ready toast's buttons: Watch plays the match's best Reel of `perspective` in the app window, and Show
+        in folder selects its file in Explorer. None without a Reel to show."""
+        reel = self.index.best_reel(checksum, perspective)
+        if reel is None:
+            return ()
+        return (("Watch", links.to_page(f"/reels?play={reel}")), ("Show in folder", links.to_reveal(reel)))
 
     def _settle(self, demo) -> None:
         """The Demo is done: its unpacked .dem goes (the compressed download stays), and its match's raw Clips go
@@ -634,6 +774,7 @@ class Worker:
         dem, archive = demo["dem_path"], demo["archive_path"]
         if dem and Path(dem) != Path(archive):
             Path(dem).unlink(missing_ok=True)         # the compressed download stays
+        self.index.delete_flag(f"shipped:{demo['id']}")
         self.index.advance(demo["id"], "done")
         if demo["match_checksum"]:
             prune_renders(self.index, self.cfg, demo["match_checksum"])   # the Reels are made: the raw Clips go

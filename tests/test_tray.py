@@ -12,6 +12,7 @@ import pytest
 
 from clipper import tray
 from clipper.config import Config
+from clipper.footprint import Usage
 from clipper.settings import Loaded
 from clipper.state import AppState, Rendering, Snapshot
 
@@ -19,10 +20,14 @@ from clipper.state import AppState, Rendering, Snapshot
 class FakeApp:
     """The App as the tray sees it: its state, its settings, and the things a menu item does."""
 
-    def __init__(self, clips=None):
+    def __init__(self, clips=None, home="/status"):
         self.state = AppState()
         self.settings = SimpleNamespace(current=lambda: Loaded(Config(data_root=clips), ()))
         self.calls: list[tuple] = []
+        self._home = home
+
+    def home(self) -> str:
+        return self._home
 
     def open_window(self, page: str) -> None:
         self.calls.append(("open_window", page))
@@ -57,6 +62,10 @@ def test_the_tooltip_is_the_one_line_summary():
         "Rendering Mirage (player view)")
 
 
+def test_the_tooltip_says_what_the_app_itself_takes():
+    assert tray.tooltip(Snapshot(), Usage(61, 0.2)) == "Idle\nCS2 Clipper: 61 MB RAM · 0.2% CPU"
+
+
 def test_the_tooltip_has_a_second_line_when_the_pages_are_off():
     assert tray.tooltip(Snapshot(pages_off="no free port in 8765–8774")) == (
         "Idle\nPages are off: no free port in 8765–8774")
@@ -85,10 +94,11 @@ def test_the_menu_of_an_idle_app_with_no_clips_folder_set():
     ]
 
 
-def test_a_click_on_the_icon_opens_the_status_window():
-    app = FakeApp()
+@pytest.mark.parametrize("home", ["/status", "/reels"])
+def test_a_click_on_the_icon_opens_the_window_on_its_home_page(home):
+    app = FakeApp(home=home)
     menu_of(app)(None)                   # pystray runs the default item when the icon is clicked
-    assert app.calls == [("open_window", "/status")]
+    assert app.calls == [("open_window", home)]
 
 
 def test_open_clips_folder_is_enabled_only_while_the_folder_exists(tmp_path):

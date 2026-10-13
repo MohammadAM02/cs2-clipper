@@ -56,6 +56,11 @@ def mark(size: int) -> Image.Image:
     return image.resize((size, size), Image.LANCZOS)
 
 
+def write_png(path: Path, size: int = 256) -> None:
+    """The mark as a PNG: the picture Windows shows on the app's toasts (clipper.notify)."""
+    mark(size).save(path, format="PNG")
+
+
 def write_ico(path: Path) -> None:
     """Writes the mark as a .ico holding every size in ICO_SIZES, so Windows never scales one up."""
     mark(256).save(path, format="ICO", sizes=[(size, size) for size in ICO_SIZES])

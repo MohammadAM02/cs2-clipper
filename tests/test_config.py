@@ -117,10 +117,21 @@ def test_an_unknown_perspectives_choice_is_rejected():
         Config(perspectives="neither")
 
 
-def test_the_hud_settings_default_to_the_look_every_render_had():
-    cfg = Config()
+def test_the_hud_settings_default_to_a_clip_fit_to_post():
+    cfg = Config()          # no wall outlines to read as "walls?", no teammates' comms
     assert (cfg.hud, cfg.show_xray, cfg.show_assists, cfg.kill_feed_seconds, cfg.player_voices) == (
-        "killfeed", True, True, 5.0, True)
+        "killfeed", False, True, 5.0, False)
+
+
+def test_renders_start_any_time_with_x264_and_exports_get_a_title_card():
+    cfg = Config()
+    assert (cfg.render_when, cfg.encoder, cfg.title_card) == ("anytime", "cpu", True)
+
+
+@pytest.mark.parametrize("setting", [{"render_when": "never"}, {"encoder": "tpu"}])
+def test_an_unknown_schedule_or_encoder_is_refused(setting):
+    with pytest.raises(ValueError):
+        Config(**setting)
 
 
 def test_the_small_touches_start_quiet_with_the_glow_and_the_keys_on():

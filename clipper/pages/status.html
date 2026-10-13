@@ -13,6 +13,52 @@
 <script src="/touches.js" defer></script>
 <script>renderNav("/status");</script>
 <main>
+  <section class="onboard rise" id="onboard" aria-labelledby="h-onboard" hidden>
+    <div class="ob-head">
+      <span data-nugget="rendering"></span>
+      <div class="say">
+        <h1 id="h-onboard" class="title">Set up in one go</h1>
+        <p class="lead promise"><b>Zero FPS cost.</b> CS2 Clipper does nothing while CS2 is open, and never opens CS2
+          while FACEIT AC runs. It records your Highlights later, from the match's demo.</p>
+      </div>
+    </div>
+    <ol class="ob-steps">
+      <li class="ob" id="ob-who">
+        <span class="ob-n" aria-hidden="true">1</span>
+        <div class="ob-body">
+          <label class="flabel" for="ob-nick">Your FACEIT nickname</label>
+          <span class="help" id="ob-who-line">So the app knows whose Highlights to clip.</span>
+          <div class="inrow"><input class="inp" id="ob-nick" autocomplete="off" spellcheck="false" placeholder="Nickname">
+            <button class="primary" id="ob-lookup" type="button">Look up</button></div>
+          <span class="err" id="ob-nick-err" role="alert"></span>
+        </div>
+        <span class="ob-ok" id="ob-who-ok" hidden></span>
+      </li>
+      <li class="ob" id="ob-folder">
+        <span class="ob-n" aria-hidden="true">2</span>
+        <div class="ob-body">
+          <span class="flabel">Where your clips go</span>
+          <span class="help mono" id="ob-folder-path"></span>
+          <button class="ghost sm" id="ob-folder-change" type="button" hidden>Change</button>
+        </div>
+        <span class="ob-ok" id="ob-folder-ok" hidden></span>
+      </li>
+      <li class="ob" id="ob-tools">
+        <span class="ob-n" aria-hidden="true">3</span>
+        <div class="ob-body">
+          <span class="flabel">The tools it records with</span>
+          <span class="help" id="ob-tools-line" aria-live="polite"></span>
+          <div class="dl" id="ob-dl" hidden><span class="pbar live" aria-hidden="true"><i></i></span><span class="lbl" id="ob-mb"></span></div>
+          <button class="primary sm" id="ob-tools-go" type="button" hidden>Download them</button>
+        </div>
+        <span class="ob-ok" id="ob-tools-ok" hidden></span>
+      </li>
+    </ol>
+    <p class="help ob-foot">No overlay to open and no hotkey to press: nothing hooks into your game. After a FACEIT match
+      with a 3K or better, a toast says so; grab its Demo and your Highlights land in Reels.</p>
+  </section>
+
+  <div id="home">
   <section class="stage rise" aria-label="Now">
     <div class="art" id="art">
       <div id="scene"></div>
@@ -26,16 +72,12 @@
         <div class="nowline"><span class="dot" id="now-dot"></span><span id="now" aria-live="polite">Loading…</span><span class="file" id="now-file"></span></div>
         <div id="now-sub"></div>
         <p class="lead" id="intro"></p>
+        <p class="promise" id="promise"></p>
       </div>
       <div class="ctl">
         <div class="row">
           <button class="ghost" id="pause" hidden>${PAUSE}Pause rendering</button>
           <button class="primary" id="resume" hidden>${PLAY}Resume rendering</button>
-          <button class="ghost" id="quit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/></svg>Quit</button>
-        </div>
-        <div class="split" id="quit-choice" role="group" aria-label="A render is running" hidden>
-          <button class="ghost" id="quit-now">Quit now (the render is redone later)</button>
-          <button class="primary" id="quit-after">Quit when this render finishes</button>
         </div>
       </div>
     </div>
@@ -89,14 +131,14 @@
       <div class="panel" style="padding:14px 14px 12px"><div id="grab"></div><p class="help" id="grab-note" style="margin:14px 0 0">Download a Demo and Nugget takes it from your Downloads.</p></div>
     </section>
     <section aria-labelledby="h-checks">
-      <div class="sechead"><h2 id="h-checks" class="h2">The crew</h2><span class="lbl" id="check-sum"></span></div>
+      <div class="sechead"><h2 id="h-checks" class="h2">System check</h2><span class="lbl" id="check-sum"></span></div>
       <div class="panel" style="padding:4px" id="checks"></div>
     </section>
   </div>
 
   <section aria-labelledby="h-log" style="display:flex;flex-direction:column;gap:12px">
     <div class="loghead">
-      <h2 id="h-log" class="cap" style="margin-right:10px">Previously…</h2>
+      <h2 id="h-log" class="cap" style="margin-right:10px">Activity log</h2>
       <span id="log-filters" role="group" aria-label="Show" style="display:flex;gap:8px"></span>
       <span class="spacer"></span>
       <button class="chip" id="copy-log" disabled><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy</button>
@@ -104,24 +146,36 @@
     </div>
     <div id="log" role="log" aria-label="Log"></div>
   </section>
+
+  <footer class="pagefoot">
+    <button class="link" id="quit" type="button">Quit CS2 Clipper</button>
+    <div class="split" id="quit-choice" role="group" aria-label="A render is running" hidden>
+      <button class="ghost" id="quit-now">Quit now (the render is redone later)</button>
+      <button class="primary" id="quit-after">Quit when this render finishes</button>
+    </div>
+    <span class="help">The tray icon keeps running when this window closes; it has Quit too.</span>
+  </footer>
+  </div>
 </main>
 <script>
 // Status is the home screen (spec: Pages -> Status): what the app is doing, the latest Highlights,
 // the Demos waiting to be grabbed, the checks and the log.
-const STAGES = ["spotted", "unpacked", "analyzed", "scored", "rendering", "joined", "done"];
-const STAGE_LABEL = ["Spotted", "Unpacked", "Analyzed", "Scored", "Rendering", "Joined", "Done"];
+// The pipeline as the player sees it: three steps. The worker's seven states are its own business.
+const PHASES = [["Found", ["spotted", "unpacked", "analyzed", "scored"]], ["Making clips", ["rendering", "joined"]],
+  ["Ready", ["done"]]];
+const phaseOf = state => Math.max(0, PHASES.findIndex(([, states]) => states.includes(state)));
+const etaLabel = s => s == null ? "" : s < 90 ? "about a minute left" : `about ${Math.round(s / 60)} min left`;
 const PERSPECTIVE = {player: "Player view", enemy: "Enemy view"};
 let quitRequested = false, pauseRoute = false, nickname = "", lastStatus = null, grabRows = [], prevDemos = null;
 let logFilter = "all", follow = true, logLines = [], shownLog = [];
 let setupWasRunning = false, setupUpdates = null;
-const opened = new Set(JSON.parse(sessionStorage.getItem("opened") || "[]"));
 
 // The buttons' icons live in app.js; the page's markup names them.
 document.querySelectorAll("main button, main a").forEach(el => {
   el.innerHTML = el.innerHTML.replace("${PAUSE}", ICON.pause).replace("${PLAY}", ICON.play).replace("${NEXT}", ICON.next);
 });
 const strip = document.getElementById("strip");
-strip.innerHTML = STAGE_LABEL.map((l, i) => `<div class="mini" role="listitem"><small>${i + 1}.</small><b>${l}</b></div>`).join("");
+strip.innerHTML = PHASES.map(([l], i) => `<div class="mini" role="listitem"><small>${i + 1}.</small><b>${l}</b><span class="eta"></span></div>`).join("");
 document.querySelectorAll("[data-nugget]").forEach(n => { n.outerHTML = NUGGET.head(n.dataset.nugget); });
 const carousel = Carousel(document.getElementById("hero"));
 
@@ -133,7 +187,7 @@ function greeting() {
 
 function subLine(data) {
   if (data.quitting) return data.quitting === "after_render" ? "The app closes when this render finishes." : "Closing CS2 Clipper.";
-  if (data.problems.length) return "Nothing renders until these are fixed.";
+  if (data.problems.length) return "Fix what's below and it starts by itself.";
   if (data.rendering && data.rendering.progress) return progressLine(data.rendering.progress);
   if (data.rendering) {
     const minutes = Math.max(1, Math.round(Date.now() / 60000 - data.rendering.started_at / 60));
@@ -160,7 +214,7 @@ function progressLine(p) {
 // --- Nugget: the rooftop he films from, what he says, and the sound it makes --------------------------------
 // His mood comes from what the app is doing; an Ace (touches.js says so with `clipper:ace`) has him crowing a while.
 const READING = ["spotted", "unpacked", "analyzed", "scored"];
-const SFX = {rendering: ["REC!", "#FF5500"], idle: ["zzz…", "#F2EFEA"], paused: ["HOLD!", "#F2EFEA"], problem: ["CLUNK!", "#FFB27A"],
+const SFX = {rendering: ["REC!", "#FF5500"], idle: ["zzz…", "#F2EFEA"], paused: ["HOLD!", "#F2EFEA"], problem: null,
   ace: ["POW!", "#FF5500"]};
 let stageKey = "", aceUntil = 0, aceNews = null;
 NUGGET.follow(document.getElementById("art"), [0.29, 0.52]);
@@ -178,20 +232,16 @@ function nuggetSays(data, mood) {
       : `Bawk bawk! An Ace on ${aceNews.map}. Five frags in one round, and it's in your Reels.`;
   }
   if (data.quitting) return data.quitting === "after_render" ? "I'll finish this take, then the app closes." : "Packing up the camera. See you next match.";
-  if (data.paused_by === "failures") return "Bawk! My renders kept failing, so I stopped filming. Check the log, then resume.";
-  if (data.problems.length) {
-    const more = data.problems.length > 1 ? ` (+${data.problems.length - 1} more below)` : "";
-    return `Bawk! I can't film yet. ${data.problems[0]}${/[.!?]$/.test(data.problems[0]) ? "" : "."}${more}`;
-  }
+  if (data.paused_by === "failures") return "Renders kept failing, so rendering stopped. The log says why; resume once it is fixed.";
+  if (data.problems.length) return `Rendering waits for ${data.problems.length === 1 ? "the fix" : "the fixes"} below.`;
   const r = data.rendering;
   if (r) {
     const p = r.progress, map = r.map || "match";
     if (p && p.stage === "starting") return `Starting CS2 for your ${map} Highlights. Hands off for a few minutes!`;
     if (p && p.stage === "joining") return `Stitching your ${map} Clips into a Reel. Nearly there!`;
     const enemy = (p && p.perspective || r.perspective) === "enemy";
-    const next = r.perspective === "both" && !enemy;
     return `Filming your ${map} Highlights from ${enemy ? "the Enemy POV" : "your view"}.`
-      + (next ? " Enemy POV is next, so keep CS2 closed for a few minutes." : " Keep CS2 closed for a few minutes!");
+      + (enemy ? " Your view is in Reels already." : " They land in Reels the moment this take ends.");
   }
   if (data.paused_by === "you") return "Camera's down. Demos keep coming in, and I'll film them when you resume.";
   if (/^Waiting/.test(data.summary)) return `${data.summary}. I'll start filming once that clears.`;
@@ -205,12 +255,12 @@ function nuggetSays(data, mood) {
 // The caption over his panel: where the story is, or the greeting when nothing is going on.
 function captionOf(data, mood) {
   if (mood === "ace" && aceNews) return aceNews.round ? `${aceNews.map}, round ${aceNews.round}…` : `Meanwhile, on ${aceNews.map}…`;
-  if (mood === "problem") return "Uh-oh…";
+  if (mood === "problem") return "On hold";
   if (data.rendering) return `Meanwhile, on ${data.rendering.map || "the server"}…`;
   if (data.paused_by === "you") return "Hold the presses…";
   return greeting();
 }
-const restingCaption = (data, mood) => mood === "ace" ? "In your Reels now" : mood === "problem" ? "Rendering on hold"
+const restingCaption = (data, mood) => mood === "ace" ? "In your Reels now" : mood === "problem" ? "Waiting for a fix"
   : data.paused_by === "you" ? "Paused" : "Standing by";
 
 function renderStage(data) {
@@ -222,7 +272,7 @@ function renderStage(data) {
     const scene = document.getElementById("scene");
     scene.innerHTML = NUGGET.scene(mood, night);
     scene.firstElementChild.classList.add("in");
-    document.getElementById("sfx").innerHTML = NUGGET.burst(...SFX[sfx]);
+    document.getElementById("sfx").innerHTML = SFX[sfx] ? NUGGET.burst(...SFX[sfx]) : "";
   }
   document.getElementById("greet").textContent = captionOf(data, mood);
   if (!data.rendering) document.getElementById("elapsed").textContent = restingCaption(data, mood);
@@ -250,14 +300,14 @@ function currentDemo(demos) {
 
 // A running Render Job counts for `overall`, how far its render has got (0 to 1), when the app says; else a guess.
 function progressOf(d, overall) {
-  if (d.state === "failed") return {index: d.jobs.length ? 4 : 2, frac: (d.jobs.length ? 4 : 2) / 6};
-  const index = STAGES.indexOf(d.state);
-  let frac = Math.max(0, index) / 6;
+  if (d.state === "failed") return {index: d.jobs.length ? 1 : 0, frac: d.jobs.length ? 0.5 : 0.2};
+  const index = phaseOf(d.state);
+  let frac = index / 2;
   if (d.state === "rendering" && d.jobs.length) {
     const done = d.jobs.filter(j => j.state === "done").length;
-    const running = d.jobs.filter(j => j.state === "running").length;     // a launch records both views at once
-    frac = (4 + (done + running * (overall ?? 0.35)) / d.jobs.length) / 6;
-  }
+    const running = d.jobs.filter(j => j.state === "running").length;     // one view per CS2 launch
+    frac = (1 + (done + running * (overall ?? 0.35)) / d.jobs.length) / 2;
+  } else if (d.state === "joined") frac = 0.95;
   return {index, frac: Math.min(1, frac)};
 }
 const overallOf = data => data?.rendering?.progress?.overall;
@@ -270,10 +320,11 @@ function jobPill(j) {
 let elapsedTimer = 0;
 function renderNow(data) {
   const mode = summaryMode(data);
-  document.getElementById("now").textContent = data.summary;
+  document.getElementById("now").textContent = data.problems.length ? "Rendering is on hold" : data.summary;
   document.getElementById("now-sub").textContent = subLine(data);
   document.getElementById("now-dot").className = "dot" + (mode ? " " + mode : "");
-  setNavStatus(data.summary, mode);
+  setNavStatus(data.problems.length ? "On hold" : data.summary, mode);
+  renderPromise(data);
   setSweep(mode);
 
   const elapsed = document.getElementById("elapsed");
@@ -299,6 +350,7 @@ function renderNow(data) {
     mini.setAttribute("aria-current", i === index ? "step" : "false");
   });
   placeBuddy(strip.children[index], d.state === "failed" ? "problem" : "rendering", live && overall != null ? overall : null);
+  strip.children[1].querySelector(".eta").textContent = index === 1 || d.eta_s != null && index === 0 ? etaLabel(d.eta_s) : "";
   sync(document.getElementById("jobs"), d.jobs, j => j.perspective, jobPill);
 }
 
@@ -333,7 +385,8 @@ const demoName = d => `${esc(d.map || "Demo")} #${+d.id}`;
 function demoCard(d) {
   const {frac} = progressOf(d);       // not the live progress: a card whose HTML changes flashes, Sequence by Sequence
   const going = deleted.has(d.id), asking = askingDelete.has(d.id) && !going;
-  const label = going ? "Deleting…" : d.state === "failed" ? "Failed" : STAGE_LABEL[STAGES.indexOf(d.state)] || d.state;
+  const label = going ? "Deleting…" : d.state === "failed" ? "Failed" : PHASES[phaseOf(d.state)][0];
+  const eta = !going && d.state === "rendering" && d.eta_s != null ? `<span class="help" style="display:block;margin-top:5px">${esc(etaLabel(d.eta_s))}</span>` : "";
   const color = going ? "#8F857A" : d.state === "failed" ? "#FF8A3D" : d.state === "rendering" ? "#FFB27A" : "#D6CBBE";
   const bar = d.state === "failed" ? "pbar fail" : d.state === "rendering" && !going ? "pbar live" : "pbar";
   // A joined Demo is in Reels already, past deleting from here.
@@ -342,7 +395,7 @@ function demoCard(d) {
   return `<div class="dcard">
     <div class="top"><span class="maptile">${mapAbbr(d.map || "?")}</span>
       <span style="flex-grow:1;min-width:0"><span class="dname">${esc(d.map || "Reading the Demo…")} <em>#${+d.id}</em></span>
-        <span class="${bar}" style="display:block;margin-top:6px" aria-hidden="true"><i data-w="${(frac * 100).toFixed(1)}%"></i></span></span>
+        <span class="${bar}" style="display:block;margin-top:6px" aria-hidden="true"><i data-w="${(frac * 100).toFixed(1)}%"></i></span>${eta}</span>
       <span class="dstate" style="color:${color}">${esc(label)}</span>${bin}</div>
     ${asking ? `<div class="ask"><span>Delete ${demoName(d)}? ${d.state === "rendering" ? "Its render stops, and its" : "Its"} download and clips are removed.</span>
       <div class="acts"><button class="ghost sm" data-delete-no="${+d.id}">Keep</button><button class="primary sm" data-delete-yes="${+d.id}">Delete</button></div></div>` : ""}
@@ -405,9 +458,9 @@ function grabRow(r) {
   const hours = (new Date(r.expires_at) - Date.now()) / 3600000, days = hours / 24, soon = days <= 3;
   const hl = GRAB_WORDS.filter(([k]) => r.highlights[k]).map(([k, w, c]) =>
     `<span class="badge ${c}">${r.highlights[k] > 1 ? r.highlights[k] + "× " : ""}${w}</span>`).join("");
-  const act = opened.has(r.id) ? '<span class="wait"><i></i><i></i><i></i>Waiting</span>'
+  const act = r.opened ? '<span class="wait"><i></i><i></i><i></i>Waiting</span>'
     : `<a class="primary dark sm" href="${esc(r.url)}" target="_blank" rel="noopener" data-open="${esc(r.id)}">Open</a>`;
-  return `<article class="wanted"><div class="w">Wanted</div>
+  return `<article class="wanted"><div class="w">Ready to download</div>
     <div class="mid"><span class="m">${esc(r.map)}</span><span class="r">${hl}</span><span class="go">${act}</span></div>
     <div class="e${soon ? " soon" : ""}">Link expires in ${left(r.expires_at)}</div>
     <span class="life${soon ? " soon" : ""}" style="display:block"><i data-w="${Math.max(2, Math.min(100, days / 30 * 100)).toFixed(1)}%"></i></span>
@@ -418,7 +471,8 @@ function renderGrab() {
   const pending = pendingRows(grabRows).sort((a, b) => a.expires_at.localeCompare(b.expires_at));
   setNavCount(pending.length);
   const box = document.getElementById("grab");
-  if (!pending.length) { box.innerHTML = `<div class="empty nug-empty" style="padding:10px 0 6px">${NUGGET.head("idle")}<span>All caught up. Go queue.</span></div>`; box._ready = false; }
+  const onHold = lastStatus && lastStatus.problems.length;
+  if (!pending.length) { box.innerHTML = `<div class="empty nug-empty" style="padding:10px 0 6px">${NUGGET.head("idle")}<span>${onHold ? "Nothing to grab yet. Fix what's above first." : "All caught up. Go queue."}</span></div>`; box._ready = false; }
   else sync(box, pending.slice(0, 3), r => r.id, grabRow);
   document.getElementById("grab-note").hidden = !pending.length;
 }
@@ -437,9 +491,11 @@ function renderSlides(matches) {
       acts: [{label: "Watch", primary: true, href: `/reels?play=${+play}`},
         ...(h.player !== null && h.enemy !== null ? [{label: "Enemy POV", href: `/reels?play=${+h.enemy}`}] : [])]};
   });
+  const pending = pendingRows(grabRows).length;
   if (!slides.length) slides.push({key: "welcome", meta: "Reels", title: "Your Highlights land here",
-    sub: "Grab a Demo with a 3K or better and its Clips show up here once they're rendered.",
-    acts: [{label: "Demos to grab", primary: true, href: "/demos", icon: false}]});
+    sub: pending ? "A match with a 3K or better is waiting: grab its Demo and its Clips show up here."
+      : "Play a FACEIT match. When it has a 3K or better, a toast says so, and its Clips show up here.",
+    acts: pending ? [{label: "Demos to grab", primary: true, href: "/demos", icon: false}] : []});
   carousel.set(slides);
 }
 
@@ -536,10 +592,11 @@ function renderSetup(data) {
   if (error._said !== said) { error._said = said; error.innerHTML = said ? `${ICON.info}<span>${linked(said)}</span>` : ""; }
 }
 
+let lastSetup = null;
 async function loadSetup() {
   try {
     const response = await api("api/setup");
-    if (response.ok) renderSetup(await response.json());
+    if (response.ok) { lastSetup = await response.json(); renderSetup(lastSetup); }
   } catch (e) { /* ask again */ }
 }
 
@@ -583,17 +640,87 @@ async function loadUpdate() {
   } catch (e) { /* ask again: while the installer runs, the app is gone for a moment */ }
 }
 
+// --- the first run: one screen, three things -------------------------------------------------------------------
+let onboardWas = null, canPick = !!window.pywebview?.api?.pick_folder;
+addEventListener("pywebviewready", () => { canPick = !!window.pywebview?.api?.pick_folder; });
+
+function renderOnboard(ob, setup) {
+  const first = ob && ob.done === false;
+  document.getElementById("onboard").hidden = !first;
+  document.getElementById("home").hidden = first;
+  if (onboardWas === true && !first) toast(`${ICON.check}<span>You're set. Play a FACEIT match; its Highlights land in Reels.</span>`, 5000);
+  onboardWas = first;
+  if (!first) return;
+  const tick = (id, ok) => { const el = document.getElementById(id); el.hidden = !ok; el.innerHTML = ok ? ICON.check : ""; };
+  document.getElementById("ob-who").classList.toggle("done", ob.steamid);
+  tick("ob-who-ok", ob.steamid);
+  const nick = document.getElementById("ob-nick");
+  if (ob.steamid && document.activeElement !== nick && !nick.value) nick.value = ob.nickname;
+  document.getElementById("ob-who-line").textContent = ob.steamid ? `Clipping ${ob.nickname}'s Highlights.` : "So the app knows whose Highlights to clip.";
+  document.getElementById("ob-folder").classList.toggle("done", !!ob.clips_folder);
+  tick("ob-folder-ok", !!ob.clips_folder);
+  document.getElementById("ob-folder-path").textContent = ob.clips_folder || "Not set yet";
+  document.getElementById("ob-folder-change").hidden = !canPick;
+  document.getElementById("ob-tools").classList.toggle("done", ob.tools === "ok");
+  tick("ob-tools-ok", ob.tools === "ok");
+  const p = setup && setup.progress, size = ob.download_mb ? `about ${ob.download_mb} MB` : "";
+  document.getElementById("ob-tools-line").textContent = ob.tools === "ok" ? "csda, FFmpeg and HLAE are installed."
+    : ob.tools === "downloading" ? `Downloading csda, FFmpeg and HLAE${size ? ` (${size})` : ""}. Leave the app open.`
+    : ob.tools === "failed" ? `The download stopped: ${setup && setup.error || "try again"}`
+    : `csda, FFmpeg and HLAE${size ? `, ${size},` : ""} download on their own.`;
+  const dl = document.getElementById("ob-dl");
+  dl.hidden = !(ob.tools === "downloading" && p && p.total && p.done < p.total);
+  if (!dl.hidden) {
+    dl.querySelector("i").style.width = (p.done / p.total * 100).toFixed(1) + "%";
+    document.getElementById("ob-mb").textContent = `${megabytes(p.done)} of ${megabytes(p.total)} MB`;
+  }
+  document.getElementById("ob-tools-go").hidden = !(ob.tools === "failed" || ob.tools === "needed");
+}
+
+async function lookUp() {
+  const button = document.getElementById("ob-lookup"), err = document.getElementById("ob-nick-err");
+  const typed = document.getElementById("ob-nick").value.trim();
+  err.textContent = "";
+  if (!typed) { err.textContent = "Type your FACEIT nickname first"; return; }
+  button.disabled = true;
+  try {
+    const response = await api("api/faceit/lookup", {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({nickname: typed}),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) err.textContent = data.error || "FACEIT couldn't find that nickname";
+    else { nickname = data.nickname; toast(`${ICON.check}<span>Found ${esc(data.nickname)}.</span>`); }
+  } catch (e) { err.textContent = "Can't reach CS2 Clipper right now."; }
+  button.disabled = false;
+  loadStatus();
+}
+
+async function changeFolder() {
+  const picked = await window.pywebview.api.pick_folder(lastStatus?.onboarding?.clips_folder || "");
+  const folder = Array.isArray(picked) ? picked[0] : picked;
+  if (!folder) return;
+  const response = await api("api/settings", {
+    method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify({data_root: folder}),
+  });
+  if (!response.ok) toast(`${ICON.info}<span>That folder can't be used. Pick another.</span>`);
+  loadStatus();
+}
+
 // --- loading ------------------------------------------------------------------------------------------------
 function renderStatus(data) {
   lastStatus = data;
+  renderOnboard(data.onboarding, lastSetup);
   renderNow(data);
   document.getElementById("resume").hidden = data.paused_by === null || !!data.quitting;
   document.getElementById("pause").hidden = !pauseRoute || data.paused_by !== null || !!data.quitting || data.problems.length > 0;
 
-  const notices = [...data.problems.map(t => ["p", t]), ...data.warnings.map(t => ["w", t])];
+  // Each problem once, with what fixes it beside it. What the Set up card covers is left to it.
+  const setupShown = !document.getElementById("setup").hidden;
+  const notices = [...data.problems.filter(t => !(setupShown && /Set up/.test(t))).map(t => ["p", t]),
+    ...data.warnings.map(t => ["w", t])];
   if (data.pages_off) notices.push(["w", `Pages are off: ${data.pages_off}`]);
   sync(document.getElementById("notice"), notices, n => n[1], ([cls, text]) =>
-    `<div class="notice ${cls}">${ICON.info}<span>${esc(text)}</span>${/Settings/.test(text) ? '<a href="/settings">Open Settings</a>' : ""}</div>`);
+    `<div class="notice ${cls}">${ICON.info}<span>${esc(text)}</span>${fixFor(text)}</div>`);
 
   sync(document.getElementById("checks"), data.checks, c => c.name, checkRow);
   const passing = data.checks.filter(c => c.ok === true).length;
@@ -601,6 +728,21 @@ function renderStatus(data) {
   renderDemos(data.demos);
   renderIntro();
   dispatchEvent(new CustomEvent("clipper:status", {detail: data}));     // the map glow and the loading lines (touches.js)
+}
+
+function fixFor(text) {
+  if (/FACEIT nickname/.test(text)) return '<a class="primary dark sm" href="/settings#g-you">Look up</a>';
+  if (/clips folder/.test(text)) return '<a class="primary dark sm" href="/settings#g-folders">Choose a folder</a>';
+  if (/Set up/.test(text)) return '<button class="primary dark sm" type="button" data-setup>Set up</button>';
+  return /Settings/.test(text) ? '<a class="primary dark sm" href="/settings">Open Settings</a>' : "";
+}
+
+// The zero-FPS promise, with what the app takes right now to back it.
+function renderPromise(data) {
+  const f = data.footprint, use = f ? ` Right now it uses ${f.memory_mb} MB of RAM and ${f.cpu_percent.toFixed(1)}% CPU.` : "";
+  document.getElementById("promise").innerHTML = data.rendering
+    ? "<b>CS2 is recording your Highlights.</b> It closes the moment FACEIT AC starts, and you can quit from the tray."
+    : `<b>Zero FPS cost:</b> nothing runs while CS2 is open.${use}`;
 }
 
 function renderIntro() {
@@ -611,9 +753,9 @@ function renderIntro() {
     `${pending ? plural(pending, "Demo") + " to grab" : "No Demos to grab"}${n ? ` and ${n} in progress.` : ". Nothing in progress."}`;
 }
 
+let stopped = false;
 function stopPolling() {
-  clearInterval(statusTimer); clearInterval(logTimer); clearInterval(grabTimer); clearInterval(reelsTimer);
-  clearInterval(setupTimer); clearInterval(updateTimer);
+  stopped = true;
   document.getElementById("now").textContent = "Quitting…";
   document.getElementById("quit-choice").hidden = true;
   document.getElementById("quit").hidden = true;
@@ -702,6 +844,18 @@ document.getElementById("demos").addEventListener("click", async e => {
     deleteDemo(+deleteYes);
   }
 });
+document.getElementById("ob-lookup").addEventListener("click", lookUp);
+document.getElementById("ob-nick").addEventListener("keydown", e => { if (e.key === "Enter") lookUp(); });
+document.getElementById("ob-folder-change").addEventListener("click", changeFolder);
+document.getElementById("ob-tools-go").addEventListener("click", async () => {
+  await api("api/setup", {method: "POST"});
+  loadSetup(); loadStatus();
+});
+document.getElementById("notice").addEventListener("click", async e => {
+  if (!e.target.closest("[data-setup]")) return;
+  await api("api/setup", {method: "POST"});
+  loadSetup();
+});
 document.getElementById("setup-go").addEventListener("click", async e => {
   const button = e.currentTarget;
   button.disabled = true;
@@ -723,9 +877,9 @@ document.getElementById("update-go").addEventListener("click", async e => {
 document.getElementById("grab").addEventListener("click", e => {
   const link = e.target.closest("a[data-open]");
   if (!link) return;
-  opened.add(link.dataset.open);
-  sessionStorage.setItem("opened", JSON.stringify([...opened]));
-  setTimeout(renderGrab, 0);
+  const r = grabRows.find(x => x.id === link.dataset.open);
+  if (r) { r.opened = true; setTimeout(renderGrab, 0); }
+  api(`demos/${link.dataset.open}/opened`, {method: "POST"}).catch(() => {});
 });
 document.getElementById("log-filters").addEventListener("click", e => {
   const b = e.target.closest("[data-filter]");
@@ -748,13 +902,14 @@ document.getElementById("log").addEventListener("wheel", e => { if (e.deltaY < 0
   } catch (e) { /* the greeting goes without a name */ }
   renderIntro();
 })();
-loadStatus(); loadLog(); loadGrab(); loadReels(); loadSetup(); loadUpdate();
-const statusTimer = setInterval(loadStatus, 2000);
-const setupTimer = setInterval(loadSetup, 2000);
-const updateTimer = setInterval(loadUpdate, 2000);
-const logTimer = setInterval(loadLog, 5000);
-const grabTimer = setInterval(loadGrab, 5000);
-const reelsTimer = setInterval(loadReels, 15000);
+// Status asks every 2 s while the window is in front, and every 20 s or so while it rests (app.js `every`).
+const unlessStopped = load => () => stopped ? undefined : load();
+every(2000, unlessStopped(loadStatus));
+every(2000, unlessStopped(loadSetup));
+every(2000, unlessStopped(loadUpdate));
+every(5000, unlessStopped(loadLog));
+every(5000, unlessStopped(loadGrab));
+every(15000, unlessStopped(loadReels), 60000);
 </script>
 </body>
 </html>

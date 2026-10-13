@@ -1116,7 +1116,7 @@ def test_a_tasklist_that_cannot_answer_is_no_error(monkeypatch, error):
     assert hlae_render._hlae_error_shown() is False
 
 
-def test_hlae_is_started_without_a_window_and_its_output_goes_to_the_log(monkeypatch):
+def test_hlae_is_started_without_a_window_below_normal_priority_and_its_output_goes_to_the_log(monkeypatch):
     started = {}
 
     def popen(command, **kwargs):
@@ -1124,9 +1124,10 @@ def test_hlae_is_started_without_a_window_and_its_output_goes_to_the_log(monkeyp
         return "the process"
 
     monkeypatch.setattr(hlae_render, "subprocess", SimpleNamespace(
-        Popen=popen, CREATE_NO_WINDOW=0x08000000, STDOUT=subprocess.STDOUT, DEVNULL=subprocess.DEVNULL))
+        Popen=popen, CREATE_NO_WINDOW=0x08000000, BELOW_NORMAL_PRIORITY_CLASS=0x4000, STDOUT=subprocess.STDOUT,
+        DEVNULL=subprocess.DEVNULL))
     assert hlae_render._launch(["HLAE.exe", "-noGui"], "the log", {"USRLOCALCSGO": "the folder"}) == "the process"
     assert started["command"] == ["HLAE.exe", "-noGui"]
     assert started["env"] == {"USRLOCALCSGO": "the folder"}
     assert started["stdout"] == "the log" and started["stderr"] == subprocess.STDOUT
-    assert started["creationflags"] == 0x08000000
+    assert started["creationflags"] == 0x08000000 | 0x4000

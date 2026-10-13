@@ -197,6 +197,14 @@ def test_run_open_reels_reaches_run_as_reels(run_calls):
     assert run_calls == [{"open_page": "/reels", "background": False, "headless": False}]
 
 
+def test_a_link_is_handed_to_open_link(monkeypatch, run_calls):
+    opened = []
+    monkeypatch.setattr("clipper.cli.app.open_link", lambda url: opened.append(url) or 0)
+    assert main(["--link", "cs2clipper://reels?play=3"]) == 0
+    assert opened == ["cs2clipper://reels?play=3"]
+    assert run_calls == []
+
+
 # --- --window URL: the window process (internal) ---------------------------------------------------
 
 

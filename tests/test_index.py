@@ -408,6 +408,16 @@ def test_pause_records_who_and_resume_clears_it(index):
     assert index.get_flag("consecutive_failures") == "0"
 
 
+def test_a_snooze_lasts_until_its_time_and_can_be_ended(index):
+    now = datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)
+    assert index.snoozed_until(now) is None
+    index.snooze(now + timedelta(hours=1))
+    assert index.snoozed_until(now) == now + timedelta(hours=1)
+    assert index.snoozed_until(now + timedelta(hours=1)) is None
+    index.snooze(None)
+    assert index.snoozed_until(now) is None
+
+
 def test_pause_after_failures(index):
     index.pause("failures")
     assert index.paused_by() == "failures"

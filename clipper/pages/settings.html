@@ -35,21 +35,29 @@
 <script>
 // Settings (spec: Pages -> Settings): built from the fields the app sends, so a new setting shows up
 // here with no change to this page. Each kind gets its own control; the two "seconds around each Frag"
-// numbers share one timeline. Nothing is sent until Save.
+// numbers share one timeline; the plumbing fields wait, closed, under Advanced. Nothing is sent until Save,
+// Look up included.
 const BLURB = {"You": "Who the Highlights are for", "Folders": "Where things live on this PC", "Picture": "What each Clip looks like",
   "HUD": "What shows over the picture",
   "Rendering": "How hard it tries, and when it waits", "Match alerts": "Notifications when a FACEIT match has Highlights",
-  "Touches": "Sounds, glow, motion and the keys", "App": "The pages and the worker"};
+  "Touches": "Sounds, glow, motion and the keys", "App": "The pages and the worker",
+  "Advanced": "Plumbing: keys, paths, timeouts and the port. Nothing here needs changing to clip."};
 const RATIO = {"16:9": ["16:9", "1920×1080", 64, 36], "4:3": ["4:3", "1280×960", 48, 36], "4:3-hd": ["4:3 HD", "1440×1080", 48, 36],
   "4:3-stretched": ["4:3 stretched", "1280×960 shown at 1920×1080", 64, 36]};
 const CHOICE_LABEL = {kills: "Kill", rounds: "Round", both: "Both", player: "Your view", enemy: "Enemy POV",
-  killfeed: "Kill feed only", full: "Full HUD"};
+  killfeed: "Kill feed only", full: "Full HUD", anytime: "Any time", idle: "When idle 10 min", overnight: "Overnight",
+  cpu: "CPU (x264)", gpu: "Graphics card"};
 const CHOICE_HELP = {kills: "Each Frag starts its own Sequence.", rounds: "A whole round of Frags becomes one Sequence.",
-  both: "Your view and the Enemy POV, one after the other in one CS2 launch.",
+  both: "Your view first, ready to watch while the Enemy POV records in a second CS2 launch.",
   player: "Only your view, so each match records half as much.",
   enemy: "Only the Enemy POV, each Frag seen by the player you killed. Each match records half as much.",
   killfeed: "Only the kill feed shows over the picture.",
-  full: "CS2's whole HUD: the radar, health, ammo and the round timer, with the kill feed."};
+  full: "CS2's whole HUD: the radar, health, ammo and the round timer, with the kill feed.",
+  anytime: "As soon as CS2 and FACEIT AC are closed.",
+  idle: "Once CS2 and FACEIT AC are closed and nobody has touched the PC for 10 minutes.",
+  overnight: "Between 1 am and 7 am, with CS2 and FACEIT AC closed. Leave the PC on.",
+  cpu: "x264 on the processor: the look every Clip has had.",
+  gpu: "NVENC, AMF or Quick Sync on the graphics card, so CS2 is open for less time. x264 when the PC has none."};
 const ROUND_VIEW = "Round Clips are always rendered from your view: a round has no one enemy to follow.";
 const MONO = new Set(["steamid", "folder", "program", "url"]);
 const PAD = ["padding_before_s", "padding_after_s"];
@@ -130,16 +138,23 @@ function faceitBlock() {
 }
 
 function render() {
-  const groups = [];
+  const groups = [], advanced = {name: "Advanced", fields: []};
   for (const f of fields) {
+    if (f.advanced) { advanced.fields.push(f); continue; }
     let group = groups.find(g => g.name === f.group);
     if (!group) { group = {name: f.group, fields: []}; groups.push(group); }
     group.fields.push(f);
   }
+  if (advanced.fields.length) groups.push(advanced);
+  const open = document.getElementById("g-advanced")?.open || false;
   const slug = name => "g-" + name.toLowerCase().replace(/[^a-z0-9]+/g, "-");
   document.getElementById("snav").innerHTML = groups.map(g => `<a href="#${slug(g.name)}"><i></i>${esc(g.name)}</a>`).join("");
-  document.getElementById("form").innerHTML = groups.map((g, i) => `<section id="${slug(g.name)}" class="group cut rise" style="animation-delay:${i * 0.04}s" aria-labelledby="h-${slug(g.name)}">
-    <div class="gtitle"><h2 id="h-${slug(g.name)}" class="h2" style="font-size:28px">${esc(g.name)}</h2>${BLURB[g.name] ? `<span class="help">${BLURB[g.name]}</span>` : ""}</div>
+  const title = g => `<h2 id="h-${slug(g.name)}" class="h2" style="font-size:28px">${esc(g.name)}</h2>${BLURB[g.name] ? `<span class="help">${BLURB[g.name]}</span>` : ""}`;
+  document.getElementById("form").innerHTML = groups.map((g, i) => g === advanced
+    ? `<details id="${slug(g.name)}" class="group cut rise advanced" style="animation-delay:${i * 0.04}s"${open ? " open" : ""}>
+    <summary class="gtitle">${title(g)}</summary><div class="fgrid">${g.fields.map(fieldRow).join("")}</div></details>`
+    : `<section id="${slug(g.name)}" class="group cut rise" style="animation-delay:${i * 0.04}s" aria-labelledby="h-${slug(g.name)}">
+    <div class="gtitle">${title(g)}</div>
     <div class="fgrid">${g.name === "You" ? faceitBlock() : ""}${g.fields.map(fieldRow).join("")}</div></section>`).join("");
   document.querySelectorAll(".seg").forEach(placePill);
   updatePad();
@@ -262,8 +277,8 @@ async function finishSignIn() {
     : `FACEIT sign-in failed: ${esc(data.error || "try again")}`;
 }
 
-// Asks the app to resolve the typed FACEIT name; it saves the nickname and the SteamID itself. Only
-// those two boxes change afterwards, so nothing else typed but not saved is lost.
+// Asks the app to resolve the typed FACEIT name into the nickname and SteamID, which fill their two boxes: Save
+// keeps them with everything else, as for any other setting.
 async function lookupName(button) {
   const err = document.getElementById("err-faceit_nickname");
   const nickname = (document.getElementById(fid("faceit_nickname")).value || "").trim();
@@ -271,21 +286,17 @@ async function lookupName(button) {
   if (!nickname) { err.textContent = "Type your FACEIT name first"; return; }
   button.disabled = true;
   const response = await api("api/faceit/lookup", {
-    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({nickname}),
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({nickname, save: false}),
   });
   button.disabled = false;
   const data = await response.json().catch(() => ({}));
   if (!response.ok) { err.textContent = data.error || "FACEIT lookup failed"; return; }
-  values.faceit_nickname = data.nickname;
-  values.subject_steamid = data.steamid;
   document.getElementById(fid("faceit_nickname")).value = data.nickname;
   const sid = document.getElementById(fid("subject_steamid"));
   if (sid) sid.value = data.steamid;
   document.getElementById("err-subject_steamid").textContent = "";
-  const block = document.getElementById("faceit");
-  if (block) block.outerHTML = faceitBlock();
   updateDirty();
-  toast(`${ICON.check}<span>Found ${esc(data.nickname)}. Nickname and SteamID are saved.</span>`, 3600);
+  toast(`${ICON.check}<span>Found ${esc(data.nickname)}. Save to keep the nickname and SteamID.</span>`, 3600);
 }
 
 const form = document.getElementById("form");
@@ -342,6 +353,10 @@ form.addEventListener("click", async e => {
   }
 });
 
+document.getElementById("snav").addEventListener("click", e => {
+  const link = e.target.closest('a[href="#g-advanced"]');
+  if (link) document.getElementById("g-advanced").open = true;
+});
 document.getElementById("discard").addEventListener("click", () => { load(); });
 document.getElementById("save").addEventListener("click", async () => {
   const button = document.getElementById("save");

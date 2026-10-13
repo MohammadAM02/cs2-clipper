@@ -12,7 +12,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
-from clipper import analysis, app, applog, checks, move_in, packaged, paths, provision, settings, window
+from clipper import analysis, app, applog, checks, move_in, notify, packaged, paths, provision, settings, window, windows
 from clipper.config import REPO_ROOT, Config
 from clipper.gate import Gate, GateStatus
 from clipper.index import Index
@@ -146,6 +146,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--background", action="store_true",
                         help="start in the tray only (used at sign-in)")
     parser.add_argument("--window", metavar="URL", help=argparse.SUPPRESS)   # internal: the window process
+    parser.add_argument("--link", metavar="URL", help=argparse.SUPPRESS)     # a cs2clipper: link (clipper.links)
     parser.add_argument("--bundle-check", metavar="REPORT", help=argparse.SUPPRESS)   # internal: the build's check
     commands = parser.add_subparsers(dest="command")
     run_parser = commands.add_parser("run", help="run the app")
@@ -163,10 +164,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.window:      # the window process: no lock and no move-in, it only shows a page
+        try:
+            windows.set_app_id(notify.APP_ID)     # its taskbar button is the Start menu shortcut's
+        except OSError:
+            pass
         return window.run_window(args.window, paths.data_dir() / "window-profile")
     packaged.release_dll_directory()     # before anything starts a process: see clipper.packaged
     if args.bundle_check:    # the build's check of the exe: no lock and no move-in, nothing starts
         return packaged.check(Path(args.bundle_check))
+    if args.link is not None:     # a toast's button: the running copy follows it, or the app starts on its page
+        return app.open_link(args.link)
     if args.command in (None, "run"):
         return app.run(open_page=f"/{args.open}" if args.open else None, background=args.background,
                        headless=args.command == "run" and args.headless)
@@ -185,7 +192,7 @@ def main(argv: list[str] | None = None) -> int:
             if cfg.data_root is None:
                 gate_status = GateStatus(ok=False, reasons=("the clips folder is not set",))
             else:
-                gate_status = Gate(SystemProbe(), cfg.data_root, cfg.min_free_gb).check()
+                gate_status = Gate(SystemProbe(), cfg.data_root, cfg.min_free_gb, schedule=app.schedule(cfg)).check()
             print(format_status(index, gate_status))
             return 0
         if args.command == "retry":

@@ -16,7 +16,7 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 
 from clipper import paths, protect
-from clipper.config import HUD_CHOICES, PERSPECTIVE_CHOICES, RATIOS, SEQUENCE_EVENTS, Config
+from clipper.config import ENCODERS, HUD_CHOICES, PERSPECTIVE_CHOICES, RATIOS, RENDER_WHEN, SEQUENCE_EVENTS, Config
 from clipper.faceit_oauth import RELAY_URL
 
 KEY_FIELD = "faceit_api_key"                  # write-only: never stored or read back under this name
@@ -40,32 +40,36 @@ class Field:
     maximum: float | None = None
     choices: tuple[str, ...] = ()
     help: str = ""
+    advanced: bool = False         # plumbing: the Settings page keeps it under Advanced, closed until opened
 
 
 FIELDS: tuple[Field, ...] = (
     Field("subject_steamid", "You", "SteamID", "steamid",
           help="Your SteamID64: 17 digits starting with 7656119."),
     Field("faceit_nickname", "You", "FACEIT nickname", "text"),
-    Field("faceit_oauth_client_id", "You", "FACEIT sign-in client ID", "text",
+    Field("faceit_oauth_client_id", "You", "FACEIT sign-in client ID", "text", advanced=True,
           help="Your FACEIT app's OAuth2 client ID. With it set, Sign in with FACEIT fills in the "
                "nickname and SteamID."),
-    Field("faceit_redirect_uri", "You", "FACEIT redirect URI", "url",
+    Field("faceit_redirect_uri", "You", "FACEIT redirect URI", "url", advanced=True,
           help="Must match your FACEIT OAuth2 client's Redirect URI exactly. Blank uses "
                f"{RELAY_URL} (FACEIT needs https; that page hands the sign-in back to this app)."),
-    Field("faceit_api_key", "You", "FACEIT API key", "secret",
-          help="Stored encrypted for your Windows account. It is never shown again."),
-    Field(SECRET_FIELD, "You", "FACEIT client secret", "secret",
+    Field("faceit_api_key", "You", "FACEIT API key", "secret", advanced=True,
+          help="Installed copies come with one. Stored encrypted for your Windows account; never shown again."),
+    Field(SECRET_FIELD, "You", "FACEIT client secret", "secret", advanced=True,
           help="Your FACEIT OAuth2 client's secret, for the sign-in above. Stored encrypted."),
     Field("data_root", "Folders", "Clips folder", "folder", help="Where Demos, renders and Reels go."),
     Field("downloads_dir", "Folders", "Downloads", "folder"),
-    Field("ffmpeg", "Folders", "FFmpeg", "program", help="A program on PATH or a full path."),
-    Field("ffprobe", "Folders", "FFprobe", "program", help="A program on PATH or a full path."),
-    Field("hlae_exe", "Folders", "HLAE", "program", help="Full path to HLAE.exe. Blank uses the one Setup installs."),
+    Field("ffmpeg", "Folders", "FFmpeg", "program", advanced=True, help="A program on PATH or a full path."),
+    Field("ffprobe", "Folders", "FFprobe", "program", advanced=True, help="A program on PATH or a full path."),
+    Field("hlae_exe", "Folders", "HLAE", "program", advanced=True,
+          help="Full path to HLAE.exe. Blank uses the one Setup installs."),
     Field("aspect_ratio", "Picture", "Aspect ratio", "choice", choices=tuple(RATIOS)),
     Field("sequence_event", "Picture", "One Clip per", "choice", choices=SEQUENCE_EVENTS),
     Field("perspectives", "Picture", "Views to render", "choice", choices=tuple(PERSPECTIVE_CHOICES)),
     Field("padding_before_s", "Picture", "Seconds before each Frag", "number", minimum=0, maximum=30),
     Field("padding_after_s", "Picture", "Seconds after each Frag", "number", minimum=0, maximum=30),
+    Field("title_card", "Picture", "Title card on shared clips", "bool",
+          help="Exports for Discord and 9:16 open on your nickname, the map, the round and the Highlight."),
     Field("hud", "HUD", "HUD", "choice", choices=HUD_CHOICES),
     Field("show_xray", "HUD", "X-Ray", "bool", help="Outlines players through walls, as when you spectate."),
     Field("show_assists", "HUD", "Assists in the kill feed", "bool",
@@ -74,8 +78,11 @@ FIELDS: tuple[Field, ...] = (
           help="How long each kill stays in the kill feed."),
     Field("player_voices", "HUD", "Player voices", "bool", help="Voice chat from the Demo is in each Clip's sound."),
     Field("top_n", "Rendering", "Highlights per match", "int", minimum=1, maximum=50),
-    Field("stall_seconds", "Rendering", "Stall timeout (s)", "number", minimum=30, maximum=3600),
-    Field("launch_timeout_seconds", "Rendering", "Launch timeout (s)", "number", minimum=30, maximum=3600),
+    Field("render_when", "Rendering", "Start renders", "choice", choices=RENDER_WHEN),
+    Field("encoder", "Rendering", "Encoder", "choice", choices=ENCODERS),
+    Field("stall_seconds", "Rendering", "Stall timeout (s)", "number", minimum=30, maximum=3600, advanced=True),
+    Field("launch_timeout_seconds", "Rendering", "Launch timeout (s)", "number", minimum=30, maximum=3600,
+          advanced=True),
     Field("heads_up_seconds", "Rendering", "Heads-up before CS2 opens (s)", "number", minimum=0, maximum=600),
     Field("min_free_gb", "Rendering", "Minimum free space (GB)", "number", minimum=0, maximum=10000),
     Field("match_alerts", "Match alerts", "Match alerts", "bool"),
@@ -89,8 +96,9 @@ FIELDS: tuple[Field, ...] = (
     Field("keyboard_shortcuts", "Touches", "Keyboard shortcuts", "bool",
           help="Hold Tab for this week's scoreboard, ~ for the console, hold B for the quick wheel. "
                "? lists them all."),
-    Field("page_port", "App", "Port", "int", minimum=1024, maximum=65535, help="Applies at the next start."),
-    Field("poll_seconds", "App", "Check for work every (s)", "number", minimum=1, maximum=300),
+    Field("page_port", "App", "Port", "int", minimum=1024, maximum=65535, advanced=True,
+          help="Applies at the next start."),
+    Field("poll_seconds", "App", "Check for work every (s)", "number", minimum=1, maximum=300, advanced=True),
 )
 
 _BY_NAME: dict[str, Field] = {f.name: f for f in FIELDS}

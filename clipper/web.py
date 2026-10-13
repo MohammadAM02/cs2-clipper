@@ -1,6 +1,7 @@
 """The Flask app: the four pages (Status, Demos to grab, Reels, Settings), their JSON endpoints, and the
 reach and action guards (spec: Pages, Reach from other devices). Every route is PC-only except the Demos
-to grab page, its list and its actions, and the stylesheet and script those load; every POST, PUT and
+to grab page, its list and its actions, the Reels page with what it reads (its list, each Reel's video, frame and
+scrub strip: watch and download, nothing else), and the stylesheets and scripts those load; every POST, PUT and
 DELETE, those included, must carry the marker header. What the pages need from the app comes in through
 `WebContext`, so a test builds one with only the fields it exercises.
 
@@ -33,6 +34,7 @@ SOFTWARE.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import os
@@ -51,12 +53,13 @@ from flask import Flask, Response, jsonify, redirect, request, send_file
 from waitress.server import create_server
 from werkzeug.routing import BaseConverter
 
-from clipper import applog
+from clipper import applog, links, share
 from clipper.alerts import LINK_LIFETIME, map_label, utc_now
 from clipper.checks import Check
 from clipper.config import Config
 from clipper.faceit import FaceitError
 from clipper.faceit_oauth import OAuthError
+from clipper.footprint import Usage
 from clipper.index import Index
 from clipper.settings import FIELDS, SECRETS, Field, Loaded, json_values
 from clipper.state import Snapshot, summary, view_name
@@ -65,7 +68,7 @@ log = logging.getLogger(__name__)
 
 MARKER_HEADER = "X-CS2-Clipper"
 PAGES_DIR = Path(__file__).with_name("pages")
-PAGES = ("/status", "/demos", "/reels", "/settings")   # what `/api/window` may ask the window to show
+PAGES = links.PAGES                            # what `/api/window` may ask the window to show (links.valid_page)
 PORTS_TO_TRY = 10
 KEEP_DECIDED = timedelta(hours=24)
 IN_PIPELINE = ("spotted", "unpacked", "analyzed", "scored", "rendering", "joined")
@@ -73,6 +76,8 @@ NOT_LISTED = ("done", "skipped")               # Status's Demos list leaves thes
 PERSPECTIVES = ("player", "enemy")
 TOUCHES = ("ui_sounds", "map_glow", "calm_mode", "keyboard_shortcuts")    # Settings -> Touches, for touches.js
 WEEK = timedelta(days=7)                       # what the scoreboard (hold Tab) covers
+SERVER_THREADS = 8                             # an export takes one for its seconds; the pages' polls need the rest
+SECONDS_PER_HIGHLIGHT = 45.0                   # one view of one Highlight, CS2's start shared out, before any render
 STRIP_FRAMES = 12                              # frames in a Reel's hover scrub strip; touches.js steps through as many
 STRIP_FRAME = (320, 180)                       # each one's size: the size of the scrub (touches.css, .t-scrub)
 # The scoreboard's Status column: a FACEIT match by its own state, a grabbed one by its Demo's.
@@ -87,6 +92,9 @@ _CHECKSUM_PATTERN = r"[0-9a-f]{1,16}"         # as csda writes it: hex without i
 # Flask endpoint names (not paths) reachable from another device (spec: Reach from other devices).
 _PHONE_ENDPOINTS = frozenset({"demos_page", "demos_json", "demos_action", "app_css", "app_js", "touches_css",
                               "touches_js", "nugget_js", "font"})
+# Reels to watch and download from another device too -- reading only, and only under a Host a DNS-rebinding page
+# cannot send (`_plain_host`), since what they show is the player's own clips.
+_WATCH_ENDPOINTS = frozenset({"reels_page", "api_reels", "reel_video", "reel_frame", "reel_strip"})
 # The fonts the pages load from /fonts/ (their licences sit next to them and are not served).
 _FONTS = frozenset({"Bangers.woff2", "HankenGrotesk.woff2"})
 
@@ -118,7 +126,7 @@ def own_addresses() -> set[str]:
 def page_rows(index: Index, now: datetime, waiting_for: tuple[str, ...]) -> list[dict]:
     """The Demos to grab page's list, newest first. `waiting_for` is the Gate's reasons, shown on
     grabbed Demos that have not been rendered yet."""
-    rows = []
+    rows, opened = [], index.opened_matches()
     for row in index.page_matches(now - KEEP_DECIDED):
         finished = datetime.fromisoformat(row["finished_at"])
         rendering_waits = row["state"] == "grabbed" and row["demo_state"] in IN_PIPELINE
@@ -137,16 +145,29 @@ def page_rows(index: Index, now: datetime, waiting_for: tuple[str, ...]) -> list
             "reminded": row["reminded_at"] is not None,
             "url": row["matchroom_url"],
             "waiting_for": "; ".join(waiting_for) if rendering_waits else "",
+            "opened": row["match_id"] in opened,       # its room was opened: the page waits for the download
         })
     return rows
 
 
-def status_demos(index: Index) -> list[dict]:
+def seconds_per_highlight(index: Index) -> float:
+    """How long a view of one Highlight takes to record, CS2's start shared out: from the last renders, or
+    SECONDS_PER_HIGHLIGHT before there are any."""
+    past = index.render_seconds()
+    if not past:
+        return SECONDS_PER_HIGHLIGHT
+    return sum(seconds for seconds, _ in past) / sum(highlights for _, highlights in past)
+
+
+def status_demos(index: Index, now: datetime | None = None, running_left: float | None = None) -> list[dict]:
     """Status's Demos list: every Demo not done or skipped, newest first, with the latest Render Job
-    per Perspective (none before rendering has been queued)."""
+    per Perspective (none before rendering has been queued) and, once its Highlights are scored, about how long
+    until its Reels are made (`eta_s`): each view still to record, at the pace the last renders went -- or, for the
+    view recording now, what the render itself says is left (`running_left`), when it says."""
+    now = now or utc_now()
     rows = [row for row in index.all_demos() if row["state"] not in NOT_LISTED]
     rows.reverse()
-    demos = []
+    demos, pace = [], None
     for row in rows:
         match = index.match(row["match_checksum"]) if row["match_checksum"] else None
         jobs = []
@@ -154,11 +175,26 @@ def status_demos(index: Index) -> list[dict]:
             job = index.latest_render(row["id"], perspective)
             if job is not None:
                 jobs.append({"perspective": perspective, "attempt": job["attempt"], "state": job["state"],
-                            "failure": job["failure"]})
+                            "failure": job["failure"], "started_at": job["started_at"]})
+        eta = None
+        if row["state"] in ("scored", "rendering") and match is not None:
+            pace = pace if pace is not None else seconds_per_highlight(index)
+            count = len(index.selected_highlights(row["match_checksum"]))
+            left = [job for job in jobs if job["state"] != "done"] or ([] if jobs else [None])
+            eta = 0.0
+            for job in left:
+                view = count * pace
+                if job is not None and job["state"] == "running" and running_left is not None:
+                    view = running_left
+                elif job is not None and job["state"] == "running" and job["started_at"]:
+                    view -= (now - datetime.fromisoformat(job["started_at"])).total_seconds()
+                eta += max(view, 30.0)
         demos.append({
             "id": row["id"], "file_name": row["file_name"], "state": row["state"],
             "map": map_label(match["map"]) if match is not None else None,
-            "error": row["last_error"], "retry": row["state"] == "failed", "jobs": jobs,
+            "error": row["last_error"], "retry": row["state"] == "failed",
+            "jobs": [{key: value for key, value in job.items() if key != "started_at"} for job in jobs],
+            "eta_s": None if eta is None else round(eta),
         })
     return demos
 
@@ -203,7 +239,8 @@ def _tone(status: str) -> str:
 def field_dict(f: Field) -> dict:
     """One `FIELDS` entry as JSON for the Settings page (spec: Pages, Settings)."""
     return {"name": f.name, "group": f.group, "label": f.label, "kind": f.kind,
-            "minimum": f.minimum, "maximum": f.maximum, "choices": list(f.choices), "help": f.help}
+            "minimum": f.minimum, "maximum": f.maximum, "choices": list(f.choices), "help": f.help,
+            "advanced": f.advanced}
 
 
 def _render_options(index: Index, config: Config, checksum: str) -> tuple[list[str], dict[str, str | None]]:
@@ -315,6 +352,10 @@ def _nothing_to_set_up() -> dict:
     return {"running": False, "needed": False, "steps": [], "download_bytes": 0, "progress": None, "error": None}
 
 
+def _no_exports(*args, **kwargs) -> Path:
+    raise share.ShareError("exports are not set up")
+
+
 def _no_update() -> dict:
     return {"current": "", "available": None, "running": False, "stage": None, "progress": None, "error": None}
 
@@ -343,13 +384,21 @@ class WebContext:
     window_request: Callable[[], dict] = lambda: {"seq": 0, "page": "/status"}
     faceit_login_url: Callable[[], str] = lambda: ""
     faceit_sign_in: Callable[[str, str], str] = _faceit_not_set_up
-    faceit_lookup: Callable[[str], dict] = _faceit_lookup_not_set_up
+    faceit_lookup: Callable[[str], dict] = _faceit_lookup_not_set_up      # finds the player and saves them
+    faceit_find: Callable[[str], dict] = _faceit_lookup_not_set_up        # finds the player only
     setup_status: Callable[[], dict] = _nothing_to_set_up        # provision.Setup.status
     start_setup: Callable[[], str | None] = lambda: None         # why it was not started, or None
     update_status: Callable[[], dict] = _no_update               # update.Updates.status
     start_update: Callable[[], str | None] = lambda: None        # why it was not started, or None
     delete_demo: Callable[[int], str | None] = lambda demo_id: None   # "deleted", "deferred" or None: no such Demo
     check_faceit: Callable[[], str | None] = lambda: "Match alerts are off"   # why not, or None: they look soon
+    follow_link: Callable[[links.Link], None] = lambda link: None          # a toast button's cs2clipper: link
+    footprint: Callable[[], Usage | None] = lambda: None                   # the app's own memory and CPU
+    onboarding: Callable[[], dict] = lambda: {"done": True}                # the first-run screen (App.onboarding)
+    home: Callable[[], str] = lambda: "/status"                            # the window's first page (App.home)
+    copy_file: Callable[[Path], None] = lambda path: None                  # a file onto the clipboard (share)
+    export_reel: Callable[..., Path] = _no_exports                         # share.export
+    reveal: Callable[[Path], None] = lambda path: None                     # a file, selected, in Explorer
 
 
 def _client_address() -> str:
@@ -367,6 +416,21 @@ def _is_pc_request() -> bool:
     return request.headers.get("Host") in (f"127.0.0.1:{port}", f"localhost:{port}")
 
 
+def _plain_host() -> bool:
+    """Whether the request's `Host` is one a page on another site cannot make a browser send by rebinding its own
+    name to this PC: an IP address, or this PC's own names (localhost, its computer name, its .local and Tailscale
+    names). The phone reaches the app by one of those."""
+    host = (request.headers.get("Host") or "").lower()
+    name = host[1:host.index("]")] if host.startswith("[") else host.rsplit(":", 1)[0]
+    try:
+        ipaddress.ip_address(name)
+        return True
+    except ValueError:
+        pass
+    me = socket.gethostname().lower()
+    return name in ("localhost", me, f"{me}.local") or (name.startswith(f"{me}.") and name.endswith(".ts.net"))
+
+
 def _no_store(response: Response) -> Response:
     response.headers["Cache-Control"] = "no-store"
     return response
@@ -382,6 +446,8 @@ def create_app(ctx: WebContext) -> Flask:
         if request.method in _WRITE_METHODS and request.headers.get(MARKER_HEADER) != "1":
             return Response(status=403)
         if request.endpoint in _PHONE_ENDPOINTS:
+            return None
+        if request.endpoint in _WATCH_ENDPOINTS and request.method == "GET" and _plain_host():
             return None
         if not _is_pc_request():
             return Response(status=403)
@@ -408,9 +474,10 @@ def create_app(ctx: WebContext) -> Flask:
             rendering = {"map": map_label(snapshot.rendering.map_name),
                          "perspective": snapshot.rendering.perspective, "started_at": snapshot.rendering.started_at,
                          "progress": None if progress is None else asdict(progress)}
+        progress = snapshot.rendering.progress if snapshot.rendering is not None else None
         index = Index(ctx.index_path)
         try:
-            demos = status_demos(index)
+            demos = status_demos(index, running_left=None if progress is None else progress.seconds_left)
         finally:
             index.close()
         try:
@@ -418,8 +485,11 @@ def create_app(ctx: WebContext) -> Flask:
         except Exception as exc:  # noqa: BLE001 - a check that raises must not blank the whole page
             log.exception("could not run the checks")
             checks = [{"name": "Checks", "ok": False, "detail": f"Couldn't run the checks: {exc}", "hint": ""}]
+        usage = ctx.footprint()
         body = {
             "summary": summary(snapshot),
+            "footprint": None if usage is None else {"memory_mb": usage.memory_mb, "cpu_percent": usage.cpu_percent},
+            "onboarding": ctx.onboarding(),
             "rendering": rendering,
             "paused_by": snapshot.paused_by,
             "quitting": snapshot.quitting,
@@ -567,7 +637,9 @@ def create_app(ctx: WebContext) -> Flask:
         video = None if row is None else ctx.load_settings().config.load_path(row["path"])
         if video is None or not video.is_file():
             return Response(status=404)
-        return send_file(video, mimetype="video/mp4", conditional=True)
+        download = request.args.get("download") == "1"        # a phone's Download: saved under its readable name
+        return send_file(video, mimetype="video/mp4", conditional=True, as_attachment=download,
+                         download_name=video.name if download else None)
 
     @app.get("/reels/<int:reel_id>.jpg")
     def reel_frame(reel_id: int):
@@ -605,6 +677,77 @@ def create_app(ctx: WebContext) -> Flask:
         if strip is None:
             return Response(status=404)
         return send_file(strip, mimetype="image/jpeg", conditional=True)
+
+    def _reel_file(reel_id: int):
+        """A Reel's details (share's name and title card come from them) and its file, or None when either is gone."""
+        index = Index(ctx.index_path)
+        try:
+            reel = index.reel_details(reel_id)
+        finally:
+            index.close()
+        config = ctx.load_settings().config
+        if reel is None or config.data_root is None:
+            return None
+        video = config.load_path(reel["path"])
+        return (reel, video) if video.is_file() else None
+
+    def _share_refused(message: str) -> Response:
+        response = jsonify(error=message)
+        response.status_code = 409
+        return _no_store(response)
+
+    @app.post("/api/reels/<int:reel_id>/copy")
+    def api_reel_copy(reel_id: int):
+        """Puts the Reel's file on the clipboard, as Explorer's Copy does: pasted into Discord, it uploads."""
+        found = _reel_file(reel_id)
+        if found is None:
+            return Response(status=404)
+        try:
+            ctx.copy_file(found[1])
+        except share.ShareError as exc:
+            return _share_refused(f"Couldn't copy it: {exc}")
+        return Response(status=204)
+
+    @app.post("/api/reels/<int:reel_id>/reveal")
+    def api_reel_reveal(reel_id: int):
+        """Shows the Reel's file, selected, in Explorer."""
+        found = _reel_file(reel_id)
+        if found is None:
+            return Response(status=404)
+        ctx.reveal(found[1])
+        return Response(status=204)
+
+    @app.post("/api/reels/<int:reel_id>/export")
+    def api_reel_export(reel_id: int):
+        """Makes an export of the Reel in the clips folder's Exports folder, opening on its title card when Settings
+        has one: "discord" fits Discord's free upload limit and goes on the clipboard, ready to paste; "vertical" is
+        9:16 for TikTok, Shorts and Instagram Reels, and shows in Explorer. 200 with the file's name and size."""
+        body = request.get_json(silent=True)
+        kind = body.get("kind") if isinstance(body, dict) else None
+        if kind not in share.EXPORTS:
+            return Response(status=400)
+        found = _reel_file(reel_id)
+        if found is None:
+            return Response(status=404)
+        reel, video = found
+        config = ctx.load_settings().config
+        name = share.reel_name(reel["type"], reel["map"], reel["round"], config.faceit_nickname, reel["perspective"])
+        card = share.title(reel["type"], reel["map"], reel["round"], config.faceit_nickname) if config.title_card else None
+        out = share.export_path(config.data_root / "Exports", name, kind)
+        try:
+            out = ctx.export_reel(video, kind, out, duration_s=reel["duration_s"], ffmpeg=config.ffmpeg, card=card)
+        except share.ShareError as exc:
+            return _share_refused(f"Couldn't export it: {exc}")
+        copied = False
+        if kind == "discord":
+            try:
+                ctx.copy_file(out)
+                copied = True
+            except share.ShareError as exc:
+                log.warning("the Discord export of Reel %s is made but not on the clipboard: %s", reel_id, exc)
+        else:
+            ctx.reveal(out)
+        return _no_store(jsonify(file=out.name, mb=round(out.stat().st_size / 1e6, 1), copied=copied))
 
     @app.post("/api/reels/open-folder")
     def api_open_reels_folder():
@@ -728,14 +871,16 @@ def create_app(ctx: WebContext) -> Flask:
 
     @app.post("/api/faceit/lookup")
     def api_faceit_lookup():
-        """Turns a typed FACEIT nickname into the nickname and SteamID Match Alerts need, and saves
-        both: nobody knows their SteamID64, and alerts verify the nickname against it."""
+        """Turns a typed FACEIT nickname into the nickname and SteamID Match Alerts need: nobody knows their
+        SteamID64, and alerts verify the nickname against it. Saves both, unless the body says ``"save": false``
+        (Settings, where Save keeps them with everything else)."""
         body = request.get_json(silent=True)
         nickname = body.get("nickname") if isinstance(body, dict) else None
         if not isinstance(nickname, str) or not nickname.strip():
             return Response(status=400)
+        save = body.get("save", True) is not False
         try:
-            found = ctx.faceit_lookup(nickname)
+            found = (ctx.faceit_lookup if save else ctx.faceit_find)(nickname)
         except FaceitError as exc:
             response = jsonify(error=str(exc))
             response.status_code = 400
@@ -771,11 +916,17 @@ def create_app(ctx: WebContext) -> Flask:
 
     @app.post("/demos/<match_id:match_id>/<action>")
     def demos_action(match_id: str, action: str):
-        if action not in ("skip", "undo"):
+        """Skip, Undo, and Opened (its room was opened to download the Demo, kept here rather than in one window)."""
+        if action not in ("skip", "undo", "opened"):
             return Response(status=404)
         index = Index(ctx.index_path)
         try:
-            changed = index.skip_match(match_id, ctx.clock()) if action == "skip" else index.undo_skip(match_id)
+            if action == "skip":
+                changed = index.skip_match(match_id, ctx.clock())
+            elif action == "undo":
+                changed = index.undo_skip(match_id)
+            else:
+                changed = index.mark_opened(match_id, ctx.clock())
         finally:
             index.close()
         return Response(status=204 if changed else 409)
@@ -812,9 +963,22 @@ def create_app(ctx: WebContext) -> Flask:
         (Task 10's `hand_over`) uses this to ask the running copy to show a page."""
         body = request.get_json(silent=True)
         page = body.get("page") if isinstance(body, dict) else None
-        if page not in PAGES:
+        if page == "home":                    # a second start with no page asked: the running copy's home page
+            page = ctx.home()
+        if not links.valid_page(page):
             return Response(status=400)
         ctx.open_window(page)
+        return Response(status=204)
+
+    @app.post("/api/link")
+    def api_link():
+        """PC-only, marker required. A second start (`app.open_link`) passes on the cs2clipper: link a toast's
+        button opened; only the forms `links.parse` reads are followed."""
+        body = request.get_json(silent=True)
+        link = links.parse(body.get("url") if isinstance(body, dict) else None)
+        if link is None:
+            return Response(status=400)
+        ctx.follow_link(link)
         return Response(status=204)
 
     @app.get("/api/window")
@@ -834,7 +998,7 @@ class WebServer:
         server = None
         for candidate in candidates:
             try:
-                server = create_server(app, host=host, port=candidate)
+                server = create_server(app, host=host, port=candidate, threads=SERVER_THREADS)
                 break
             except OSError:
                 continue

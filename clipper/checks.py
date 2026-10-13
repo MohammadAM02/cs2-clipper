@@ -15,7 +15,7 @@ from pathlib import Path
 
 import psutil
 
-from clipper import download
+from clipper import cs2_paths, download
 from clipper.config import Config
 
 log = logging.getLogger(__name__)
@@ -177,6 +177,26 @@ def _clips_folder_check(cfg: Config, free_bytes: Callable[[Path], int]) -> Check
     return Check("Clips folder", False, detail, f"Rendering waits until {cfg.min_free_gb:g} GB are free")
 
 
+def _cs2_check(cs2_exe: Callable[[], Path | None]) -> Check:
+    try:
+        found = cs2_exe()
+    except OSError:
+        found = None
+    if found is None:
+        return Check("CS2", False, "not found", "Install Counter-Strike 2 from Steam: the Clips are recorded in it")
+    return Check("CS2", True, "installed")
+
+
+def _steam_running() -> bool:
+    return any((process.info["name"] or "").lower() == "steam.exe" for process in psutil.process_iter(["name"]))
+
+
+def _steam_check(steam_running: Callable[[], bool]) -> Check:
+    if not steam_running():
+        return Check("Steam", None, "not running", "Renders wait for Steam: CS2 cannot start without it")
+    return Check("Steam", True, "running")
+
+
 def _match_alerts_check(alerts_status: str | None) -> Check:
     if alerts_status is None:
         return Check("Match alerts", None, "not started")
@@ -187,13 +207,17 @@ def _match_alerts_check(alerts_status: str | None) -> Check:
 
 def run_checks(cfg: Config, *, alerts_status: str | None, releases: HlaeReleases,
                which: Callable[[str], str | None] = shutil.which,
-               free_bytes: Callable[[Path], int] = _free_bytes) -> list[Check]:
-    """The five checks Status shows, in order. Does not call `releases.refresh_if_due` — the app
-    does that off the request path, daily."""
+               free_bytes: Callable[[Path], int] = _free_bytes,
+               cs2_exe: Callable[[], Path | None] = cs2_paths.find_cs2_exe,
+               steam_running: Callable[[], bool] = _steam_running) -> list[Check]:
+    """The seven checks Status shows, in order: the tools, CS2 and Steam (the README's needs), the clips folder
+    and Match alerts. Does not call `releases.refresh_if_due` — the app does that off the request path, daily."""
     return [
         _csda_check(cfg),
         _hlae_check(cfg, releases),
         _ffmpeg_check(cfg, which),
+        _cs2_check(cs2_exe),
+        _steam_check(steam_running),
         _clips_folder_check(cfg, free_bytes),
         _match_alerts_check(alerts_status),
     ]
@@ -207,11 +231,11 @@ def startup_problems(cfg: Config) -> list[str]:
     not one: without it the app still downloads, analyzes and scores, and each render says why it fails."""
     problems = []
     if not cfg.subject_steamid:
-        problems.append("Set your SteamID in Settings")
+        problems.append("Look up your FACEIT nickname, so the app knows whose Highlights to clip")
     if cfg.data_root is None:
         problems.append("Choose a clips folder in Settings")
     elif not cfg.data_root.is_dir():
         problems.append(f"The clips folder {cfg.data_root} is missing")
     if not cfg.csda_exe.is_file():
-        problems.append(f"csda was not found in {cfg.csda_exe.parent}")
+        problems.append("csda isn't installed yet: Set up installs it")
     return problems

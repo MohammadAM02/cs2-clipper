@@ -1,17 +1,20 @@
 import logging
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from clipper import share
 from clipper.config import Config
 from clipper.gate import GateStatus
 from clipper.index import Index
-from clipper.model import ClipFile, MatchInfo
+from clipper.model import ClipFile, Highlight, MatchInfo
 from clipper.render import ABORTED, RenderProgress, RenderResult
 from clipper.state import AppState
-from clipper.worker import QUIT_ABORT, DeleteRequest, Services, StopRequest, Worker, delete_demo, prune_renders
+from clipper.worker import (
+    QUIT_ABORT, DeleteRequest, Services, StopRequest, Worker, delete_demo, prune_renders, reel_path, rename_old_reels,
+)
 from tests.fixtures import DEMO_NAME, MATCH_CHECKSUM, MATCH_FACTS
 
 ROUND_START = {facts.round: facts.round_start_tick for facts in MATCH_FACTS}
@@ -59,12 +62,16 @@ class FakeFacts:
 class FakeGate:
     def __init__(self):
         self.reasons: tuple[str, ...] = ()
+        self.playing = False                          # CS2 open: then the worker moves no Demo at all
 
     def check(self):
         return GateStatus(ok=not self.reasons, reasons=self.reasons)
 
     def faceit_running(self):
         return False
+
+    def cs2_running(self):
+        return self.playing
 
 
 def clips_of(request):
@@ -118,6 +125,7 @@ class World:
     stop: StopRequest
     deletes: DeleteRequest
     clock: FakeClock
+    buttons: list                                     # each toast's buttons, in the order the toasts went out
 
     def add_demo(self, name: str = DEMO_NAME, sha256: str = "0" * 64) -> int:
         file_name = f"{name}.dem.zst"
@@ -143,7 +151,7 @@ def world(tmp_path):
     cfg = Config(downloads_dir=tmp_path / "downloads", data_root=tmp_path / "clips",
                  index_path=tmp_path / "clipper.sqlite", analyses_dir=tmp_path / "analyses")
     index = Index(cfg.index_path)
-    facts, gate, render, notices = FakeFacts(), FakeGate(), FakeRender(), []
+    facts, gate, render, notices, buttons = FakeFacts(), FakeGate(), FakeRender(), [], []
     state, stop, deletes, clock = AppState(), StopRequest(), DeleteRequest(), FakeClock()
     services = Services(
         intake=FakeIntake(),
@@ -153,44 +161,54 @@ def world(tmp_path):
         gate=gate,
         render=render,
         join=lambda clips, out: 4.0 * len(clips),
-        notify=lambda title, body: notices.append((title, body)),
+        notify=lambda title, body, actions=(): notices.append((title, body)) or buttons.append(actions),
         sleep=lambda seconds: None,
         clock=clock,
     )
     worker = Worker(cfg, index, services, state=state, stop=stop, deletes=deletes)
-    yield World(cfg, index, services, worker, facts, gate, render, notices, state, stop, deletes, clock)
+    yield World(cfg, index, services, worker, facts, gate, render, notices, state, stop, deletes, clock, buttons)
     index.close()
 
 
 def test_a_demo_goes_from_spotted_to_done(world):
     demo_id = world.add_demo()
-    world.ticks(8)
+    world.ticks(9)
     assert world.index.demo(demo_id)["state"] == "done"
-    assert [call.perspectives for call in world.render.calls] == [("player", "enemy")]   # one CS2 launch, both views
+    assert [call.perspectives for call in world.render.calls] == [("player",), ("enemy",)]   # one launch per view
     assert world.render.calls[0].rounds == (3, 4, 8, 12, 14)
     first = world.render.calls[0]
     assert (first.event, first.width, first.height) == ("kills", 1920, 1080)
     assert world.index.reel_count(MATCH_CHECKSUM) == 10
-    assert world.titles() == ["Rendering highlights", "Highlights ready"]   # one heads-up for both views
+    assert world.titles() == ["Rendering highlights", "Highlights ready", "Rendering highlights", "Enemy POV ready"]
 
 
-def test_both_views_are_recorded_in_one_cs2_launch(world):
+def test_your_view_gets_its_reels_and_a_toast_before_the_enemy_pov_records(world):
     demo_id = world.add_demo()
-    world.ticks(5)                                    # queued on tick 4, then the one launch that records both views
-    assert len(world.render.calls) == 1
+    world.ticks(5)                                    # queued on tick 4, then your view's launch
     request = world.render.calls[0]
-    assert request.perspectives == ("player", "enemy")
-    assert request.outputs == {"player": world.cfg.renders_dir / MATCH_CHECKSUM / "player" / "attempt-1",
-                               "enemy": world.cfg.renders_dir / MATCH_CHECKSUM / "enemy" / "attempt-1"}
-    assert request.log_path.name == f"demo-{demo_id}-render-both-1.log"
-    assert [world.index.latest_render(demo_id, p)["state"] for p in ("player", "enemy")] == ["done", "done"]
-    world.ticks(3)
+    assert request.perspectives == ("player",)
+    assert request.outputs == {"player": world.cfg.renders_dir / MATCH_CHECKSUM / "player" / "attempt-1"}
+    assert request.log_path.name == f"demo-{demo_id}-render-player-1.log"
+    world.ticks(1)                                    # your view's Reels, and a toast that says the Enemy POV is next
+    assert len(world.render.calls) == 1
+    assert world.index.reel_count(MATCH_CHECKSUM) == 5
+    assert world.notices[-1] == ("Highlights ready",
+                                 "5 Highlights from de_inferno are ready. The Enemy POV records next.")
+    best = world.index.best_reel(MATCH_CHECKSUM, "player")
+    assert world.buttons[-1] == (("Watch", f"cs2clipper://reels?play={best}"),
+                                 ("Show in folder", f"cs2clipper://reveal?reel={best}"))
+    world.ticks(3)                                    # the Enemy POV, with its own heads-up; joined; finished
+    assert [call.perspectives for call in world.render.calls] == [("player",), ("enemy",)]
     assert world.index.demo(demo_id)["state"] == "done"
     assert world.index.reel_count(MATCH_CHECKSUM) == 10
+    assert world.titles()[-2:] == ["Rendering highlights", "Enemy POV ready"]
+    assert world.notices[-1][1] == "5 Highlights from de_inferno now have the Enemy POV."
+    best_enemy = world.index.best_reel(MATCH_CHECKSUM, "enemy")
+    assert world.buttons[-1][0] == ("Watch", f"cs2clipper://reels?play={best_enemy}")
 
 
 @pytest.mark.parametrize(("perspectives", "named"),
-                         [("player", "(player view)"), ("enemy", "(enemy view)"), ("both", "(both views)")])
+                         [("player", "(player view)"), ("enemy", "(enemy view)"), ("both", "(player view)")])
 def test_the_heads_up_names_the_views_the_launch_records(world, perspectives, named):
     world.use(perspectives=perspectives)
     world.add_demo()
@@ -198,60 +216,54 @@ def test_the_heads_up_names_the_views_the_launch_records(world, perspectives, na
     assert world.notices[0][1].count(named) == 1
 
 
-def test_a_failed_two_view_launch_is_tried_again_one_view_at_a_time(world):
+def test_a_failed_view_is_tried_again_before_the_next_view_records(world):
     world.render.results = [RenderResult(ok=False, failure="CS2 closed before the render finished")]
     demo_id = world.add_demo()
-    world.ticks(5)                                    # both views fail in the one launch
-    assert [world.index.latest_render(demo_id, p)["state"] for p in ("player", "enemy")] == ["failed", "failed"]
-    world.ticks(2)                                    # then each view on its own: the player's, then the enemy's
-    assert [call.perspectives for call in world.render.calls] == [("player", "enemy"), ("player",), ("enemy",)]
+    world.ticks(5)                                    # your view fails
+    assert world.index.latest_render(demo_id, "player")["state"] == "failed"
+    assert world.index.latest_render(demo_id, "enemy")["state"] == "queued"
+    world.ticks(3)                                    # your view again, shipped, then the Enemy POV
+    assert [call.perspectives for call in world.render.calls] == [("player",), ("player",), ("enemy",)]
     assert [call.log_path.name for call in world.render.calls] == [
-        f"demo-{demo_id}-render-both-1.log", f"demo-{demo_id}-render-player-2.log",
-        f"demo-{demo_id}-render-enemy-2.log",
+        f"demo-{demo_id}-render-player-1.log", f"demo-{demo_id}-render-player-2.log",
+        f"demo-{demo_id}-render-enemy-1.log",
     ]
-    assert world.index.latest_render(demo_id, "enemy")["attempt"] == 2
-    world.ticks(3)
+    world.ticks(2)
     assert world.index.demo(demo_id)["state"] == "done"
     assert world.index.reel_count(MATCH_CHECKSUM) == 10
     assert world.index.get_flag("consecutive_failures") == "0"
 
 
-def test_a_partial_two_view_launch_keeps_the_view_that_recorded(world):
-    def player_recorded_enemy_stalled(request):
-        return RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran",
-                            clips={"player": clips_of(request)["player"]})
-
-    world.render.results = [player_recorded_enemy_stalled]
+def test_an_enemy_pov_that_fails_three_times_leaves_your_reels_and_the_demo_done(world):
+    world.render.results = [lambda request: RenderResult(ok=True, clips=clips_of(request)),
+                            *[RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran")] * 3]
     demo_id = world.add_demo()
-    world.ticks(5)                                    # the player view is kept; the enemy view failed
-    assert world.index.latest_render(demo_id, "player")["state"] == "done"
-    assert world.index.latest_render(demo_id, "enemy")["state"] == "failed"
-    world.ticks(2)                                    # the enemy view alone, at attempt 2
-    assert [call.perspectives for call in world.render.calls] == [("player", "enemy"), ("enemy",)]
-    assert world.index.latest_render(demo_id, "enemy")["attempt"] == 2
-    assert world.index.latest_render(demo_id, "enemy")["state"] == "done"
-    world.ticks(3)
+    world.ticks(10)                                   # your view, shipped; the Enemy POV fails three times; given up
     assert world.index.demo(demo_id)["state"] == "done"
-    assert world.index.reel_count(MATCH_CHECKSUM) == 10
+    assert world.index.latest_render(demo_id, "enemy")["attempt"] == 3
+    assert world.index.reel_count(MATCH_CHECKSUM) == 5
+    assert world.notices[-1][0] == "Couldn't render the Enemy POV"
+    assert world.index.get_flag(f"shipped:{demo_id}") is None
 
 
-def test_an_aborted_two_view_launch_is_tried_again_as_one_launch(world):
+def test_an_aborted_launch_is_tried_again_with_a_heads_up(world):
     world.render.results = [RenderResult(ok=False, aborted=True, failure=ABORTED)]
     demo_id = world.add_demo()
-    world.ticks(9)
-    assert [call.perspectives for call in world.render.calls] == [("player", "enemy")] * 2
+    world.ticks(10)
+    assert [call.perspectives for call in world.render.calls] == [("player",), ("player",), ("enemy",)]
     assert world.index.demo(demo_id)["state"] == "done"
     assert world.index.get_flag("consecutive_failures", "0") == "0"
-    assert world.titles() == ["Rendering highlights", "Rendering highlights", "Highlights ready"]   # retry: heads-up
+    assert world.titles() == ["Rendering highlights", "Rendering highlights", "Highlights ready",
+                              "Rendering highlights", "Enemy POV ready"]
 
 
-def test_one_failed_two_view_launch_adds_one_to_the_consecutive_failures(world):
+def test_each_failed_launch_adds_one_to_the_consecutive_failures(world):
     world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran")] * 2
     demo_id = world.add_demo()
-    world.ticks(5)                                    # one launch, both views failed
-    assert [world.index.latest_render(demo_id, p)["state"] for p in ("player", "enemy")] == ["failed", "failed"]
+    world.ticks(5)                                    # your view's launch fails
+    assert world.index.latest_render(demo_id, "player")["state"] == "failed"
     assert world.index.get_flag("consecutive_failures") == "1"
-    world.ticks(1)                                    # the player view alone fails again
+    world.ticks(1)                                    # and fails again
     assert world.index.get_flag("consecutive_failures") == "2"
     assert world.index.paused_by() is None
 
@@ -259,9 +271,10 @@ def test_one_failed_two_view_launch_adds_one_to_the_consecutive_failures(world):
 def test_one_demo_renders_both_views_before_the_next_demo_starts(world):
     first = world.add_demo()
     second = world.add_demo(SECOND_DEMO, "1" * 64)
-    world.ticks(12)
+    world.ticks(13)
     assert [(call.demo_path.name, call.perspectives) for call in world.render.calls] == [
-        (f"{DEMO_NAME}.dem", ("player", "enemy")), (f"{SECOND_DEMO}.dem", ("player", "enemy")),
+        (f"{DEMO_NAME}.dem", ("player",)), (f"{DEMO_NAME}.dem", ("enemy",)),
+        (f"{SECOND_DEMO}.dem", ("player",)), (f"{SECOND_DEMO}.dem", ("enemy",)),
     ]
     assert world.index.demo(first)["state"] == world.index.demo(second)["state"] == "done"
 
@@ -305,9 +318,9 @@ def test_turning_a_view_off_takes_it_off_every_waiting_demos_queue(world, caplog
 
 def test_a_view_rendered_before_it_was_turned_off_still_becomes_reels(world):
     demo_id = world.add_demo()
-    world.ticks(5)                                    # both views are rendered, not yet joined
+    world.ticks(5)                                    # your view is rendered, not yet joined
     world.use(perspectives="enemy")
-    world.ticks(2)
+    world.ticks(3)                                    # the Enemy POV; both views joined; finished
     assert world.index.demo(demo_id)["state"] == "done"
     assert world.index.reel_count(MATCH_CHECKSUM) == 10
 
@@ -315,9 +328,10 @@ def test_a_view_rendered_before_it_was_turned_off_still_becomes_reels(world):
 def test_each_render_is_given_the_checksum_the_analysis_gave_its_demo(world):
     world.add_demo()
     world.add_demo(SECOND_DEMO, "1" * 64)
-    world.ticks(12)
+    world.ticks(13)
     assert [(call.demo_path.name, call.checksum) for call in world.render.calls] == [
-        (f"{DEMO_NAME}.dem", MATCH_CHECKSUM), (f"{SECOND_DEMO}.dem", SECOND_CHECKSUM),
+        (f"{DEMO_NAME}.dem", MATCH_CHECKSUM), (f"{DEMO_NAME}.dem", MATCH_CHECKSUM),
+        (f"{SECOND_DEMO}.dem", SECOND_CHECKSUM), (f"{SECOND_DEMO}.dem", SECOND_CHECKSUM),
     ]
 
 
@@ -325,10 +339,10 @@ def test_the_next_demo_waits_while_the_first_retries_a_failed_view(world):
     world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran")]
     world.add_demo()
     world.add_demo(SECOND_DEMO, "1" * 64)
-    world.ticks(13)
+    world.ticks(10)
     assert [(call.demo_path.name, call.perspectives) for call in world.render.calls] == [
-        (f"{DEMO_NAME}.dem", ("player", "enemy")), (f"{DEMO_NAME}.dem", ("player",)),
-        (f"{DEMO_NAME}.dem", ("enemy",)), (f"{SECOND_DEMO}.dem", ("player", "enemy")),
+        (f"{DEMO_NAME}.dem", ("player",)), (f"{DEMO_NAME}.dem", ("player",)),
+        (f"{DEMO_NAME}.dem", ("enemy",)), (f"{SECOND_DEMO}.dem", ("player",)),
     ]
 
 
@@ -354,7 +368,7 @@ def test_a_demo_with_no_analysis_kept_is_analyzed_again_before_it_is_rendered(wo
     world.facts.kept.clear()
     world.ticks(1)
     assert world.facts.analyzed == [f"{DEMO_NAME}.dem"] * 2
-    assert [call.perspectives for call in world.render.calls] == [("player", "enemy")]
+    assert [call.perspectives for call in world.render.calls] == [("player",)]
     assert world.index.demo(demo_id)["state"] == "rendering"
 
 
@@ -385,7 +399,7 @@ def test_renders_wait_for_the_gate(world):
     assert world.index.demo(demo_id)["state"] == "rendering"
     assert world.render.calls == []
     world.gate.reasons = ()
-    world.ticks(4)
+    world.ticks(5)
     assert world.index.demo(demo_id)["state"] == "done"
 
 
@@ -409,8 +423,6 @@ def test_every_failed_render_attempt_gets_its_own_log_line(world, caplog):
         world.ticks(6)
     assert [r.getMessage() for r in caplog.records if r.name == "clipper.worker"] == [
         f"demo #{demo_id} (de_inferno): player render attempt 1 of 3 failed: "
-        "stalled: no ffmpeg for 180s while CS2 ran",
-        f"demo #{demo_id} (de_inferno): enemy render attempt 1 of 3 failed: "
         "stalled: no ffmpeg for 180s while CS2 ran",
         f"demo #{demo_id} (de_inferno): player render attempt 2 of 3 failed: HLAE error: HLAE.exe exited with code 1",
     ]
@@ -448,7 +460,7 @@ def test_a_step_that_keeps_failing_fails_the_demo_and_retry_resumes_it(world):
     assert demo["last_error"] == "spotted: disk full"
     world.services.unpack = healthy_unpack
     assert world.index.retry(demo_id) == "spotted"
-    world.ticks(8)
+    world.ticks(9)
     assert world.index.demo(demo_id)["state"] == "done"
 
 
@@ -473,8 +485,8 @@ class FailingAlerts:
 def test_match_alerts_run_every_tick_and_never_stop_the_pipeline(world):
     world.services.alerts = FailingAlerts()
     demo_id = world.add_demo()
-    world.ticks(8)
-    assert world.services.alerts.ticks == 8
+    world.ticks(9)
+    assert world.services.alerts.ticks == 9
     assert world.index.demo(demo_id)["state"] == "done"
 
 
@@ -631,10 +643,10 @@ def test_state_reports_rendering_during_a_render_then_clears_it_after_the_tick(w
 
     world.services.render = render_and_snapshot
     world.add_demo()
-    world.ticks(5)   # spotted -> unpacked -> analyzed -> scored -> rendering (queues) -> the render of both views
+    world.ticks(5)   # spotted -> unpacked -> analyzed -> scored -> rendering (queues) -> the render of your view
     rendering = seen["rendering"]
     assert rendering is not None
-    assert (rendering.map_name, rendering.perspective) == ("de_inferno", "both")
+    assert (rendering.map_name, rendering.perspective) == ("de_inferno", "player")
     snap = world.state.snapshot()
     assert snap.rendering is None   # cleared by the end of the tick that started it
     assert snap.waiting == ()
@@ -745,7 +757,7 @@ def test_quit_now_during_a_render_aborts_it_like_a_faceit_ac_abort(world):
     assert alerts.ticks == 4   # this tick's alerts step was skipped once the abort set stop
 
 
-def test_quit_now_during_a_two_view_launch_aborts_both_views(world):
+def test_quit_now_during_a_launch_aborts_its_view(world):
     def render_until_quit(request, should_abort, progress):
         world.stop.request("now")
         assert should_abort()
@@ -754,8 +766,9 @@ def test_quit_now_during_a_two_view_launch_aborts_both_views(world):
     world.services.render = render_until_quit
     demo_id = world.add_demo()
     world.ticks(5)
-    jobs = [world.index.latest_render(demo_id, perspective) for perspective in ("player", "enemy")]
-    assert [(job["state"], job["failure"]) for job in jobs] == [("aborted", QUIT_ABORT)] * 2
+    player, enemy = (world.index.latest_render(demo_id, perspective) for perspective in ("player", "enemy"))
+    assert (player["state"], player["failure"]) == ("aborted", QUIT_ABORT)
+    assert enemy["state"] == "queued"
     assert world.index.demo(demo_id)["state"] == "rendering"
 
 
@@ -767,7 +780,7 @@ def test_a_finished_match_loses_its_raw_clips_and_keeps_its_reels_and_the_librar
     _write(world.cfg.renders_dir / MATCH_CHECKSUM / "player" / "attempt-1" / "sequence-1.mp4")
     _write(world.cfg.renders_dir / MATCH_CHECKSUM / "enemy" / "attempt-1" / "sequence-1.mp4")
     reel = _write(world.cfg.library_dir / "videos" / MATCH_CHECKSUM / "r3-player.mp4")
-    world.ticks(8)
+    world.ticks(9)
     assert not (world.cfg.renders_dir / MATCH_CHECKSUM).exists()
     assert world.index.reel_count(MATCH_CHECKSUM) == 10
     assert reel.exists()
@@ -791,7 +804,7 @@ def test_a_view_added_to_a_finished_match_joins_alone(world):
     world.index.advance(demo_id, "rendering")       # back to rendering: the enemy view is rendered now
     world.ticks(3)
     assert [call.perspectives[0] for call in world.render.calls] == ["player", "enemy"]
-    assert joined == [f"r{round_}-enemy.mp4" for round_ in (3, 4, 8, 12, 14)]
+    assert joined == _enemy_reel_names(world)
     assert world.index.demo(demo_id)["state"] == "done"
     assert world.index.reel_count(MATCH_CHECKSUM) == 10
 
@@ -832,17 +845,17 @@ def test_a_failed_render_retried_straight_away_gets_no_new_heads_up(world, caplo
     world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran")]
     world.add_demo()
     with caplog.at_level(logging.INFO, logger="clipper.worker"):
-        world.ticks(9)
-    assert [call.perspectives for call in world.render.calls] == [("player", "enemy"), ("player",), ("enemy",)]
-    assert world.titles() == ["Rendering highlights", "Highlights ready"]
-    assert sum("no heads-up" in message for message in caplog.messages) == 2   # the retry and the enemy view
+        world.ticks(10)
+    assert [call.perspectives for call in world.render.calls] == [("player",), ("player",), ("enemy",)]
+    assert world.titles() == ["Rendering highlights", "Highlights ready", "Rendering highlights", "Enemy POV ready"]
+    assert sum("no heads-up" in message for message in caplog.messages) == 1   # the retry; the Enemy POV warns
 
 
 @pytest.mark.parametrize(("seconds_later", "heads_up_again"), [(119.9, False), (120.0, True), (121.0, True)])
 def test_a_retry_gets_a_heads_up_again_only_once_two_minutes_have_passed(world, seconds_later, heads_up_again):
     world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran")]
     world.add_demo()
-    world.ticks(5)                                    # both views fail in one launch: one heads-up so far
+    world.ticks(5)                                    # your view fails: one heads-up so far
     world.clock.now += seconds_later
     world.ticks(1)                                    # the player view, tried again on its own
     assert world.titles() == ["Rendering highlights"] * (2 if heads_up_again else 1)
@@ -852,23 +865,25 @@ def test_the_retry_after_an_aborted_render_gets_a_heads_up(world):
     world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran"),
                             RenderResult(ok=False, aborted=True, failure=ABORTED)]
     demo_id = world.add_demo()
-    world.ticks(6)                                    # both views fail, then the player view is aborted
-    world.ticks(3)                                    # the player view, tried again with a heads-up; then the enemy
-    assert world.titles() == ["Rendering highlights", "Rendering highlights"]
+    world.ticks(6)                                    # your view fails, then its retry is aborted
+    world.ticks(3)                                    # your view again with a heads-up; shipped; then the Enemy POV
+    assert world.titles() == ["Rendering highlights", "Rendering highlights", "Highlights ready",
+                              "Rendering highlights"]
     assert world.index.latest_render(demo_id, "enemy")["state"] == "done"
 
 
 def test_a_second_demo_gets_its_own_heads_up(world):
     world.add_demo()
     world.add_demo(SECOND_DEMO, "1" * 64)
-    world.ticks(12)
-    assert world.titles() == ["Rendering highlights", "Highlights ready", "Rendering highlights", "Highlights ready"]
+    world.ticks(13)
+    assert world.titles() == ["Rendering highlights", "Highlights ready", "Rendering highlights",
+                              "Enemy POV ready"] * 2
 
 
 def test_a_render_straight_after_another_still_waits_for_the_gate_and_a_pause(world):
     world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran")]
     world.add_demo()
-    world.ticks(5)                                    # both views fail in one launch: CS2 has just closed
+    world.ticks(5)                                    # your view fails: CS2 has just closed
     world.gate.reasons = ("FACEIT AC is running",)
     world.ticks(1)                                    # the player view's retry, straight after
     assert len(world.render.calls) == 1
@@ -879,14 +894,14 @@ def test_a_render_straight_after_another_still_waits_for_the_gate_and_a_pause(wo
     assert len(world.render.calls) == 1
     world.index.resume()
     world.ticks(1)
-    assert [call.perspectives for call in world.render.calls] == [("player", "enemy"), ("player",)]
+    assert [call.perspectives for call in world.render.calls] == [("player",), ("player",)]
     assert world.titles() == ["Rendering highlights"] * 2        # the Gate closed: someone was at the PC
 
 
 def test_a_stop_asked_while_the_analysis_is_made_again_keeps_cs2_closed(world):
     world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran")]
     demo_id = world.add_demo()
-    world.ticks(5)                                    # both views fail in one launch: CS2 has just closed
+    world.ticks(5)                                    # your view fails: CS2 has just closed
     world.facts.kept.clear()                          # the next launch needs its Demo analyzed again
     analyze = world.services.analyze
 
@@ -904,13 +919,18 @@ def test_a_stop_asked_while_the_analysis_is_made_again_keeps_cs2_closed(world):
 def test_a_gate_that_closes_between_views_brings_the_heads_up_back(world):
     world.render.results = [RenderResult(ok=False, failure="stalled: no ffmpeg for 180s while CS2 ran")]
     world.add_demo()
-    world.ticks(6)                                    # both views fail in one launch; then the player view alone
+    world.ticks(7)                                    # your view fails, is tried again straight away, and shipped
     world.gate.reasons = ("CS2 is running",)          # someone is at the PC
-    world.ticks(1)                                    # the enemy view waits
+    world.ticks(1)                                    # the Enemy POV waits
     world.gate.reasons = ()
-    world.ticks(1)                                    # the enemy view, with a heads-up again
-    assert [call.perspectives for call in world.render.calls] == [("player", "enemy"), ("player",), ("enemy",)]
+    world.ticks(1)                                    # the Enemy POV, with a heads-up again
+    assert [call.perspectives for call in world.render.calls] == [("player",), ("player",), ("enemy",)]
     assert world.titles().count("Rendering highlights") == 2
+
+
+def _enemy_reel_names(world) -> list[str]:
+    return [share.reel_name(h["type"], "de_inferno", h["round"], "", "enemy") + ".mp4"
+            for h in world.index.selected_highlights(MATCH_CHECKSUM)]
 
 
 # --- asking for the other view of a done Demo (render the other view later) -----------------------
@@ -949,7 +969,7 @@ def test_an_asked_view_renders_from_the_kept_download_and_joins_alone(world):
     assert world.index.demo(demo_id)["state"] == "done"
     assert [call.perspectives for call in world.render.calls] == [("player",), ("enemy",)]
     assert set(world.render.calls[-1].outputs) == {"enemy"}
-    assert joined == [f"r{round_}-enemy.mp4" for round_ in (3, 4, 8, 12, 14)]
+    assert joined == _enemy_reel_names(world)
     assert world.index.reel_count(MATCH_CHECKSUM) == 10
     assert world.titles() == ["Rendering highlights", "Highlights ready", "Rendering highlights", "Enemy POV ready"]
     assert world.notices[-1][1] == "5 Highlights from de_inferno now have the Enemy POV."
@@ -1024,3 +1044,146 @@ def test_a_demo_that_is_not_asked_fails_when_its_download_is_gone(world):
     demo = world.index.demo(demo_id)
     assert (demo["state"], demo["last_error"]) == ("failed", "its download is gone")
     assert world.render.calls == []
+
+
+# --- the player's PC comes first: nothing while CS2 is open, Not now, and saying why renders wait ----------------
+
+
+def test_nothing_moves_while_cs2_is_open(world):
+    world.gate.playing = True
+    demo_id = world.add_demo()
+    world.ticks(3)
+    assert world.index.demo(demo_id)["state"] == "spotted"      # not even unpacked: CS2 keeps every frame
+    assert world.facts.analyzed == []
+    assert world.state.snapshot().waiting == ("CS2 is running",)
+    world.gate.playing = False
+    world.ticks(9)
+    assert world.index.demo(demo_id)["state"] == "done"
+
+
+def test_the_heads_up_offers_not_now_which_snoozes_renders_for_an_hour(world):
+    world.add_demo()
+    world.ticks(5)
+    assert world.buttons[0] == (("Not now (1 h)", "cs2clipper://snooze?minutes=60"),)
+
+
+def _snooze_from(world, minutes: float) -> datetime:
+    now = datetime(2026, 10, 13, 20, 0, tzinfo=timezone.utc)
+    world.services.now = lambda: now
+    world.index.snooze(now + timedelta(minutes=minutes))
+    return now
+
+
+def test_a_snooze_keeps_renders_waiting_and_says_until_when(world):
+    now = _snooze_from(world, 60)
+    demo_id = world.add_demo()
+    world.ticks(6)
+    assert world.render.calls == []
+    assert world.index.demo(demo_id)["state"] == "rendering"
+    until = (now + timedelta(minutes=60)).astimezone()
+    assert world.state.snapshot().waiting == (f"snoozed until {until:%H:%M}",)
+    world.services.now = lambda: now + timedelta(minutes=61)
+    world.ticks(1)
+    assert len(world.render.calls) == 1
+
+
+def test_not_now_during_the_heads_up_keeps_cs2_closed(world):
+    demo_id = world.add_demo()
+    world.ticks(4)                                    # rendering, nothing launched yet
+
+    def sleep(seconds):                               # Not now is clicked during the heads-up
+        _snooze_from(world, 60)
+
+    world.services.sleep = sleep
+    world.ticks(1)
+    assert world.titles() == ["Rendering highlights"]
+    assert world.render.calls == []
+    assert world.index.latest_render(demo_id, "player")["state"] == "queued"
+
+
+@pytest.mark.parametrize(("reasons", "body"), [
+    (("FACEIT AC is running",), "Close FACEIT AC to start. CS2 Clipper never opens CS2 while FACEIT AC runs."),
+    (("Steam is not running",), "Open Steam to start."),
+    (("FACEIT AC is running", "Steam is not running"),
+     "Close FACEIT AC and open Steam to start. CS2 Clipper never opens CS2 while FACEIT AC runs."),
+])
+def test_a_gate_held_only_by_what_the_player_can_fix_says_so_once_after_two_minutes(world, reasons, body):
+    world.gate.reasons = reasons
+    world.add_demo()
+    world.add_demo(SECOND_DEMO, "1" * 64)
+    world.ticks(5)                                    # both Demos wait to render
+    world.clock.now += 119
+    world.ticks(1)
+    assert world.notices == []
+    world.clock.now += 1
+    world.ticks(3)
+    assert world.notices == [("2 matches ready to clip", body)]
+
+
+def test_no_toast_while_someone_plays_or_the_disk_is_full(world):
+    world.add_demo()
+    for reasons in (("CS2 is running", "FACEIT AC is running"), ("less than 5 GB free on E:\\",)):
+        world.gate.reasons = reasons
+        world.ticks(5)
+        world.clock.now += 600
+        world.ticks(2)
+    assert world.notices == []
+
+
+def test_the_toast_comes_back_once_the_reasons_have_changed(world):
+    world.gate.reasons = ("FACEIT AC is running",)
+    world.add_demo()
+    world.ticks(5)
+    world.clock.now += 120
+    world.ticks(1)
+    world.gate.reasons = ("CS2 is running", "FACEIT AC is running")   # a match: the wait starts over afterwards
+    world.ticks(1)
+    world.gate.reasons = ("FACEIT AC is running",)
+    world.ticks(1)
+    world.clock.now += 120
+    world.ticks(1)
+    assert world.titles() == ["1 match ready to clip"] * 2
+
+
+# --- readable names: Reels named as they would be posted --------------------------------------------------------
+
+
+def test_reels_go_in_their_matchs_folder_named_as_they_would_be_posted(world):
+    world.use(faceit_nickname="s1mple")
+    world.add_demo()
+    world.ticks(9)
+    paths = [world.cfg.load_path(world.index.reel(r["player_reel_id"])["path"])
+             for r in world.index.match_reels(MATCH_CHECKSUM)]
+    folder = world.cfg.library_dir / "videos" / share.match_folder("de_inferno", MATCH.played_at.isoformat(), 13, 5)
+    assert {path.parent for path in paths} == {folder}
+    assert paths[0].name == share.reel_name(world.index.selected_highlights(MATCH_CHECKSUM)[0]["type"], "de_inferno",
+                                            3, "s1mple", "player") + ".mp4"
+
+
+def test_two_matches_with_the_same_day_map_and_score_keep_apart(world):
+    world.index.save_match(MATCH)
+    world.index.save_match(replace(MATCH, checksum="00000000000000c3"))
+    for checksum in (MATCH_CHECKSUM, "00000000000000c3"):
+        world.index.save_highlights(checksum, [Highlight(round=3, type="3K", score=30, reasons=("3k",), frag_ticks=(1,),
+                                                          round_start_tick=0, round_end_tick=10)], {3})
+    first = reel_path(world.index, world.cfg, MATCH_CHECKSUM, 3, "3K", "player")
+    world.index.save_reel(world.index.selected_highlights(MATCH_CHECKSUM)[0]["id"], "player",
+                          world.cfg.store_path(first), 4.0)
+    second = reel_path(world.index, world.cfg, "00000000000000c3", 3, "3K", "player")
+    assert second.parent != first.parent
+    assert second.parent.name == f"{first.parent.name} (00000000000000c3)"
+
+
+def test_reels_made_before_readable_names_get_them_at_the_next_start(world):
+    world.index.save_match(MATCH)
+    world.index.save_highlights(MATCH_CHECKSUM, [Highlight(round=8, type="4K", score=40, reasons=("4k",),
+                                                           frag_ticks=(1,), round_start_tick=0, round_end_tick=10)], {8})
+    old = _write(world.cfg.library_dir / "videos" / MATCH_CHECKSUM / "r8-player.mp4")
+    world.index.save_reel(world.index.selected_highlights(MATCH_CHECKSUM)[0]["id"], "player",
+                          world.cfg.store_path(old), 4.0)
+    assert rename_old_reels(world.index, world.cfg) == 1
+    [row] = world.index.all_reel_details()
+    new = world.cfg.load_path(row["path"])
+    assert new.name == "4K Inferno R8.mp4" and new.is_file()
+    assert not old.exists() and not old.parent.exists()   # the emptied checksum folder goes too
+    assert rename_old_reels(world.index, world.cfg) == 0  # once

@@ -18,6 +18,32 @@ function onThisPC() {
   return location.hostname === "127.0.0.1" || location.hostname === "localhost" || location.hostname === "[::1]";
 }
 
+// --- the window at rest -----------------------------------------------------------------------------------
+// While the window is hidden, minimized or behind another (CS2 on the other screen, say), every animation stops
+// (the .asleep rule in app.css) and the pages ask the app for news less often. It wakes on focus.
+const asleep = () => document.hidden || !document.hasFocus();
+function markAsleep() { document.documentElement.classList.toggle("asleep", asleep()); }
+addEventListener("blur", markAsleep);
+addEventListener("focus", markAsleep);
+document.addEventListener("visibilitychange", markAsleep);
+markAsleep();
+
+// Runs `fn` now and then every `ms`, or every `restingMs` while the window is asleep, and at once when it wakes.
+// One run at a time: a slow answer never stacks another request behind it.
+function every(ms, fn, restingMs = 20000) {
+  let timer = 0, running = false;
+  const run = async () => {
+    if (running) return;
+    running = true;
+    clearTimeout(timer);
+    try { await fn(); } catch (e) { /* the next run asks again */ }
+    running = false;
+    timer = setTimeout(run, asleep() ? Math.max(ms, restingMs) : ms);
+  };
+  addEventListener("focus", () => { if (!document.hidden) run(); });
+  run();
+}
+
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const $ = (sel, root = document) => root.querySelector(sel);
 const plural = (n, word, many) => `${n} ${n === 1 ? word : (many || word + "s")}`;
@@ -211,14 +237,10 @@ function setNavCount(n) {
 const pendingRows = rows => rows.filter(r => r.state === "ready" || r.state === "announced");
 
 function watchDemoCount() {
-  const poll = async () => {
-    try {
-      const r = await api("/demos.json");
-      if (r.ok) setNavCount(pendingRows((await r.json()).rows).length);
-    } catch (e) { /* the app is busy or has gone */ }
-    setTimeout(poll, 15000);
-  };
-  poll();
+  every(15000, async () => {
+    const r = await api("/demos.json");
+    if (r.ok) setNavCount(pendingRows((await r.json()).rows).length);
+  }, 60000);
 }
 
 // Other pages show the summary too once the app has the light /api/summary route (it skips the checks
@@ -226,20 +248,19 @@ function watchDemoCount() {
 // event too: the map glow (touches.js) follows the map being rendered.
 async function watchSummary() {
   if (!(await hasRoute("/api/summary"))) return;
-  const poll = async () => {
-    try {
-      const r = await api("/api/summary");
-      if (r.ok) {
-        const s = await r.json();
-        setNavStatus(s.summary, summaryMode(s));
-        setSweep(summaryMode(s));
-        dispatchEvent(new CustomEvent("clipper:summary", {detail: s}));
-      }
-    } catch (e) { /* ask again */ }
-    setTimeout(poll, 4000);
-  };
-  poll();
+  every(4000, async () => {
+    const r = await api("/api/summary");
+    if (r.ok) {
+      const s = await r.json();
+      setNavStatus(navLabel(s), summaryMode(s));
+      setSweep(summaryMode(s));
+      dispatchEvent(new CustomEvent("clipper:summary", {detail: s}));
+    }
+  });
 }
+
+// The nav pill's words: a problem is said once, on Status with its fix, so here it is only "On hold".
+const navLabel = s => s.problems && s.problems.length ? "On hold: open Status" : s.summary;
 
 function summaryMode(s) {
   if (s.problems && s.problems.length) return "bad";

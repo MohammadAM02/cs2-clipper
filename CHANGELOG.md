@@ -3,6 +3,44 @@
 What changed in each release of CS2 Clipper. The release workflow publishes a version's section as the notes of
 its GitHub Release, and the app shows those notes on the Status page when it offers that version.
 
+## 0.8.0
+
+### Set up in one go, and share what you clip
+
+- **Zero FPS cost, said up front.** CS2 Clipper does nothing while CS2 is open — not even reading a Demo — and never
+  opens CS2 while FACEIT AC runs. Status and the tray show how much memory and CPU the app itself is using.
+- **One screen to set up.** A fresh install opens on three steps: look up your FACEIT nickname, your clips go to
+  Videos\CS2 Clipper (change it if you like), and the tools download by themselves, about 122 MB, with a progress bar.
+  The installer says so before it installs.
+- **Toasts come from CS2 Clipper**, not Windows PowerShell. "Highlights ready" has **Watch**, which plays the clip in
+  the app window, and **Show in folder**. The update toast opens the app window, not a browser tab.
+- **Your view first.** With both views on, your view gets its Reels and its toast as soon as it is recorded; the Enemy
+  POV records after it, in its own CS2 launch.
+- **Share from Reels.** Click a Highlight to play it, switch to the Enemy POV in the player, and: **Copy file** (paste
+  it straight into Discord), **Export for Discord** (under the 20 MB free limit, and on the clipboard), **9:16** for
+  TikTok, Shorts and Instagram Reels, or **Show in folder**. Exports open on a title card with your nickname, the map,
+  the round and the Highlight (Settings → Picture).
+- **Readable names.** Reels are called what they are — `ACE Dust2 R9 you.mp4` — in a folder per match, like
+  `2026-10-12 Dust2 13-9`. Reels made before this get their new names at the next start.
+- **Reels on your phone.** Open the app's address on your phone, as for Demos to grab, to watch your Reels and
+  download them. Everything else stays on the PC.
+- **A toast when you can fix the wait.** If FACEIT AC or a closed Steam is all that holds rendering up, a toast says
+  so after two minutes. Renders wait for Steam instead of failing three times.
+- **When renders happen.** Settings → Rendering → **Start renders**: any time, once the PC has been idle 10 minutes,
+  or overnight. The heads-up toast has **Not now (1 h)**. CS2, its encoder, csda and FFmpeg run below normal
+  priority, and **Encoder** can use the graphics card (NVENC, AMF or Quick Sync).
+- **Safer defaults for posting.** X-Ray and Player voices are off by default: no "walls?" replies, and no teammates'
+  comms in clips you post. Turn them back on in Settings → HUD.
+- **Calmer pages.** Status shows the pipeline as Found → Making clips (with how long is left) → Ready, says each
+  problem once with its fix beside it, and uses plain names: System check, Activity log, Ready to download. Quit
+  moved to the foot of the page and the tray. Animations stop and the pages check in less often while the window is
+  in the background.
+- **Settings.** Keys, paths, timeouts and the port moved under **Advanced**. Look up fills in your nickname and
+  SteamID, and Save keeps them, like every other setting. Status checks for CS2 and Steam too.
+- **Demos to grab** rows show the map, its Highlights, how long the link lasts and Open; the match's numbers sit in a
+  line under the map. "Waiting for the download" is remembered by the app, so every window and the phone see it.
+- Once set up, the window opens on **Reels**.
+
 ## 0.7.0
 
 ### New look: Nugget, and pages like a comic

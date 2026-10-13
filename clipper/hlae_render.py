@@ -39,9 +39,10 @@ USRLOCAL_VARIABLE = "USRLOCALCSGO"
 
 def _launch(command: list[str], log: IO[str], environment: dict[str, str]) -> subprocess.Popen:
     """Starts HLAE.exe without a window, with `environment`, which the CS2 it starts gets too; whatever it prints goes
-    into the log."""
+    into the log. Below normal priority, which the CS2 it starts and that CS2's encoder inherit: a recording is not
+    played live, so whatever else the PC is doing comes first."""
     return subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, env=environment,
-                            creationflags=subprocess.CREATE_NO_WINDOW)
+                            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
 
 
 def _hlae_error_shown() -> bool:

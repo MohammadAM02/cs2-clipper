@@ -65,7 +65,8 @@ def join_reel(clips: Sequence[Path], out_path: Path, *, ffmpeg: str,
             result = subprocess.run(
                 [ffmpeg, "-y", "-loglevel", "error", "-f", "concat", "-safe", "0",
                  "-i", str(listing), *codec, str(partial)],
-                capture_output=True, text=True, timeout=600, creationflags=subprocess.CREATE_NO_WINDOW,
+                capture_output=True, text=True, timeout=600,
+                creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS,
             )
         finally:
             listing.unlink(missing_ok=True)

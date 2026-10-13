@@ -122,11 +122,12 @@ def render_inputs(data: Data) -> RenderInputs:
 
 def run_logged(command: list[str], log_path: Path) -> int:
     """Run `command`, keep what it printed in `log_path`, and give its exit code. Runs inside the app's
-    kill-on-close job object, and is killed on a timeout or any other failure, as subprocess.run would."""
+    kill-on-close job object, and is killed on a timeout or any other failure, as subprocess.run would. Below normal
+    priority: whatever else the PC is doing comes first."""
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with subprocess.Popen(
         command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
-        creationflags=subprocess.CREATE_NO_WINDOW,
+        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS,
     ) as proc:
         winjob.guard(proc)
         try:

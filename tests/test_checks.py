@@ -188,10 +188,12 @@ def _get(cfg, **overrides):
         releases=_FakeReleases("9.9.9"),
         which=lambda name: None,
         free_bytes=lambda path: 999 * GB,
+        cs2_exe=lambda: Path("C:/Steam/steamapps/common/Counter-Strike Global Offensive/game/bin/win64/cs2.exe"),
+        steam_running=lambda: True,
     )
     kwargs.update(overrides)
     results = checks.run_checks(cfg, **kwargs)
-    assert [c.name for c in results] == ["csda", "HLAE", "FFmpeg", "Clips folder", "Match alerts"]
+    assert [c.name for c in results] == ["csda", "HLAE", "FFmpeg", "CS2", "Steam", "Clips folder", "Match alerts"]
     return {c.name: c for c in results}
 
 
@@ -334,9 +336,9 @@ def test_run_checks_match_alerts_off_shows_the_reason(tmp_path):
 def test_startup_problems_lists_each_message_in_order(tmp_path):
     cfg = _cfg(tmp_path, subject_steamid="", data_root=None)
     assert checks.startup_problems(cfg) == [
-        "Set your SteamID in Settings",
+        "Look up your FACEIT nickname, so the app knows whose Highlights to clip",
         "Choose a clips folder in Settings",
-        f"csda was not found in {cfg.csda_exe.parent}",
+        "csda isn't installed yet: Set up installs it",     # no AppData path to puzzle over
     ]
 
 
@@ -369,3 +371,12 @@ def test_hlae_is_behind_only_when_both_versions_are_known_and_the_release_is_new
     assert checks.hlae_behind(cfg, "2.192.7") is True
     assert checks.hlae_behind(cfg, "2.192.6") is False
     assert checks.hlae_behind(cfg, None) is False            # the release check has not answered
+
+
+def test_run_checks_cs2_and_steam(tmp_path):
+    found = _get(_cfg(tmp_path))
+    assert (found["CS2"].ok, found["Steam"].ok) == (True, True)
+    missing = _get(_cfg(tmp_path), cs2_exe=lambda: None, steam_running=lambda: False)
+    assert (missing["CS2"].ok, missing["CS2"].hint) == (
+        False, "Install Counter-Strike 2 from Steam: the Clips are recorded in it")
+    assert (missing["Steam"].ok, missing["Steam"].detail) == (None, "not running")    # not broken: renders wait

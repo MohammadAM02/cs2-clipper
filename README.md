@@ -40,29 +40,32 @@
 - **Shows both sides.** Every Highlight comes twice: from your view, and from an Enemy POV that follows
   each player you take down. Keep just one in Settings → Picture → Views to render, and each match records
   half as much, so it renders faster.
-- **Stays out of your way.** It records only while CS2 and FACEIT AC are closed, gives a 30-second
-  heads-up first, and stops the moment FACEIT AC starts.
+- **Zero FPS cost.** It does nothing while CS2 is open, not even reading a Demo, and records only once CS2 and
+  FACEIT AC are closed: after a 30-second heads-up (with **Not now**), and it stops the moment FACEIT AC starts.
+  Status and the tray show how much memory and CPU the app itself takes.
 - **Tells you what to grab.** Match alerts flag the FACEIT matches that have Highlights, and Demos to grab
   counts down to the day FACEIT's link expires. That page opens on your phone too.
-- **Plays them back.** The Reels page holds every Highlight, filtered by Aces, 4Ks, 3Ks or all-headshot
-  rounds, one click from either view.
+- **Plays them back, and shares them.** The Reels page holds every Highlight, filtered by Aces, 4Ks, 3Ks or
+  all-headshot rounds. Click one to watch it; from the player, **Copy file** (paste it straight into Discord),
+  **Export for Discord** (under the 20 MB free limit), **9:16** for TikTok, Shorts and Reels, or **Show in folder**.
+  Exports open on a title card with your name, the map and the round. Reels open on your phone too.
 
 ## A look inside
 
 <p align="center">
-  <img src="docs/images/status.webp" alt="Status: a Dust2 Demo mid-render with its steps, the latest Highlights and the checks" width="100%">
+  <img src="docs/images/status.webp" alt="Status: a Dust2 Demo mid-render, Found then Making clips with the time left, and the latest Highlights" width="100%">
   <br>
   <sub><b>Status</b>: what the app is doing right now, the latest Highlights, and whether this PC is ready.</sub>
 </p>
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/demos.webp" alt="Demos to grab: recent FACEIT matches with Highlights, Rating 2.0, K-D, ADR and the days left on each Demo link"></td>
+    <td width="50%"><img src="docs/images/demos.webp" alt="Demos to grab: recent FACEIT matches with their Highlights and the days left on each Demo link, and each match's numbers under its map"></td>
     <td width="50%"><img src="docs/images/reels.webp" alt="Reels: every Highlight in a carousel, with filters, and each match's rounds"></td>
   </tr>
   <tr>
-    <td align="center"><sub><b>Demos to grab</b>: matches worth downloading, with Rating 2.0, K-D and ADR.</sub></td>
-    <td align="center"><sub><b>Reels</b>: every Highlight, from your view or the Enemy POV.</sub></td>
+    <td align="center"><sub><b>Demos to grab</b>: matches worth downloading, and how long each link lasts.</sub></td>
+    <td align="center"><sub><b>Reels</b>: every Highlight, to watch from either view and to share.</sub></td>
   </tr>
 </table>
 
@@ -72,8 +75,9 @@
   <img src="docs/images/pipeline.webp" alt="You play and download the Demo; the app analyzes, scores, records and joins the Reels" width="100%">
 </p>
 
-Each Demo moves through the same steps, the ones on the Status page. Every step can run again, so a crash or
-a reboot picks up where it stopped.
+Each Demo moves through the same steps; Status sums them up as Found, Making clips (with about how long is left)
+and Ready. Every step can run again, so a crash or a reboot picks up where it stopped, and none runs while CS2 is
+open.
 
 | Step | What happens |
 | --- | --- |
@@ -81,14 +85,16 @@ a reboot picks up where it stopped.
 | **Unpacked** | The `.dem.zst` FACEIT serves becomes a `.dem`. |
 | **Analyzed** | [csda](https://github.com/akiver/cs-demo-analyzer) reads every round; the app keeps what it needs as `analyses\<checksum>.json`. |
 | **Scored** | Each round with your Frags becomes a Highlight; the five with the best Score are picked. |
-| **Rendering** | HLAE starts CS2 and a console script ([`hlae_plan.py`](clipper/hlae_plan.py)) records each Sequence at its exact ticks, both views in one CS2 launch: your view first, then the demo starts again for the Enemy POV (or only the view Settings picks). |
+| **Rendering** | HLAE starts CS2 and a console script ([`hlae_plan.py`](clipper/hlae_plan.py)) records each Sequence at its exact ticks, one view per CS2 launch: your view first, whose Reels are joined and announced straight away, then the Enemy POV (or only the view Settings picks). CS2 and its encoder run below normal priority. |
 | **Joined** | FFmpeg joins each Highlight's Clips into one Reel per view. |
-| **Done** | The unpacked `.dem` is deleted, and a notification says the Reels are ready. |
+| **Done** | The unpacked `.dem` is deleted, and a toast says the Reels are ready, with **Watch** and **Show in folder**. |
 
 ### Safe around FACEIT AC
 
 Nothing starts CS2 unless the **Gate** is clear: no CS2 running, FACEIT AC off (neither its service nor its
-client), and at least 5 GB free on the clips drive. While it records, the app keeps checking; if FACEIT AC
+client), Steam running, at least 5 GB free on the clips drive, and the time Settings → **Start renders** allows
+(any time, once the PC has been idle 10 minutes, or overnight). When FACEIT AC or a closed Steam is all that holds
+it up, a toast says so. While it records, the app keeps checking; if FACEIT AC
 starts, it closes the game it launched straight away and redoes that render later. CS2 only ever starts for
 offline Demo playback, and the app never touches a CS2 you started yourself.
 
@@ -98,10 +104,9 @@ offline Demo playback, and the app never touches a CS2 you started yourself.
    from the [latest release](https://github.com/MohammadAM02/cs2-clipper/releases/latest) and run it. It
    installs for your Windows account only, with no admin prompt, and starts in the tray when you sign in
    (untick that in the installer if you'd rather it didn't).
-2. **Set up this PC** from the Status page. The app downloads what it records with, csda, FFmpeg and HLAE,
-   into `%LOCALAPPDATA%\CS2Clipper\tools`.
-3. **Say who you are** in Settings → You: your FACEIT nickname (**Look up** fills in your SteamID). Then
-   choose a clips folder.
+2. **Set up in one go.** The app opens on one screen: look up your FACEIT nickname (that fills in your
+   SteamID), keep or change the clips folder (`Videos\CS2 Clipper`), and the tools it records with, csda, FFmpeg
+   and HLAE (about 122 MB), download by themselves into `%LOCALAPPDATA%\CS2Clipper\tools`.
 
 > **Needs** Windows 10 or 11, CS2 installed through Steam (with Steam running while it records), a FACEIT
 > account and 5 GB free on the clips drive.
@@ -117,8 +122,9 @@ with one click, keeping your settings, Demos and Reels. What changed in each ver
 2. **Download the Demo** with **Open**, which takes you to the matchroom. That is the one manual step:
    FACEIT keeps Demo downloads behind a partner-only API ([ADR 0001](docs/adr/0001-faceit-only-ingestion.md)).
 3. **Walk away.** Status shows each step, and the tray icon says what the app is doing.
-4. **Watch** on the Reels page, or open the files in
-   `<clips folder>\library\videos\<match>\r<round>-player.mp4` and `…-enemy.mp4`.
+4. **Watch** with the toast's **Watch**, on the Reels page, or open the files: a folder per match in
+   `<clips folder>\library\videos`, like `2026-10-12 Dust2 13-9\ACE Dust2 R9 you.mp4`. Exports go to
+   `<clips folder>\Exports`.
 
 > [!TIP]
 > A CS2 update can break HLAE until advancedfx ships a fix. Status checks for new HLAE releases every day

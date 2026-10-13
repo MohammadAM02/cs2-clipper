@@ -42,29 +42,31 @@ import threading
 import time
 import urllib.request
 from collections.abc import Callable, Iterable
+from datetime import timedelta
 from functools import partial
 from pathlib import Path
 
 from clipper import (
-    analysis, applog, checks, cs2_paths, faceit_oauth, hlae_plan, hlae_render, move_in, packaged, paths, protect,
-    provision, settings, tray, update, web,
+    analysis, applog, checks, cs2_paths, faceit_oauth, hlae_plan, hlae_render, icon, links, move_in, packaged, paths,
+    protect, provision, settings, share, tray, update, web, windows,
 )
-from clipper.alerts import MatchAlerts
+from clipper import notify as toasts
+from clipper.alerts import MatchAlerts, utc_now
 from clipper.config import Config
 from clipper.faceit import FaceitClient, FaceitError
 from clipper.faceit_oauth import OAuthError
-from clipper.gate import Gate
+from clipper.footprint import Footprint
+from clipper.gate import Gate, Schedule
 from clipper.index import Index
 from clipper.intake import Intake
 from clipper.join import join_reel
 from clipper.lock import AlreadyRunning, single_instance
-from clipper.media import probe_duration
-from clipper.notify import notify
+from clipper.media import gpu_encoder, probe_duration
 from clipper.procs import ProcessProbe, SystemProbe
 from clipper.settings import SettingsStore
 from clipper.state import AppState
 from clipper.unpack import unpack
-from clipper.web import PAGES  # noqa: F401 - its one home is web.py; cli.py and the tests read it as app.PAGES
+from clipper.links import PAGES  # noqa: F401 - its one home is links.py; cli.py and the tests read it as app.PAGES
 from clipper.window import WindowLauncher
 from clipper.worker import DeleteRequest, Services, StopRequest, Worker, delete_demo
 
@@ -110,15 +112,49 @@ def _ask(ports: Iterable[int], route: str, body: dict) -> int | None:
 
 
 def hand_over(page: str | None, ports: Iterable[int]) -> bool:
-    """Finds the running copy among `ports` and asks it to show `page` (or Status). True once it
-    answers 204; False when none of `ports` is a running copy, or it refuses."""
-    return _ask(ports, "/api/window", {"page": page or "/status"}) == 204
+    """Finds the running copy among `ports` and asks it to show `page` (or its home page, Reels once set up). True
+    once it answers 204; False when none of `ports` is a running copy, or it refuses."""
+    return _ask(ports, "/api/window", {"page": page or "home"}) == 204
 
 
 def ask_to_quit(ports: Iterable[int]) -> bool:
     """Finds the running copy among `ports` and asks it to quit now, stopping a render that is under
     way. True once it answers; False when none of `ports` is a running copy, or it refuses."""
     return _ask(ports, "/api/quit", {"mode": "now"}) == 200
+
+
+def open_link(url: str, *, ask: Callable[[Iterable[int], str, dict], int | None] | None = None,
+              start: Callable[..., int] | None = None) -> int:
+    """`clipper --link URL`: a cs2clipper: link a toast's button opened (clipper.links). The running copy follows
+    it; with none running, the app starts and shows the page the link is about. 2 for a URL that is not a link."""
+    link = links.parse(url)
+    if link is None:
+        print("not a CS2 Clipper link", file=sys.stderr)
+        return 2
+    page_port = settings.load(paths.settings_file()).config.page_port
+    if (ask or _ask)(range(page_port, page_port + web.PORTS_TO_TRY), "/api/link", {"url": url}) == 204:
+        return 0
+    return (start or run)(open_page=link.page)
+
+
+def register_with_windows() -> None:
+    """At every start: cs2clipper: links start this copy (clipper.links), toasts go out as CS2 Clipper with its
+    mark (clipper.notify), and the window shares the Start menu shortcut's taskbar button. Best effort: what
+    fails is logged, and toasts then say Windows PowerShell, as they did before."""
+    try:
+        links.register(windows.set_user_value)
+    except OSError as exc:
+        log.warning("cs2clipper: links are not registered, so toast buttons open nothing: %s", exc)
+    try:
+        mark = paths.data_dir() / "CS2Clipper.png"
+        icon.write_png(mark)
+        toasts.register(mark, windows.set_user_value)
+    except OSError as exc:
+        log.warning("toasts go out as Windows PowerShell: %s", exc)
+    try:
+        windows.set_app_id(toasts.APP_ID)
+    except OSError as exc:
+        log.warning("the window may not share the shortcut's taskbar button: %s", exc)
 
 
 def start_match_alerts(cfg: Config, index: Index, probe: SystemProbe, *,
@@ -129,23 +165,38 @@ def start_match_alerts(cfg: Config, index: Index, probe: SystemProbe, *,
     if not cfg.match_alerts:
         index.set_flag("alerts_status", "off: switched off in Settings")
         return None
-    if not (cfg.faceit_nickname and cfg.faceit_api_key_protected):
-        index.set_flag("alerts_status", "off: set your FACEIT nickname and API key in Settings")
+    if not cfg.faceit_nickname:
+        index.set_flag("alerts_status", "off: look up your FACEIT nickname on Status or in Settings")
+        return None
+    if not cfg.faceit_api_key_protected:
+        index.set_flag("alerts_status", "off: this copy has no FACEIT API key; add one under Settings -> Advanced")
         return None
     if page_url is None:
         index.set_flag("alerts_status", f"off: the Demos to grab page could not start: {pages_off}")
         return None
     faceit = FaceitClient(lambda: protect.unprotect(cfg.faceit_api_key_protected))
-    return MatchAlerts(index, faceit, notify, probe.user_cs2_running, nickname=cfg.faceit_nickname,
+    return MatchAlerts(index, faceit, toasts.notify, probe.user_cs2_running, nickname=cfg.faceit_nickname,
                        subject_steamid=cfg.subject_steamid, page_url=page_url,
                        stopped_playing_minutes=cfg.stopped_playing_minutes)
 
 
+_gpu_encoders: dict[str, tuple[str, str] | None] = {}    # FFmpeg -> the graphics card encoder it can use, once asked
+
+
 def _video_settings(cfg: Config) -> hlae_plan.VideoSettings:
-    """What a Render Job records with: the HUD settings, and the plan's own defaults for the rest."""
+    """What a Render Job records with: the HUD settings, the encoder (the graphics card's, when Settings asks for it
+    and the PC has one), and the plan's own defaults for the rest."""
+    encoder = {}
+    if cfg.encoder == "gpu":
+        if cfg.ffmpeg not in _gpu_encoders:
+            _gpu_encoders[cfg.ffmpeg] = gpu_encoder(cfg.ffmpeg)
+            log.info("GPU encoder: %s", (_gpu_encoders[cfg.ffmpeg] or ("none, so x264",))[0])
+        found = _gpu_encoders[cfg.ffmpeg]
+        if found:
+            encoder = {"video_codec": found[0], "output_parameters": found[1]}
     return hlae_plan.VideoSettings(
         show_xray=cfg.show_xray, show_assists=cfg.show_assists, show_only_death_notices=cfg.hud == "killfeed",
-        death_notices_duration=cfg.kill_feed_seconds, player_voices_enabled=cfg.player_voices)
+        death_notices_duration=cfg.kill_feed_seconds, player_voices_enabled=cfg.player_voices, **encoder)
 
 
 def _program(name: str) -> Path | None:
@@ -157,7 +208,7 @@ def _program(name: str) -> Path | None:
 def build_worker(cfg: Config, index: Index, *, state: AppState, stop: StopRequest, deletes: DeleteRequest,
                  page_url: str | None, pages_off: str | None) -> Worker:
     probe = SystemProbe()
-    gate = Gate(probe, cfg.data_root, cfg.min_free_gb)
+    gate = Gate(probe, cfg.data_root, cfg.min_free_gb, schedule=schedule(cfg))
     analyses = analysis.Analyses(cfg.analyses_dir, cfg.csda_exe)
     duration_of = partial(probe_duration, ffprobe=cfg.ffprobe)
 
@@ -178,10 +229,35 @@ def build_worker(cfg: Config, index: Index, *, state: AppState, stop: StopReques
         gate=gate,
         render=render_job,
         join=partial(join_reel, ffmpeg=cfg.ffmpeg, duration_of=duration_of, stretch=cfg.stretch),
-        notify=notify,
+        notify=toasts.notify,
         alerts=start_match_alerts(cfg, index, probe, page_url=page_url, pages_off=pages_off),
     )
     return Worker(cfg, index, services, state=state, stop=stop, deletes=deletes)
+
+
+def adopt_default_clips_folder(store: SettingsStore, videos: Callable[[], Path] | None = None) -> Path | None:
+    """A fresh install keeps its clips in Videos\\CS2 Clipper: set, and made, when no clips folder is, so the first
+    screen asks for nothing the app can choose itself. Settings moves it. The folder set, or None when one was
+    set already or this one cannot be."""
+    if store.current().config.data_root is not None:
+        return None
+    try:
+        folder = (videos or windows.videos_dir)() / "CS2 Clipper"
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        log.warning("no default clips folder: %s", exc)
+        return None
+    errors = store.save({"data_root": str(folder)})
+    if errors:
+        log.warning("no default clips folder: %s", "; ".join(errors.values()))
+        return None
+    log.info("the clips folder is %s", folder)
+    return folder
+
+
+def schedule(cfg: Config) -> Schedule:
+    """When renders may start, as Settings -> Start renders says."""
+    return Schedule(cfg.render_when, idle_seconds=windows.idle_seconds)
 
 
 def gate_reasons(cfg: Config, probe: ProcessProbe) -> tuple[str, ...]:
@@ -189,7 +265,7 @@ def gate_reasons(cfg: Config, probe: ProcessProbe) -> tuple[str, ...]:
     yet (the Gate itself needs a `data_root` to check free space against)."""
     if cfg.data_root is None:
         return ("no clips folder is set",)
-    return Gate(probe, cfg.data_root, cfg.min_free_gb).check().reasons
+    return Gate(probe, cfg.data_root, cfg.min_free_gb, schedule=schedule(cfg)).check().reasons
 
 
 class App:
@@ -205,6 +281,7 @@ class App:
                  launcher: Callable[[str], WindowLauncher] = WindowLauncher,
                  setup: Callable[..., provision.Setup] = provision.Setup,
                  updates: Callable[..., update.Updates] = update.Updates,
+                 reveal: Callable[[Path], None] = windows.reveal,
                  recheck_seconds: float = 60.0, clock: Callable[[], float] = time.monotonic):
         self.settings = settings
         self.state = state if state is not None else AppState()
@@ -216,11 +293,13 @@ class App:
                                folder=lambda: paths.data_dir() / "downloads", logs=paths.logs_dir,
                                busy=self._update_refused, announce=self._announce_update)
         self.page_port: int | None = None
+        self.footprint = Footprint()
         self._index_path = index_path
         self._problems = problems
         self._build = build
         self._launcher_factory = launcher
         self._launcher: WindowLauncher | None = None
+        self._reveal = reveal
         self._recheck_seconds = recheck_seconds
         self._clock = clock
         self._probe = SystemProbe()
@@ -260,12 +339,20 @@ class App:
             faceit_login_url=self.faceit_login_url,
             faceit_sign_in=self.faceit_sign_in,
             faceit_lookup=self.faceit_lookup,
+            faceit_find=self.faceit_find,
             setup_status=self.setup.status,
             start_setup=self.start_setup,
             update_status=self.updates.status,
             start_update=self.start_update,
             delete_demo=self.delete_demo,
             check_faceit=self.check_faceit,
+            follow_link=self.follow_link,
+            footprint=lambda: self.footprint.usage(),
+            onboarding=self.onboarding,
+            home=self.home,
+            copy_file=share.copy_to_clipboard,
+            export_reel=share.export,
+            reveal=self._reveal,
         )
         try:
             self._web = web.WebServer(web.create_app(ctx), self.settings.current().config.page_port,
@@ -305,6 +392,75 @@ class App:
     def _window_request(self) -> dict:
         """`/api/window`'s answer, which the page in the open window polls (see `WindowLauncher`)."""
         return self._launcher.current() if self._launcher is not None else {"seq": 0, "page": "/status"}
+
+    def home(self) -> str:
+        """The page the window opens on: Reels, once the PC is set up (clip apps open on the clips), else Status,
+        which sets it up."""
+        return "/reels" if self.onboarding()["done"] else "/status"
+
+    # --- the first run: one screen, three things (Status) ------------------------------------------------------
+
+    def onboarding(self) -> dict:
+        """What the first-run screen shows: who the Highlights are for, where they go, and the tools, which download
+        on their own. `done` once all three are there."""
+        cfg = self.settings.current().config
+        setup = self.setup.status()
+        missing = [step for step in setup.get("steps", []) if step["state"] != "ok" and not step.get("update")]
+        tools = ("downloading" if setup.get("running") else "failed" if setup.get("error") and missing
+                 else "needed" if missing or not setup.get("steps") and setup.get("needed") else "ok")
+        return {"done": bool(cfg.subject_steamid) and cfg.data_root is not None and tools == "ok",
+                "nickname": cfg.faceit_nickname, "steamid": bool(cfg.subject_steamid),
+                "clips_folder": str(cfg.data_root or ""), "tools": tools,
+                "download_mb": round(setup.get("download_bytes", 0) / 1_000_000)}
+
+    def start_setup_if_missing(self) -> None:
+        """At start, Setup downloads what the PC lacks (the installer says it will): nobody has to find a button
+        for it. A newer HLAE or FFmpeg alone waits for its Update button, since an update can wait."""
+        status = self.setup.status()
+        if status.get("running"):
+            return
+        if any(step["state"] != "ok" and not step.get("update") for step in status.get("steps", [])):
+            log.info("Setup starts on its own: this PC lacks some of the tools")
+            self.start_setup()
+
+    # --- cs2clipper: links (toast buttons; `open_link`) ---------------------------------------------------
+
+    def follow_link(self, link: links.Link) -> None:
+        """Does what a cs2clipper: link asks: shows a page, shows a Reel's file in Explorer (or, when it is gone,
+        Reels), or snoozes renders."""
+        if link.action == "open":
+            self.open_window(link.page)
+        elif link.action == "reveal":
+            if not self.reveal_reel(link.reel):
+                self.open_window(link.page)
+        elif link.action == "snooze":
+            self.snooze(link.minutes)
+
+    def reveal_reel(self, reel_id: int) -> bool:
+        """Shows Reel `reel_id`'s file, selected, in Explorer. False when there is no such Reel or file."""
+        cfg = self.settings.current().config
+        index = Index(self._index_path)
+        try:
+            row = index.reel(reel_id)
+        finally:
+            index.close()
+        if row is None or cfg.data_root is None:
+            return False
+        path = cfg.load_path(row["path"])
+        if not path.is_file():
+            return False
+        self._reveal(path)
+        return True
+
+    def snooze(self, minutes: int) -> None:
+        """No render starts for `minutes` (the heads-up toast's Not now); Resume ends it sooner."""
+        until = utc_now() + timedelta(minutes=minutes)
+        index = Index(self._index_path)
+        try:
+            index.snooze(until)
+        finally:
+            index.close()
+        log.info("renders snoozed until %s", until.isoformat(timespec="seconds"))
 
     # --- sign in with FACEIT (Settings) ---------------------------------------------------------------
 
@@ -366,21 +522,26 @@ class App:
         return cfg.faceit_redirect_uri or faceit_oauth.RELAY_URL
 
     def faceit_lookup(self, nickname: str) -> dict:
-        """The FACEIT player behind a nickname, saved as the two settings Match Alerts need. The app's
-        own key does the asking, so no FACEIT sign-in is needed -- this is the whole of "tell the app
-        who you are" without OAuth."""
+        """The FACEIT player behind a nickname, saved as the two settings Match Alerts need: the first-run setup's
+        Look up. The app's own key does the asking, so no FACEIT sign-in is needed -- this is the whole of "tell
+        the app who you are" without OAuth."""
+        found = self.faceit_find(nickname)
+        errors = self.settings.save({"faceit_nickname": found["nickname"], "subject_steamid": found["steamid"]})
+        if errors:
+            raise FaceitError("; ".join(errors.values()))
+        return found
+
+    def faceit_find(self, nickname: str) -> dict:
+        """The FACEIT player behind a nickname, not saved: Settings' Look up fills in the two boxes, and Save keeps
+        them with everything else."""
         cfg = self.settings.current().config
         if not cfg.faceit_api_key_protected:
-            raise FaceitError("set the FACEIT API key first")
+            raise FaceitError("this copy has no FACEIT API key: add one under Settings -> Advanced")
         try:
             client = FaceitClient(lambda: protect.unprotect(cfg.faceit_api_key_protected))
             player = client.player(nickname)
         except protect.ProtectError:
             raise FaceitError("the saved FACEIT API key can't be read on this Windows account") from None
-        errors = self.settings.save({"faceit_nickname": player.nickname,
-                                     "subject_steamid": player.steamid})
-        if errors:
-            raise FaceitError("; ".join(errors.values()))
         return {"nickname": player.nickname, "steamid": player.steamid}
 
     # --- pause / resume (the tray, Task 14; the Status page's Pause and Resume) ---------------
@@ -395,9 +556,11 @@ class App:
         self.state.set_paused_by("you")
 
     def resume(self) -> None:
+        """Ends a pause, and a snooze too."""
         index = Index(self._index_path)
         try:
             index.resume()
+            index.snooze(None)
         finally:
             index.close()
         self.state.set_paused_by(None)
@@ -421,7 +584,7 @@ class App:
         worker = self._worker
         alerts = worker.services.alerts if worker is not None else None
         if alerts is None:
-            return "Match alerts are off. They need your FACEIT nickname and key in Settings."
+            return "Match alerts are off. Look up your FACEIT nickname first."
         return alerts.check_now()
 
     # --- the worker thread -----------------------------------------------------------------------
@@ -488,7 +651,7 @@ class App:
                     folder.mkdir(parents=True, exist_ok=True)
                 if self._worker is not None:
                     log.info("settings changed; rebuilding the worker")
-                page_url = f"http://127.0.0.1:{self.page_port}/demos" if self.page_port else None
+                page_url = links.to_page("/demos") if self.page_port else None   # its toasts open the window
                 worker = self._build(cfg, index, state=self.state, stop=self.stop, deletes=self.deletes,
                                      page_url=page_url, pages_off=self.state.snapshot().pages_off)
             except Exception as exc:  # noqa: BLE001 - a failed start is a problem to show; the thread goes on
@@ -574,8 +737,8 @@ class App:
 
     def _announce_update(self, release: update.Release) -> None:
         """A toast for a newer version: the app mostly runs in the tray, where Status is not seen."""
-        actions = (("Show", f"http://127.0.0.1:{self.page_port}/status"), ("Not now", None)) if self.page_port else ()
-        notify(f"CS2 Clipper {release.version} is out",
+        actions = (("Show", links.to_page("/status")), ("Not now", None)) if self.page_port else ()
+        toasts.notify(f"CS2 Clipper {release.version} is out",
                "Open Status to see what changed, then update with one click.", actions)
 
     # --- the HLAE release check ----------------------------------------------------------------------
@@ -621,18 +784,21 @@ def run(*, open_page: str | None = None, background: bool = False, headless: boo
         with single_instance(paths.lock_file()):
             applog.setup(paths.logs_dir())
             move_in.on_start()
+            register_with_windows()
             store = SettingsStore(paths.settings_file())
             for warning in store.current().warnings:
                 log.warning(warning)
+            adopt_default_clips_folder(store)
 
             app = App(store, index_path=paths.index_file())
             try:
                 app.start_web()
                 app.start_worker()
                 app.start_releases()
+                app.start_setup_if_missing()
                 if not headless:
                     if not background:
-                        app.open_window(open_page or "/status")
+                        app.open_window(open_page or app.home())
                     if not tray.run_tray(app):
                         log.warning("no tray icon: the app keeps running without one")
                 _wait_for_quit(app)   # at once when the tray only returned because the app had quit

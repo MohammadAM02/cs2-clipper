@@ -420,8 +420,56 @@ class Index:
             (checksum,),
         )
 
+    def render_seconds(self, last: int = 10) -> list[tuple[float, int]]:
+        """The last `last` finished Render Jobs as (seconds from start to finish, Highlights recorded): what an
+        estimate of the next render's length goes on."""
+        rows = self._all(
+            "SELECT j.started_at, j.finished_at, (SELECT count(*) FROM highlights h"
+            " WHERE h.match_checksum = d.match_checksum AND h.selected = 1) AS highlights"
+            " FROM render_jobs j JOIN demos d ON d.id = j.demo_id"
+            " WHERE j.state = 'done' AND j.started_at IS NOT NULL AND j.finished_at IS NOT NULL"
+            " ORDER BY j.id DESC LIMIT ?",
+            (last,),
+        )
+        found = []
+        for row in rows:
+            try:
+                seconds = (datetime.fromisoformat(row["finished_at"]) - datetime.fromisoformat(row["started_at"]))
+            except ValueError:
+                continue
+            if row["highlights"] and seconds.total_seconds() > 0:
+                found.append((seconds.total_seconds(), row["highlights"]))
+        return found
+
+    def best_reel(self, checksum: str, perspective: str) -> int | None:
+        """The id of the match's Reel of `perspective` whose selected Highlight scored highest (the earlier round
+        on a tie): what a "ready" toast's Watch plays. None when the match has no Reel of that view."""
+        row = self._one(
+            "SELECT r.id FROM reels r JOIN highlights h ON h.id = r.highlight_id"
+            " WHERE h.match_checksum = ? AND h.selected = 1 AND r.perspective = ?"
+            " ORDER BY h.score DESC, h.round LIMIT 1",
+            (checksum, perspective),
+        )
+        return row["id"] if row else None
+
     def reel(self, reel_id: int) -> sqlite3.Row | None:
         return self._one("SELECT * FROM reels WHERE id = ?", (reel_id,))
+
+    _REEL_DETAILS = (
+        "SELECT r.id, r.path, r.perspective, r.duration_s, h.round, h.type, h.match_checksum AS checksum, m.map,"
+        " m.played_at, m.team_score, m.opponent_score FROM reels r JOIN highlights h ON h.id = r.highlight_id"
+        " JOIN matches m ON m.checksum = h.match_checksum"
+    )
+
+    def reel_details(self, reel_id: int) -> sqlite3.Row | None:
+        """A Reel with what its name and title card say: its Highlight's round and type, and its match."""
+        return self._one(self._REEL_DETAILS + " WHERE r.id = ?", (reel_id,))
+
+    def all_reel_details(self) -> list[sqlite3.Row]:
+        return self._all(self._REEL_DETAILS + " ORDER BY r.id")
+
+    def set_reel_path(self, reel_id: int, path: str) -> None:
+        self._db.execute("UPDATE reels SET path = ? WHERE id = ?", (path, reel_id))
 
     # --- FACEIT matches (match alerts) ---------------------------------------------------------------
 
@@ -543,6 +591,21 @@ class Index:
             (key, value),
         )
 
+    def mark_opened(self, match_id: str, at: datetime) -> bool:
+        """The player opened the match's room to download its Demo (Demos to grab's Open): the page says it waits for
+        the download, whichever window or device asks. False when there is no such match to grab."""
+        if self.faceit_match(match_id) is None:
+            return False
+        self.set_flag(f"opened:{match_id}", _iso(at))
+        return True
+
+    def opened_matches(self) -> set[str]:
+        return {row["key"].removeprefix("opened:") for row in self._all(
+            "SELECT key FROM app_state WHERE key LIKE 'opened:%'")}
+
+    def delete_flag(self, key: str) -> None:
+        self._db.execute("DELETE FROM app_state WHERE key = ?", (key,))
+
     def pause(self, by: str) -> None:
         """`by` is "you" (the tray, the Status page) or "failures" (the worker, after repeated
         failed renders)."""
@@ -553,6 +616,18 @@ class Index:
         self.set_flag("paused", "0")
         self.set_flag("consecutive_failures", "0")
         self.set_flag("paused_by", "")
+
+    def snooze(self, until: datetime | None) -> None:
+        """No render starts before `until` (the heads-up toast's Not now); None ends a snooze."""
+        self.set_flag("snoozed_until", _iso(until) if until is not None else "")
+
+    def snoozed_until(self, now: datetime) -> datetime | None:
+        """When the snooze ends, while one is on at `now`; None when there is none."""
+        try:
+            until = datetime.fromisoformat(self.get_flag("snoozed_until") or "")
+        except ValueError:
+            return None
+        return until if until > now else None
 
     def paused_by(self) -> str | None:
         """None unless paused; "failures" when paused but paused_by is missing or empty (an index

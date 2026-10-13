@@ -86,7 +86,7 @@ def test_defaults_match_configs_own_defaults():
     assert values["aspect_ratio"] == "16:9"
     assert values["perspectives"] == cfg.perspectives == "both"
     assert (values["hud"], values["show_xray"], values["show_assists"], values["kill_feed_seconds"],
-            values["player_voices"]) == ("killfeed", True, True, 5.0, True)
+            values["player_voices"]) == ("killfeed", False, True, 5.0, False)
     assert (values["ui_sounds"], values["map_glow"], values["calm_mode"], values["keyboard_shortcuts"]) == (
         False, True, False, True)
     assert values["hlae_exe"] == cfg.hlae_exe == ""

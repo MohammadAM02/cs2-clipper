@@ -13,6 +13,7 @@
 <script src="/touches.js" defer></script>
 <script>renderNav("/reels");</script>
 <main>
+  <p class="brand" id="brand" hidden></p>
   <section class="pagehead rise">
     <h1 class="title">Reels</h1>
     <div class="saybox"><span id="sum-nugget"></span><p class="say" id="sum">Loading…</p></div>
@@ -29,8 +30,9 @@
   </div>
 </main>
 <script>
-// Reels (spec: Pages -> Reels): every match's Highlights, each watchable from the player's view or the
-// Enemy POV, in a player that opens under the row.
+// Reels (spec: Pages -> Reels): every match's Highlights. A click on a Highlight plays it from your view in a
+// player that opens under it; the player switches to the Enemy POV, and shares: Copy file (paste it into Discord),
+// an export that fits Discord, a 9:16 one, and Show in folder.
 const HEIGHT = {ACE: 36, "5K": 36, "4K": 30, "3K": 24, "2K": 18};
 // The two views a Reel can be rendered from: the words of its button and of the toasts about it.
 const VIEWS = {
@@ -44,6 +46,13 @@ const closed = new Set(JSON.parse(sessionStorage.getItem("closed") || "[]"));
 const carousel = Carousel(document.getElementById("hero"), {onPlay: id => playById(id, true)});
 
 const typeOf = h => String(h.type).toUpperCase();
+// On a phone (or any other device) the page only watches and downloads: everything else is the PC's.
+const PC = onThisPC();
+if (!PC) {
+  const b = document.getElementById("brand");
+  b.hidden = false;
+  b.innerHTML = `${MARK}<span>CS2 Clipper</span><a class="more" href="/demos" style="margin-left:auto">Demos to grab${ICON.next}</a>`;
+}
 document.querySelectorAll("[data-nugget-full]").forEach(n => { n.outerHTML = NUGGET.svg(n.dataset.nuggetFull, "Nugget, asleep on his egg"); });
 // Each Highlight's kind as a comic burst: an Ace is the loudest.
 const BURST_FILL = {ACE: "#FF5500", "5K": "#FF5500", "4K": "#F2EFEA", "3K": "#FFB27A", "2K": "#8F857A"};
@@ -56,24 +65,40 @@ function rounds(score) {
   return Math.max(1, parts.reduce((a, b) => a + b, 0));
 }
 
+// One Highlight: the whole row plays it, from your view when it has one. What the hover scrub flicks through
+// (touches.js) is the same Reel.
 function highlightRow(h) {
   const tags = reasonTags(h).map(t => `<span class="tag">${esc(t)}</span>`).join("");
-  // What the hover scrub flicks through (touches.js): your view's Reel, else the Enemy POV's.
-  const scrub = h.player ?? h.enemy, secs = h.player !== null ? h.player_s : h.enemy_s;
-  return `<div class="hl" data-round="${+h.round}"${scrub !== null ? ` data-scrub="${+scrub}" data-secs="${+secs || 0}"` : ""}>
+  const first = h.player ?? h.enemy, secs = h.player !== null ? h.player_s : h.enemy_s;
+  const views = [h.player !== null ? "Your view" : "", h.enemy !== null ? "Enemy POV" : ""].filter(Boolean).join(" · ");
+  return `<div class="hl" data-round="${+h.round}" data-player="${h.player ?? ""}" data-enemy="${h.enemy ?? ""}"${first !== null ? ` data-scrub="${+first}" data-secs="${+secs || 0}"` : ""}>
     <span class="rd">Round ${+h.round}</span>${hitBurst(typeOf(h))}
-    <span class="tags">${tags}</span>
-    <span class="povs" role="group" aria-label="Watch round ${+h.round} from">
-      <button class="pov l" data-reel="${h.player}" ${h.player === null ? 'disabled title="No Player view for this round"' : ""}>${ICON.play}Player</button>
-      <button class="pov r" data-reel="${h.enemy}" ${h.enemy === null ? 'disabled title="No Enemy POV for this round"' : ""}>${ICON.play}Enemy</button>
-    </span>
+    <span class="tags">${tags}<span class="views">${esc(views)}</span></span>
+    <button class="pov play" data-reel="${first}" aria-label="Play round ${+h.round}">${ICON.play}Play</button>
   </div>`;
 }
 
-// The footer's render buttons. A view that can be asked for now gets a button; a view that is rendering gets a
+// The player under a Highlight: the video, the views it has, and the ways to share the one playing.
+function playerPanel(row) {
+  const has = view => row.dataset[view] !== "";
+  const toggle = has("player") && has("enemy")
+    ? `<span class="seg sm" role="radiogroup" aria-label="View"><button type="button" role="radio" data-view="player">Your view</button><button type="button" role="radio" data-view="enemy">Enemy POV</button></span>`
+    : `<span class="help">${has("player") ? "Your view" : "Enemy POV"}</span>`;
+  const tools = PC ? `
+      <button class="ghost sm" type="button" data-share="copy" title="Put the file on the clipboard: paste it straight into Discord">Copy file</button>
+      <button class="primary sm" type="button" data-share="discord" title="A copy under Discord's 20 MB, on the clipboard">Export for Discord</button>
+      <button class="ghost sm" type="button" data-share="vertical" title="1080x1920 for TikTok, Shorts and Instagram Reels">9:16</button>
+      <button class="ghost sm" type="button" data-share="reveal">${ICON.folder}Show in folder</button>`
+    : '<a class="primary sm" id="download" href="#" download>Download</a>';
+  return `<div class="player" id="player"><video id="player-video" controls autoplay playsinline></video>
+    <div class="ptools">${toggle}<span class="spacer"></span>${tools}</div></div>`;
+}
+
+// The footer's render buttons (on the PC). A view that can be asked for now gets a button; a view that is rendering gets a
 // disabled one in its place; a view in neither list gets nothing. The disabled one turns pointer events back on
 // (app.css switches them off for disabled ghosts) so that its title shows on hover.
 function renderButtons(m) {
+  if (!PC) return "";
   return Object.keys(VIEWS).map(view => {
     if ((m.rendering || []).includes(view))
       return `<button class="ghost" disabled style="pointer-events:auto" title="Its Reels appear here when CS2 has recorded it">${VIEWS[view].busy}</button>`;
@@ -102,7 +127,7 @@ function matchBlock(m) {
     </button>
     <div class="collapse"><div>
       ${rows.length ? rows.map(highlightRow).join("") : '<p class="empty" style="padding:16px 22px">No Highlights of this kind in this match.</p>'}
-      <div class="mfoot">${renderButtons(m)}<button class="ghost" data-open="${esc(m.checksum)}">${ICON.folder}Open folder</button></div>
+      ${PC ? `<div class="mfoot">${renderButtons(m)}<button class="ghost" data-open="${esc(m.checksum)}">${ICON.folder}Open folder</button></div>` : ""}
     </div></div>
   </section>`;
 }
@@ -132,7 +157,7 @@ function renderSlides() {
 function render() {
   const all = data.flatMap(m => m.highlights);
   document.getElementById("sum").textContent = data.length
-    ? `${plural(all.length, "Highlight")} from ${plural(data.length, "match", "matches")}. Watch each from your view or the Enemy POV.`
+    ? `${plural(all.length, "Highlight")} from ${plural(data.length, "match", "matches")}. Click one to watch it and share it.`
     : "No Reels yet. Finished Demos show up here.";
   const mood = data.length ? "ace" : "idle";
   if (mood !== sumMood) { sumMood = mood; document.getElementById("sum-nugget").innerHTML = NUGGET.head(mood); }
@@ -143,10 +168,11 @@ function render() {
   sync(document.getElementById("matches"), data.filter(m => filter === "all" || m.highlights.some(keep)), m => m.checksum, matchBlock);
 }
 
-// A render replaces the changed matches, and the <video> sits inside one: never while a Reel is playing.
+// A render replaces the changed matches, and the player sits inside one: never while a Reel plays or is shared.
+let sharing = 0;
 function playing() {
   const video = document.getElementById("player-video");
-  return video !== null && !video.paused && !video.ended;
+  return sharing > 0 || video !== null && !video.paused && !video.ended;
 }
 
 async function load() {
@@ -192,32 +218,64 @@ async function askRender(button) {
   await load();
 }
 
-function showReel(button) {
-  let video = document.getElementById("player-video");
-  if (!video) {
-    video = document.createElement("video");
-    video.id = "player-video";
-    video.controls = true;
-    video.autoplay = true;
+// Plays Reel `id` of `row` in the player under it, which it opens (or moves there).
+let playingReel = null;
+function showReel(row, id) {
+  let panel = document.getElementById("player");
+  if (!panel || panel.previousElementSibling !== row) {
+    panel?.remove();
+    row.insertAdjacentHTML("afterend", playerPanel(row));    // under the row that was clicked
+    panel = document.getElementById("player");
   }
   document.querySelectorAll(".hl.on, .pov.on").forEach(n => n.classList.remove("on"));
-  button.classList.add("on");
-  const row = button.closest(".hl");
   row.classList.add("on");
-  video.src = `/reels/${button.dataset.reel}.mp4`;
-  row.insertAdjacentElement("afterend", video);    // under the row that was clicked
+  row.querySelector(".pov")?.classList.add("on");
+  playingReel = +id;
+  panel.querySelectorAll("[data-view]").forEach(b => {
+    const on = +row.dataset[b.dataset.view] === playingReel;
+    b.classList.toggle("on", on); b.setAttribute("aria-checked", on);
+  });
+  const video = document.getElementById("player-video");
+  video.src = `/reels/${playingReel}.mp4`;
+  const download = document.getElementById("download");
+  if (download) download.href = `/reels/${playingReel}.mp4?download=1`;
   video.play().catch(() => {});      // `paused` is false from here on, even while the file loads
 }
 
-// Plays a Reel by id: from the carousel, or from Status's "Watch" (?play=<id>).
+const rowOf = id => document.querySelector(`.hl[data-player="${+id}"], .hl[data-enemy="${+id}"]`);
+
+// Plays a Reel by id: from the carousel, or from a toast's or Status's "Watch" (?play=<id>).
 function playById(id, scroll) {
-  const button = document.querySelector(`.pov[data-reel="${+id}"]`);
-  if (!button) return false;
-  const card = button.closest(".mcard");
+  const row = rowOf(id);
+  if (!row) return false;
+  const card = row.closest(".mcard");
   if (!card.classList.contains("open")) toggle(card);
-  showReel(button);
-  if (scroll) setTimeout(() => button.closest(".hl").scrollIntoView({behavior: "smooth", block: "center"}), 120);
+  showReel(row, id);
+  if (scroll) setTimeout(() => row.scrollIntoView({behavior: "smooth", block: "center"}), 120);
   return true;
+}
+
+// Copy file, the two exports and Show in folder, for the Reel playing. An export takes a few seconds: its button
+// says so, and the page keeps still meanwhile.
+const SHARE_WORDS = {copy: "Copying…", discord: "Exporting…", vertical: "Exporting…", reveal: "Opening…"};
+async function shareReel(button) {
+  const what = button.dataset.share, id = playingReel, label = button.innerHTML;
+  if (id === null) return;
+  button.disabled = true; button.textContent = SHARE_WORDS[what]; sharing++;
+  try {
+    const exporting = what === "discord" || what === "vertical";
+    const response = await api(`api/reels/${id}/${exporting ? "export" : what}`, {method: "POST",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify(exporting ? {kind: what} : {})});
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) toast(`${ICON.info}<span>${esc(data.error || "That Reel's file is gone.")}</span>`, 5000);
+    else if (what === "copy") toast(`${ICON.check}<span>Copied. Paste it into Discord, or anywhere a file goes.</span>`, 4000);
+    else if (what === "discord") toast(`${ICON.check}<span>${esc(data.file)}, ${data.mb} MB${data.copied ? ": copied, so paste it into Discord" : ", in Exports"}.</span>`, 6000);
+    else if (what === "vertical") toast(`${ICON.check}<span>${esc(data.file)} is in Exports, ready for TikTok, Shorts and Reels.</span>`, 6000);
+  } catch (e) {
+    toast(`${ICON.info}<span>Couldn't reach CS2 Clipper. Is it running?</span>`);
+  } finally {
+    sharing--; button.disabled = false; button.innerHTML = label;
+  }
 }
 
 function toggle(card) {
@@ -248,8 +306,12 @@ document.addEventListener("click", async e => {
   }
   const renderButton = e.target.closest("button[data-render]");
   if (renderButton && !renderButton.disabled) { await askRender(renderButton); return; }
-  const reelButton = e.target.closest("button[data-reel]");
-  if (reelButton && !reelButton.disabled) showReel(reelButton);
+  const shareButton = e.target.closest("button[data-share]");
+  if (shareButton && !shareButton.disabled) { await shareReel(shareButton); return; }
+  const view = e.target.closest("button[data-view]");
+  if (view) { const row = view.closest(".player").previousElementSibling; showReel(row, row.dataset[view.dataset.view]); return; }
+  const row = e.target.closest(".hl");
+  if (row && row.dataset.scrub) showReel(row, row.querySelector(".pov").dataset.reel);
 });
 
 (async () => {
@@ -257,7 +319,7 @@ document.addEventListener("click", async e => {
   const wanted = new URLSearchParams(location.search).get("play");
   if (wanted && playById(wanted, true)) history.replaceState(null, "", location.pathname);
 })();
-setInterval(load, 5000);
+every(5000, load, 30000);
 </script>
 </body>
 </html>

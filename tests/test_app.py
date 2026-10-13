@@ -11,19 +11,22 @@ import threading
 import types
 import urllib.parse
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 import pytest
 
-from clipper import checks, cs2_paths, hlae_plan, hlae_render, packaged, paths, update, web
+from clipper import checks, cs2_paths, hlae_plan, hlae_render, links, notify, packaged, paths, update, web, windows
 from clipper.app import (
-    PAGES, AlreadyRunning, App, ask_to_quit, build_worker, find_running, gate_reasons, hand_over, quit_running, run,
-    run_headless, single_instance, start_match_alerts,
+    PAGES, AlreadyRunning, App, ask_to_quit, build_worker, find_running, gate_reasons, hand_over, open_link,
+    quit_running, register_with_windows, run, run_headless, single_instance, start_match_alerts,
 )
 from clipper.config import Config
 from clipper.faceit import FaceitError, Player
 from clipper.faceit_oauth import OAuthError
 from clipper.index import Index
+from clipper.model import Highlight, MatchInfo
 from clipper.render import RenderRequest, RenderResult
 from clipper.settings import KEY_FIELD, SECRET_FIELD, SettingsStore
 from clipper.state import AppState, Rendering
@@ -61,9 +64,15 @@ def test_match_alerts_stay_off_without_the_setting_or_the_key(tmp_path):
         assert off is None
         assert index.get_flag("alerts_status") == "off: switched off in Settings"
 
-        no_key = start_match_alerts(Config(**folders), index, None, page_url=None, pages_off=None)
-        assert no_key is None
-        assert index.get_flag("alerts_status") == "off: set your FACEIT nickname and API key in Settings"
+        no_nickname = start_match_alerts(Config(**folders), index, None, page_url=None, pages_off=None)
+        assert no_nickname is None
+        assert index.get_flag("alerts_status") == "off: look up your FACEIT nickname on Status or in Settings"
+
+        no_key = start_match_alerts(Config(**folders, faceit_nickname="someone"), index, None, page_url=None,
+                                    pages_off=None)
+        assert no_key is None       # an installed copy ships a key: only a copy run from source lacks one
+        assert index.get_flag("alerts_status") == (
+            "off: this copy has no FACEIT API key; add one under Settings -> Advanced")
     finally:
         index.close()
 
@@ -179,7 +188,8 @@ def test_a_render_job_goes_to_hlae_with_what_it_drives_cs2_with(built, renderer,
     assert kwargs["hlae_ffmpeg"] == ffmpeg          # the FFmpeg HLAE records with is ours, found
     assert kwargs["ffmpeg"] == str(ffmpeg)          # and the mux's is the setting as it is
     assert kwargs["cs2_settings_dir"] == tmp_path / "cs2-settings"     # CS2's settings while it records
-    assert kwargs["video"] == hlae_plan.VideoSettings()     # the HUD settings' defaults are the look it always had
+    # the HUD settings' defaults: X-Ray and player voices off, so a clip that gets posted shows neither
+    assert kwargs["video"] == hlae_plan.VideoSettings(show_xray=False, player_voices_enabled=False)
 
 
 def test_a_render_job_records_with_the_hud_settings(built, renderer, tmp_path):
@@ -280,6 +290,7 @@ class FakeSetup:
         self.context, self.after = context, after
         self.running = False
         self.starts = 0
+        self.steps: list[dict] = []          # what `status` reports: each tool's state, as provision.Setup does
 
     def start(self) -> bool:
         if self.running:
@@ -289,8 +300,9 @@ class FakeSetup:
         return True
 
     def status(self) -> dict:
-        return {"running": self.running, "needed": True, "steps": [], "download_bytes": 0, "progress": None,
-                "error": None}
+        needed = not self.steps or any(step["state"] != "ok" for step in self.steps)
+        return {"running": self.running, "needed": needed, "steps": self.steps, "download_bytes": 122_000_000,
+                "progress": None, "error": None}
 
     def end(self) -> None:
         self.running = False
@@ -575,21 +587,22 @@ def test_update_is_refused_while_setup_runs(world):
     assert world.app.start_update() is None
 
 
-def test_a_newer_version_is_announced_with_a_toast_that_opens_status(world, monkeypatch):
+def test_a_newer_version_is_announced_with_a_toast_that_opens_status_in_the_app_window(world, monkeypatch):
     toasts = []
-    monkeypatch.setattr("clipper.app.notify", lambda title, body, actions=(): toasts.append((title, body, actions)))
+    monkeypatch.setattr("clipper.app.toasts.notify",
+                        lambda title, body, actions=(): toasts.append((title, body, actions)))
     world.app.page_port = 8766
 
     world.updates.given["announce"](update.Release(version="0.3.0", notes="", page="", installer=None))
 
     assert toasts == [("CS2 Clipper 0.3.0 is out",
                        "Open Status to see what changed, then update with one click.",
-                       (("Show", "http://127.0.0.1:8766/status"), ("Not now", None)))]
+                       (("Show", "cs2clipper://status"), ("Not now", None)))]
 
 
 def test_the_toast_of_a_newer_version_has_no_button_when_there_are_no_pages(world, monkeypatch):
     toasts = []
-    monkeypatch.setattr("clipper.app.notify", lambda title, body, actions=(): toasts.append(actions))
+    monkeypatch.setattr("clipper.app.toasts.notify", lambda title, body, actions=(): toasts.append(actions))
 
     world.updates.given["announce"](update.Release(version="0.3.0", notes="", page="", installer=None))
 
@@ -1200,15 +1213,29 @@ def startup(monkeypatch):
     monkeypatch.setattr(App, "start_web", lambda self: events.append("web"))
     monkeypatch.setattr(App, "start_worker", lambda self: events.append("worker"))
     monkeypatch.setattr(App, "start_releases", lambda self: events.append("releases"))
+    monkeypatch.setattr(App, "start_setup_if_missing", lambda self: events.append("setup"))
     monkeypatch.setattr(App, "open_window", lambda self, page: events.append(("window", page)))
     monkeypatch.setattr(App, "close", lambda self: events.append("close"))
     monkeypatch.setattr("clipper.app.tray.run_tray", lambda app: events.append("tray") or True)
     return events
 
 
-def test_run_starts_the_pages_and_the_worker_then_opens_the_status_window_then_the_tray(startup):
+def test_run_starts_the_pages_the_worker_and_setup_then_opens_the_status_window_then_the_tray(startup):
+    assert run() == 0               # a fresh install: Status, which sets it up
+    assert startup == ["web", "worker", "releases", "setup", ("window", "/status"), "tray", "close"]
+
+
+def test_once_set_up_the_window_opens_on_reels(startup, monkeypatch):
+    monkeypatch.setattr(App, "onboarding", lambda self: {"done": True})
     assert run() == 0
-    assert startup == ["web", "worker", "releases", ("window", "/status"), "tray", "close"]
+    assert ("window", "/reels") in startup
+
+
+def test_a_fresh_install_keeps_its_clips_in_videos(startup):
+    run()
+    folder = windows.videos_dir() / "CS2 Clipper"
+    assert folder.is_dir()
+    assert SettingsStore(paths.settings_file()).current().config.data_root == folder
 
 
 def test_run_opens_the_page_it_is_asked_for(startup):
@@ -1219,17 +1246,17 @@ def test_run_opens_the_page_it_is_asked_for(startup):
 
 def test_run_in_the_background_shows_only_the_tray(startup):
     assert run(background=True) == 0
-    assert startup == ["web", "worker", "releases", "tray", "close"]
+    assert startup == ["web", "worker", "releases", "setup", "tray", "close"]
 
 
 def test_run_headless_shows_neither_tray_nor_window(startup):
     assert run(headless=True, open_page="/reels") == 0
-    assert startup == ["web", "worker", "releases", "close"]
+    assert startup == ["web", "worker", "releases", "setup", "close"]
 
 
 def test_run_headless_is_run_without_tray_or_window(startup):
     assert run_headless("/reels") == 0
-    assert startup == ["web", "worker", "releases", "close"]
+    assert startup == ["web", "worker", "releases", "setup", "close"]
 
 
 def test_run_without_a_tray_says_so(startup, monkeypatch, caplog):
@@ -1394,7 +1421,173 @@ def test_faceit_lookup_saves_the_nickname_and_steamid(tmp_path, monkeypatch):
     assert (cfg.faceit_nickname, cfg.subject_steamid) == ("cheesebagga", "76561198192858303")
 
 
-def test_faceit_lookup_needs_the_app_key_first(tmp_path, monkeypatch):
+def test_faceit_lookup_without_a_key_says_where_one_goes(tmp_path, monkeypatch):
     app, _store, _state = _ready(tmp_path, monkeypatch, key=None)
-    with pytest.raises(FaceitError, match="API key first"):
+    with pytest.raises(FaceitError, match="no FACEIT API key: add one under Settings -> Advanced"):
         app.faceit_lookup("cheesebagga")
+
+
+def test_faceit_find_finds_the_player_without_saving_them(tmp_path, monkeypatch):
+    app, store, _state = _ready(tmp_path, monkeypatch)
+
+    assert app.faceit_find("cheesebagga") == {"nickname": "cheesebagga", "steamid": "76561198192858303"}
+    cfg = store.current().config
+    assert (cfg.faceit_nickname, cfg.subject_steamid) == ("", "")
+
+
+# --- cs2clipper: links: what a toast's buttons do ------------------------------------------------------------
+
+
+def _a_reel(world, path: str = "library/videos/abc/r9-player.mp4") -> int:
+    """A Reel in the index, of round 9 of a Mirage match, whose file is `path` in the clips folder; its id."""
+    file = world.store.current().config.data_root / path
+    file.parent.mkdir(parents=True, exist_ok=True)
+    file.write_bytes(b"mp4")
+    world.index.save_match(MatchInfo(checksum="abc", map_name="de_mirage", played_at=datetime(2026, 10, 12,
+                                     tzinfo=timezone.utc), team_score=13, opponent_score=9))
+    world.index.save_highlights("abc", [Highlight(round=9, type="ACE", score=90, reasons=("ace",), frag_ticks=(1,),
+                                                  round_start_tick=0, round_end_tick=10)], {9})
+    world.index.save_reel(world.index.selected_highlights("abc")[0]["id"], "player", path, 12.0)
+    return world.index.match_reels("abc")[0]["player_reel_id"]
+
+
+def test_a_page_link_shows_its_page_in_the_window(world, monkeypatch):
+    shown = []
+    monkeypatch.setattr(App, "open_window", lambda self, page: shown.append(page))
+    world.app.follow_link(links.parse("cs2clipper://reels?play=4"))
+    assert shown == ["/reels?play=4"]
+
+
+def test_a_reveal_link_shows_the_reels_file_in_explorer(world):
+    revealed = []
+    world.app._reveal = revealed.append
+    reel = _a_reel(world)
+    world.app.follow_link(links.parse(f"cs2clipper://reveal?reel={reel}"))
+    assert revealed == [Path(world.store.current().config.data_root) / "library/videos/abc/r9-player.mp4"]
+
+
+def test_a_reveal_link_to_a_reel_that_is_gone_shows_reels_instead(world, monkeypatch):
+    shown, revealed = [], []
+    monkeypatch.setattr(App, "open_window", lambda self, page: shown.append(page))
+    world.app._reveal = revealed.append
+    world.app.follow_link(links.parse("cs2clipper://reveal?reel=99"))
+    assert (shown, revealed) == (["/reels?play=99"], [])
+
+
+def test_a_snooze_link_snoozes_renders_and_resume_ends_it(world):
+    world.app.follow_link(links.parse("cs2clipper://snooze?minutes=60"))
+    now = datetime.now(timezone.utc)
+    until = world.index.snoozed_until(now)
+    assert until is not None and timedelta(minutes=59) < until - now <= timedelta(minutes=60)
+    world.app.resume()
+    assert world.index.snoozed_until(now) is None
+
+
+def test_a_link_goes_to_the_running_copy(monkeypatch):
+    asked = []
+    status = open_link("cs2clipper://reels?play=3", ask=lambda ports, route, body: asked.append((route, body)) or 204,
+                       start=lambda **kwargs: pytest.fail("the running copy follows it"))
+    assert status == 0
+    assert asked == [("/api/link", {"url": "cs2clipper://reels?play=3"})]
+
+
+def test_with_no_copy_running_a_link_starts_the_app_on_its_page():
+    started = []
+    status = open_link("cs2clipper://reveal?reel=3", ask=lambda ports, route, body: None,
+                       start=lambda **kwargs: started.append(kwargs) or 0)
+    assert status == 0
+    assert started == [{"open_page": "/reels?play=3"}]
+
+
+def test_a_url_that_is_not_a_link_is_refused(capsys):
+    assert open_link("https://example.com", ask=lambda *a: pytest.fail("not asked"),
+                     start=lambda **kwargs: pytest.fail("not started")) == 2
+    assert "not a CS2 Clipper link" in capsys.readouterr().err
+
+
+def test_starting_registers_links_and_the_toast_identity(monkeypatch):
+    written, ids = [], []
+    monkeypatch.setattr(windows, "set_user_value", lambda key, name, value: written.append(key))
+    monkeypatch.setattr(windows, "set_app_id", ids.append)
+    register_with_windows()
+    assert r"Software\Classes\cs2clipper" in written
+    assert r"Software\Classes\AppUserModelId\CS2Clipper.App" in written
+    assert ids == ["CS2Clipper.App"]
+    assert (paths.data_dir() / "CS2Clipper.png").is_file()
+    assert notify.app_id() == "CS2Clipper.App"
+
+
+def test_a_registry_that_refuses_leaves_the_app_starting_with_powershell_toasts(monkeypatch, caplog):
+    def refuse(key, name, value):
+        raise OSError("access denied")
+
+    monkeypatch.setattr(windows, "set_user_value", refuse)
+    with caplog.at_level(logging.WARNING, logger="clipper.app"):
+        register_with_windows()
+    assert notify.app_id() == notify.POWERSHELL_ID
+    assert "toasts go out as Windows PowerShell" in caplog.text
+
+
+def test_the_graphics_card_setting_records_with_its_encoder_once_found(built, renderer, tmp_path, monkeypatch):
+    asked = []
+    monkeypatch.setattr("clipper.app.gpu_encoder", lambda ffmpeg: asked.append(ffmpeg) or ("h264_nvenc", "-cq 23"))
+    monkeypatch.setattr("clipper.app._gpu_encoders", {})
+    renderer.cs2_exes = [None, None]
+    worker = built(encoder="gpu", ffmpeg="ffmpeg-for-gpu")
+    for _ in range(2):
+        worker.services.render(_render_request(tmp_path), lambda: False, lambda report: None)
+    video = renderer.calls[-1][1]["video"]
+    assert (video.video_codec, video.output_parameters) == ("h264_nvenc", "-cq 23")
+    assert asked == ["ffmpeg-for-gpu"]                # asked once, not per render
+
+
+def test_a_pc_without_a_graphics_card_encoder_records_with_x264(built, renderer, tmp_path, monkeypatch):
+    monkeypatch.setattr("clipper.app.gpu_encoder", lambda ffmpeg: None)
+    monkeypatch.setattr("clipper.app._gpu_encoders", {})
+    renderer.cs2_exes = [None]
+    worker = built(encoder="gpu")
+    worker.services.render(_render_request(tmp_path), lambda: False, lambda report: None)
+    assert renderer.calls[-1][1]["video"].video_codec == "libx264"
+
+
+# --- the first run: one screen, three things -------------------------------------------------------------------
+
+
+def _tools(*states):
+    """Setup's steps: (id, state, update) for each tool."""
+    return [{"id": tool, "name": tool, "state": state, "update": update} for tool, state, update in states]
+
+
+def test_the_first_run_is_done_once_the_player_the_folder_and_the_tools_are_there(world):
+    world.setup.steps = _tools(("csda", "ok", False), ("ffmpeg", "ok", False), ("hlae", "ok", False))
+    assert world.app.onboarding()["done"] is False             # nobody looked up yet
+    world.store.save({"subject_steamid": "76561198192858303", "faceit_nickname": "cheesebagga"})
+    assert world.app.onboarding() == {
+        "done": True, "nickname": "cheesebagga", "steamid": True,
+        "clips_folder": str(world.store.current().config.data_root), "tools": "ok", "download_mb": 122}
+    assert world.app.home() == "/reels"
+
+
+@pytest.mark.parametrize(("steps", "running", "tools"), [
+    ([("csda", "needed", False)], False, "needed"),
+    ([("csda", "needed", False)], True, "downloading"),
+    ([("hlae", "needed", True)], False, "ok"),                 # a newer HLAE can wait for its Update button
+])
+def test_the_first_run_says_how_the_tools_are_coming(world, steps, running, tools):
+    world.setup.steps = _tools(*steps)
+    world.setup.running = running
+    assert world.app.onboarding()["tools"] == tools
+
+
+def test_setup_starts_on_its_own_when_a_tool_is_missing(world):
+    world.setup.steps = _tools(("csda", "ok", False), ("ffmpeg", "needed", False))
+    world.app.start_setup_if_missing()
+    assert world.setup.starts == 1
+    world.app.start_setup_if_missing()                         # running already
+    assert world.setup.starts == 1
+
+
+def test_an_update_alone_does_not_start_setup(world):
+    world.setup.steps = _tools(("csda", "ok", False), ("hlae", "needed", True))
+    world.app.start_setup_if_missing()
+    assert world.setup.starts == 0

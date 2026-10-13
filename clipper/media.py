@@ -1,9 +1,18 @@
-"""Reading video files with ffprobe."""
+"""Reading video files with ffprobe, and finding the graphics card's encoder."""
 
 from __future__ import annotations
 
 import subprocess
+from collections.abc import Callable
 from pathlib import Path
+
+# The graphics cards' H.264 encoders, in the order they are tried, each with the options that make a Clip look like
+# x264's at CRF 23: constant quality, no bitrate cap.
+GPU_ENCODERS = (
+    ("h264_nvenc", "-preset p5 -rc vbr -cq 23 -b:v 0"),
+    ("h264_amf", "-quality quality -rc cqp -qp_i 22 -qp_p 24"),
+    ("h264_qsv", "-global_quality 23"),
+)
 
 
 class MediaError(Exception):
@@ -24,3 +33,18 @@ def probe_duration(path: Path, ffprobe: str = "ffprobe") -> float:
         return float(text)
     except ValueError as exc:
         raise MediaError(f"ffprobe gave no duration for {path.name}: {text[:50]}") from exc
+
+
+def gpu_encoder(ffmpeg: str, run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> tuple[str, str] | None:
+    """The first of GPU_ENCODERS this PC's graphics card can use, as (codec, options): each is tried on a tenth of a
+    second of black. None when none can, and x264 records instead."""
+    for codec, options in GPU_ENCODERS:
+        try:
+            done = run([ffmpeg, "-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=640x360:d=0.1",
+                        "-c:v", codec, *options.split(), "-f", "null", "-"],
+                       capture_output=True, timeout=30, creationflags=subprocess.CREATE_NO_WINDOW)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if done.returncode == 0:
+            return codec, options
+    return None

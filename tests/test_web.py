@@ -18,18 +18,21 @@ from pathlib import Path
 
 import pytest
 
-from clipper import protect
+from clipper import links, protect, share
 from clipper.checks import Check
 from clipper.config import Config
 from clipper.faceit import FaceitError
 from clipper.faceit_oauth import OAuthError
+from clipper.footprint import Usage
 from clipper.index import Index
 from clipper.model import FaceitStats, Highlight, MatchInfo
 from clipper.packaged import PAGE_FILES
 from clipper.render import RenderProgress
 from clipper.settings import FIELDS, KEY_FIELD, SECRET_FIELD, STORED_KEY, Loaded, SettingsStore
 from clipper.state import Rendering, Snapshot
-from clipper.web import MARKER_HEADER, PAGES_DIR, STRIP_FRAMES, WebContext, WebServer, create_app
+from clipper.web import (
+    MARKER_HEADER, PAGES_DIR, STRIP_FRAMES, WebContext, WebServer, create_app, status_demos,
+)
 
 NOW = datetime(2026, 9, 25, 20, 0, tzinfo=timezone.utc)
 FIRST = "1-00000000-0000-0000-0000-000000000001"
@@ -108,7 +111,7 @@ def test_the_list_comes_newest_first_with_the_stat_line(client):
         "id": FIRST, "map": "Inferno", "finished_at": "2026-09-25T15:00:00+00:00",
         "expires_at": "2026-10-25T15:00:00+00:00", "won": True, "score": "13–9",
         "highlights": {"3k": 2, "4k": 1, "5k": 0}, "rating": 1.5, "kd": "24–15", "adr": 94.0,
-        "state": "announced", "reminded": False, "url": ROOM + FIRST, "waiting_for": "",
+        "state": "announced", "reminded": False, "url": ROOM + FIRST, "waiting_for": "", "opened": False,
     }
 
 
@@ -192,6 +195,13 @@ def test_the_stylesheet_lets_hidden_win_over_any_display_a_class_sets(client):
 # --- action guard: the marker header ---------------------------------------------------------------
 
 
+def test_opening_a_matchs_room_is_kept_so_every_window_shows_it_waits_for_the_download(client):
+    assert pc_post(client, f"/demos/{FIRST}/opened", headers=MARKED).status_code == 204
+    rows = pc_get(client, "/demos.json").get_json()["rows"]
+    assert [r["opened"] for r in rows if r["id"] == FIRST] == [True]
+    assert pc_post(client, "/demos/1-00000000-0000-0000-0000-000000000999/opened", headers=MARKED).status_code == 409
+
+
 def test_skip_without_the_marker_is_refused_from_pc_and_phone(client):
     assert pc_post(client, f"/demos/{FIRST}/skip").status_code == 403
     assert phone_post(client, f"/demos/{FIRST}/skip").status_code == 403
@@ -210,6 +220,29 @@ def test_api_window_204_and_recorded(tmp_path):
     response = app.test_client().post("/api/window", base_url=PC, headers=MARKED, json={"page": "/reels"})
     assert response.status_code == 204
     assert calls == ["/reels"]
+
+
+def test_api_window_shows_reels_playing_one_reel(tmp_path):
+    calls = []
+    app = app_for(tmp_path, open_window=lambda page: calls.append(page))
+    response = app.test_client().post("/api/window", base_url=PC, headers=MARKED, json={"page": "/reels?play=7"})
+    assert response.status_code == 204
+    assert calls == ["/reels?play=7"]
+
+
+def test_api_window_home_shows_the_running_copys_home_page(tmp_path):
+    calls = []
+    app = app_for(tmp_path, open_window=calls.append, home=lambda: "/reels")
+    response = app.test_client().post("/api/window", base_url=PC, headers=MARKED, json={"page": "home"})
+    assert response.status_code == 204
+    assert calls == ["/reels"]
+
+
+def test_api_status_carries_the_apps_footprint_and_the_first_run(tmp_path):
+    app = app_for(tmp_path, footprint=lambda: Usage(61, 0.2), onboarding=lambda: {"done": False, "tools": "needed"})
+    data = pc_get(app.test_client(), "/api/status").get_json()
+    assert data["footprint"] == {"memory_mb": 61, "cpu_percent": 0.2}
+    assert data["onboarding"] == {"done": False, "tools": "needed"}
 
 
 def test_api_window_400_for_a_page_not_in_pages(client):
@@ -377,7 +410,34 @@ def test_api_status_shape_and_values(tmp_path, index):
         "id": demo_id, "file_name": "1-status.dem.zst", "state": "rendering", "map": "Mirage",
         "error": None, "retry": False,
         "jobs": [{"perspective": "player", "attempt": 1, "state": "running", "failure": None}],
+        "eta_s": 30,               # no Highlights scored in this test: the shortest a view is said to take
     }
+
+
+def test_the_eta_counts_each_view_left_at_the_pace_of_the_last_renders(index):
+    demo_id = _add_demo(index)
+    index.save_match(MatchInfo(checksum=MATCH_CHECKSUM, map_name="de_mirage", played_at=NOW,
+                               team_score=13, opponent_score=5))
+    hls = [Highlight(round=r, type="3K", score=30, reasons=("3k",), frag_ticks=(1,), round_start_tick=0,
+                     round_end_tick=10) for r in (3, 7)]
+    index.save_highlights(MATCH_CHECKSUM, hls, {3, 7})
+    index.advance(demo_id, "rendering", match_checksum=MATCH_CHECKSUM)
+    for perspective in ("player", "enemy"):
+        index.queue_render(demo_id, perspective, attempt=1)
+    [demo] = status_demos(index)
+    assert demo["eta_s"] == 2 * 2 * 45                # two views of two Highlights, 45 s each before any history
+
+    done = index.latest_render(demo_id, "player")["id"]
+    index.start_render(done, Path("E:/out"), Path("E:/log.txt"))
+    index._db.execute("UPDATE render_jobs SET state = 'done', started_at = ?, finished_at = ? WHERE id = ?",
+                      ("2026-10-13T10:00:00+00:00", "2026-10-13T10:01:40+00:00", done))
+    [demo] = status_demos(index)
+    assert demo["eta_s"] == 2 * 50                    # the Enemy POV left, at the 50 s a Highlight the last took
+
+    enemy = index.latest_render(demo_id, "enemy")["id"]
+    index.start_render(enemy, Path("E:/out"), Path("E:/log.txt"))
+    [demo] = status_demos(index, running_left=70.0)
+    assert demo["eta_s"] == 70                        # what the render itself says is left
 
 
 def test_api_status_demos_are_filtered_to_unfinished_and_ordered_newest_first(tmp_path, index):
@@ -775,12 +835,36 @@ def test_api_reels_shape(tmp_path, index):
     assert (h["player_s"], h["enemy_s"]) == (12.5, None)      # how long each Reel runs, for the hover scrub
 
 
-def test_api_reels_refuses_a_phone(client):
-    assert phone_get(client, "/api/reels").status_code == 403
+def test_a_phone_watches_reels_the_page_and_its_list(client):
+    assert phone_get(client, "/api/reels").status_code == 200
+    assert phone_get(client, "/reels").status_code == 200
 
 
-def test_reels_page_refuses_a_phone(client):
-    assert phone_get(client, "/reels").status_code == 403
+@pytest.mark.parametrize("host", ["evil.example:8765", "evil.example", "pc.evil.example:8765"])
+def test_reels_refuse_a_host_a_rebinding_page_sends_even_from_another_device(client, host):
+    response = client.get("/api/reels", base_url=LAN, environ_base=PHONE_ENVIRON, headers={"Host": host})
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize("host", ["192.168.1.20:8765", "[fd7a:115c:a1e0::1]:8765", "100.64.0.7:8765"])
+def test_reels_answer_a_phone_that_asks_by_address(client, host):
+    response = client.get("/api/reels", base_url=LAN, environ_base=PHONE_ENVIRON, headers={"Host": host})
+    assert response.status_code == 200
+
+
+def test_reels_answer_a_phone_that_asks_by_this_pcs_tailscale_name(client):
+    host = f"{socket.gethostname().lower()}.tail1234.ts.net:8765"
+    response = client.get("/api/reels", base_url=LAN, environ_base=PHONE_ENVIRON, headers={"Host": host})
+    assert response.status_code == 200
+
+
+def test_a_phone_does_nothing_else_with_reels(tmp_path, index):
+    reel_id, _ = _reel_with_video(tmp_path, index)
+    client = app_for(tmp_path).test_client()
+    for route in (f"/api/reels/{reel_id}/copy", f"/api/reels/{reel_id}/reveal", f"/api/reels/{reel_id}/export",
+                  f"/api/reels/{REEL_MATCH.checksum}/render", f"/api/reels/{REEL_MATCH.checksum}/open-folder",
+                  "/api/reels/open-folder"):
+        assert phone_post(client, route, headers=MARKED, json={}).status_code == 403, route
 
 
 def test_reel_video_is_served_whole_and_in_part(tmp_path, index):
@@ -814,16 +898,20 @@ def test_reel_video_404_when_its_file_is_gone(tmp_path, index):
     assert response.status_code == 404
 
 
-def test_reel_video_refuses_a_phone(tmp_path, index):
+def test_a_phone_plays_a_reel_and_downloads_it_under_its_readable_name(tmp_path, index):
     highlight_id = _reels_index(index)
-    video_path = tmp_path / "clip.mp4"
+    video_path = tmp_path / "4K Mirage R8 s1mple.mp4"
     video_path.write_bytes(b"x")
     index.save_reel(highlight_id, "player", video_path, 1.0)
     reel_id = index.match_reels(REEL_MATCH.checksum)[0]["player_reel_id"]
+    client = app_for(tmp_path).test_client()
 
-    response = phone_get(app_for(tmp_path).test_client(), f"/reels/{reel_id}.mp4")
+    played = phone_get(client, f"/reels/{reel_id}.mp4")
+    downloaded = phone_get(client, f"/reels/{reel_id}.mp4?download=1")
 
-    assert response.status_code == 403
+    assert played.status_code == 200 and not played.headers.get("Content-Disposition", "").startswith("attachment")
+    assert downloaded.headers["Content-Disposition"].startswith("attachment;")
+    assert 'filename="4K Mirage R8 s1mple.mp4"' in downloaded.headers["Content-Disposition"]
 
 
 def test_a_reel_keeps_playing_after_the_clips_folder_moves(tmp_path):
@@ -1113,12 +1201,13 @@ def test_reel_frame_404_for_an_unknown_reel_or_a_missing_file_without_running_ff
     assert ffmpeg.commands == []
 
 
-def test_reel_frame_refuses_a_phone(tmp_path, index):
+def test_a_phone_gets_a_reels_frame(tmp_path, index, monkeypatch):
     reel_id, _ = _reel_with_video(tmp_path, index)
+    monkeypatch.setattr(subprocess, "run", FakeFfmpeg())
 
     response = phone_get(app_for(tmp_path).test_client(), f"/reels/{reel_id}.jpg")
 
-    assert response.status_code == 403
+    assert response.status_code == 200
 
 
 @pytest.mark.ffmpeg
@@ -1236,8 +1325,12 @@ def test_api_settings_get_shape_and_field_order(tmp_path):
     assert data["fields"][0] == {
         "name": "subject_steamid", "group": "You", "label": "SteamID", "kind": "steamid",
         "minimum": None, "maximum": None, "choices": [],
-        "help": "Your SteamID64: 17 digits starting with 7656119.",
+        "help": "Your SteamID64: 17 digits starting with 7656119.", "advanced": False,
     }
+    advanced = [f["name"] for f in data["fields"] if f["advanced"]]
+    assert advanced == ["faceit_oauth_client_id", "faceit_redirect_uri", "faceit_api_key", "faceit_client_secret",
+                        "ffmpeg", "ffprobe", "hlae_exe", "stall_seconds", "launch_timeout_seconds", "page_port",
+                        "poll_seconds"]
     assert data["values"]["top_n"] == 5
     assert "faceit_api_key_protected" not in data["values"]
     assert data["secrets_set"] == {"faceit_api_key": False, "faceit_client_secret": False}
@@ -1454,6 +1547,19 @@ def test_faceit_lookup_passes_the_nickname_through_and_returns_the_player(tmp_pa
     assert calls == ["cheesebagga"]
 
 
+def test_faceit_lookup_that_is_not_to_save_only_finds(tmp_path):
+    found, saved = [], []
+    app, _store = _settings_app(tmp_path, faceit_lookup=lambda nickname: saved.append(nickname),
+                                faceit_find=lambda nickname: found.append(nickname) or
+                                {"nickname": "cheesebagga", "steamid": "76561198192858303"})
+
+    response = pc_post(app.test_client(), "/api/faceit/lookup", headers=MARKED,
+                       json={"nickname": "cheesebagga", "save": False})
+
+    assert response.status_code == 200
+    assert (found, saved) == (["cheesebagga"], [])
+
+
 def test_faceit_lookup_without_a_nickname_is_400(tmp_path):
     app, _store = _settings_app(tmp_path)
     client = app.test_client()
@@ -1594,9 +1700,9 @@ def test_reel_strip_404_when_ffmpeg_cuts_nothing_or_there_is_no_such_reel(tmp_pa
     assert list(tmp_path.glob("*.jpg")) == []
 
 
-def test_reel_strip_refuses_a_phone(tmp_path, index):
+def test_a_phone_is_not_refused_a_reels_scrub_strip(tmp_path, index):
     reel_id, _ = _reel_with_video(tmp_path, index)
-    assert phone_get(app_for(tmp_path).test_client(), f"/reels/{reel_id}.strip.jpg").status_code == 403
+    assert phone_get(app_for(tmp_path).test_client(), f"/reels/{reel_id}.strip.jpg").status_code != 403
 
 
 @pytest.mark.ffmpeg
@@ -1705,3 +1811,117 @@ PC_ONLY_ROUTES = [
 def test_a_pc_only_route_refuses_a_foreign_host(client, method, path):
     headers = {"Host": "evil.example:8765", **MARKED}     # marked, so only the Host can be what refuses
     assert client.open(path, method=method, base_url=PC, headers=headers).status_code == 403
+
+
+# --- /api/link: a toast button's cs2clipper: link, passed on by a second start ----------------------------------
+
+
+def test_api_link_follows_a_link(tmp_path):
+    followed = []
+    app = app_for(tmp_path, follow_link=followed.append)
+    response = app.test_client().post("/api/link", base_url=PC, headers=MARKED,
+                                      json={"url": "cs2clipper://reveal?reel=5"})
+    assert response.status_code == 204
+    assert followed == [links.Link("reveal", "/reels?play=5", reel=5)]
+
+
+@pytest.mark.parametrize("body", [{"url": "cs2clipper://api/quit"}, {"url": 5}, {}, None])
+def test_api_link_400_for_what_is_not_a_link(tmp_path, body):
+    app = app_for(tmp_path, follow_link=lambda link: pytest.fail("not followed"))
+    response = app.test_client().post("/api/link", base_url=PC, headers=MARKED, json=body)
+    assert response.status_code == 400
+
+
+def test_api_link_is_pc_only_and_needs_the_marker(client):
+    assert pc_post(client, "/api/link", json={"url": "cs2clipper://status"}).status_code == 403
+    assert phone_post(client, "/api/link", headers=MARKED, json={"url": "cs2clipper://status"}).status_code == 403
+
+
+# --- sharing a Reel: Copy file, exports, Show in folder -----------------------------------------------------------
+
+
+def _share_app(tmp_path, **overrides):
+    """An app whose clips folder is `tmp_path`, with one Reel (round 8, 4K, Mirage) on disk; and that Reel's id."""
+    index = Index(tmp_path / "clipper.sqlite")
+    try:
+        reel_id, video = _reel_with_video(tmp_path, index, name="r8-player.mp4")
+    finally:
+        index.close()
+    config = Config(data_root=tmp_path, faceit_nickname="s1mple")
+    overrides.setdefault("load_settings", lambda: Loaded(config, ()))
+    return app_for(tmp_path, **overrides).test_client(), reel_id, video
+
+
+def test_copy_puts_the_reels_file_on_the_clipboard(tmp_path):
+    copied = []
+    client, reel_id, video = _share_app(tmp_path, copy_file=copied.append)
+    assert pc_post(client, f"/api/reels/{reel_id}/copy", headers=MARKED).status_code == 204
+    assert copied == [video]
+
+
+def test_a_discord_export_lands_in_exports_named_to_post_and_goes_on_the_clipboard(tmp_path):
+    made, copied = [], []
+
+    def export(reel, kind, out, *, duration_s, ffmpeg, card):
+        made.append((reel, kind, out.relative_to(tmp_path), duration_s, card))
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x" * 18_400_000)
+        return out
+
+    client, reel_id, video = _share_app(tmp_path, export_reel=export, copy_file=copied.append)
+    response = pc_post(client, f"/api/reels/{reel_id}/export", headers=MARKED, json={"kind": "discord"})
+    assert response.status_code == 200
+    assert response.get_json() == {"file": "4K Mirage R8 s1mple (Discord).mp4", "mb": 18.4, "copied": True}
+    assert made == [(video, "discord", Path("Exports/4K Mirage R8 s1mple (Discord).mp4"), 12.5,
+                     share.Title("4K", "s1mple · Mirage · Round 8"))]
+    assert copied == [tmp_path / "Exports" / "4K Mirage R8 s1mple (Discord).mp4"]
+
+
+def test_a_vertical_export_shows_in_explorer_and_without_a_title_card_when_settings_say(tmp_path):
+    shown, cards = [], []
+
+    def export(reel, kind, out, *, duration_s, ffmpeg, card):
+        cards.append(card)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x")
+        return out
+
+    config = Config(data_root=tmp_path, title_card=False)
+    client, reel_id, _ = _share_app(tmp_path, export_reel=export, reveal=shown.append,
+                                    load_settings=lambda: Loaded(config, ()))
+    response = pc_post(client, f"/api/reels/{reel_id}/export", headers=MARKED, json={"kind": "vertical"})
+    assert response.get_json()["file"] == "4K Mirage R8 (9x16).mp4"
+    assert shown == [tmp_path / "Exports" / "4K Mirage R8 (9x16).mp4"]
+    assert cards == [None]
+
+
+def test_an_export_that_fails_says_why(tmp_path):
+    def export(*args, **kwargs):
+        raise share.ShareError("FFmpeg failed: out of disk")
+
+    client, reel_id, _ = _share_app(tmp_path, export_reel=export)
+    response = pc_post(client, f"/api/reels/{reel_id}/export", headers=MARKED, json={"kind": "discord"})
+    assert response.status_code == 409
+    assert response.get_json() == {"error": "Couldn't export it: FFmpeg failed: out of disk"}
+
+
+def test_show_in_folder_selects_the_reels_file(tmp_path):
+    shown = []
+    client, reel_id, video = _share_app(tmp_path, reveal=shown.append)
+    assert pc_post(client, f"/api/reels/{reel_id}/reveal", headers=MARKED).status_code == 204
+    assert shown == [video]
+
+
+def test_sharing_a_reel_that_is_gone_is_404_and_an_unknown_export_400(tmp_path):
+    client, reel_id, video = _share_app(tmp_path)
+    assert pc_post(client, f"/api/reels/{reel_id}/export", headers=MARKED, json={"kind": "gif"}).status_code == 400
+    video.unlink()
+    for route in ("copy", "reveal"):
+        assert pc_post(client, f"/api/reels/{reel_id}/{route}", headers=MARKED).status_code == 404
+    assert pc_post(client, "/api/reels/999/copy", headers=MARKED).status_code == 404
+
+
+def test_sharing_is_pc_only_and_needs_the_marker(tmp_path):
+    client, reel_id, _ = _share_app(tmp_path)
+    assert pc_post(client, f"/api/reels/{reel_id}/copy").status_code == 403
+    assert phone_post(client, f"/api/reels/{reel_id}/copy", headers=MARKED).status_code == 403

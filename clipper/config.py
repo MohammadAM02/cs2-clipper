@@ -30,6 +30,11 @@ PERSPECTIVE_CHOICES: dict[str, tuple[str, ...]] = {
 }
 # hud -> what CS2 shows over the picture: the kill feed alone, or its whole HUD (radar, health, ammo, round timer).
 HUD_CHOICES = ("killfeed", "full")
+# render_when -> when renders may start (gate.Schedule): once CS2 and FACEIT AC are closed, once the PC has also
+# been idle a while, or only overnight.
+RENDER_WHEN = ("anytime", "idle", "overnight")
+# encoder -> what records the Clips: x264 on the processor, or the graphics card's encoder when it has one.
+ENCODERS = ("cpu", "gpu")
 
 
 @dataclass(frozen=True)
@@ -56,16 +61,19 @@ class Config:
     stall_seconds: float = 180.0
     launch_timeout_seconds: float = 300.0
     min_free_gb: float = 5.0
+    render_when: str = "anytime"
+    encoder: str = "cpu"
     heads_up_seconds: float = 30.0
     poll_seconds: float = 5.0
     aspect_ratio: str = "16:9"
     sequence_event: str = "kills"
     perspectives: str = "both"
     hud: str = "killfeed"
-    show_xray: bool = True
+    show_xray: bool = False         # off: wall outlines in a posted clip invite "walls?"
     show_assists: bool = True
     kill_feed_seconds: float = 5.0
-    player_voices: bool = True
+    player_voices: bool = False     # off: teammates' comms stay out of clips that get posted
+    title_card: bool = True         # exports open on a card with the nickname, map, round and Highlight
     match_alerts: bool = True
     stopped_playing_minutes: float = 5.0
     # the small touches the pages add (touches.js): soft clicks, the glow tinted by the map being rendered, less
@@ -89,6 +97,10 @@ class Config:
             )
         if self.hud not in HUD_CHOICES:
             raise ValueError(f"hud must be one of {', '.join(HUD_CHOICES)} (got {self.hud!r})")
+        if self.render_when not in RENDER_WHEN:
+            raise ValueError(f"render_when must be one of {', '.join(RENDER_WHEN)} (got {self.render_when!r})")
+        if self.encoder not in ENCODERS:
+            raise ValueError(f"encoder must be one of {', '.join(ENCODERS)} (got {self.encoder!r})")
 
     @property
     def perspectives_to_render(self) -> tuple[str, ...]:

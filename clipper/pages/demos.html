@@ -19,7 +19,7 @@
     <div class="saybox"><span data-nugget="rendering"></span><p class="say" id="sum">Loading…</p></div>
   </section>
   <p class="notice w" id="note" hidden>Grab these at your PC. Watch Demo downloads to whichever device you press it on.</p>
-  <div class="dgrid dhead" id="head" aria-hidden="true" hidden><span>Match</span><span>Result</span><span>Highlights</span><span>Rating 2.0</span><span>K–D</span><span>ADR</span><span>Link expires</span><span></span></div>
+  <div class="dgrid dhead" id="head" aria-hidden="true" hidden><span>Match</span><span>Highlights</span><span>Link expires</span><span></span></div>
   <div id="rows" role="list" aria-label="Matches" style="display:flex;flex-direction:column;gap:14px"></div>
   <div class="emptybig rise" id="empty" hidden>
     <span data-nugget-full="idle"></span>
@@ -29,9 +29,9 @@
 </main>
 <script>
 // Demos to grab (spec: Pages -> Demos to grab): the one page a phone can open too. On the PC each match
-// has Open (its FACEIT match room) and Skip; elsewhere only Skip, with a note to grab at the PC.
+// has Open (its FACEIT match room) and Skip; elsewhere only Skip, with a note to grab at the PC. A row says what
+// decides a grab -- the map, its Highlights, how long its link lasts -- and the match's numbers in a line under it.
 const WORDS = [["5k", "ACE", "b-ace"], ["4k", "4K", "b-4k"], ["3k", "3K", "b-3k"]];
-const opened = new Set(JSON.parse(sessionStorage.getItem("opened") || "[]"));
 let data = {this_pc: false, rows: []};
 
 if (!onThisPC()) { const b = document.getElementById("brand"); b.hidden = false; b.innerHTML = `${MARK}<span>CS2 Clipper</span>`; }
@@ -59,29 +59,20 @@ function actions(r) {
   if (r.state === "skipped") {
     return `<span class="muted">Skipped</span> <button class="link" data-act="undo" data-id="${esc(r.id)}">Undo</button>`;
   }
-  const open = !data.this_pc ? "" : opened.has(r.id) ? '<span class="wait"><i></i><i></i><i></i>Waiting for the download</span>'
+  const open = !data.this_pc ? "" : r.opened ? '<span class="wait"><i></i><i></i><i></i>Waiting for the download</span>'
     : `<a class="primary" href="${esc(r.url)}" target="_blank" rel="noopener" data-open="${esc(r.id)}">Open${ICON.out}</a>`;
   return `${open}<button class="ghost" data-act="skip" data-id="${esc(r.id)}">Skip</button>`;
 }
 function row(r) {
-  const rating = r.rating >= 1.1 ? "good" : r.rating < 0.95 ? "bad" : "";
-  const rateColor = rating === "good" ? "#F2EFEA" : rating === "bad" ? "#8F857A" : "#D6CBBE";
-  const arrow = rating === "good" ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="#FF5500" aria-label="good"><polygon points="12 4 22 18 2 18"/></svg>'
-    : rating === "bad" ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="#7A6E64" aria-label="low"><polygon points="2 6 22 6 12 20"/></svg>' : "";
   const days = (new Date(r.expires_at) - Date.now()) / 86400000, soon = days <= 3;
   const done = r.state === "skipped" || r.state === "grabbed";
-  const resColor = r.won ? "#F2EFEA" : "#8F857A";
   const hours = (new Date(r.expires_at) - Date.now()) / 3600000;
   // A match still to grab drags left to skip (touches.js): the track behind it says so.
   const track = done ? "" : `<div class="t-trk" aria-hidden="true">${ICON.skip}<span>Skip</span></div>`;
+  const detail = `${r.won ? "Win" : "Loss"} ${esc(r.score)} · Rating ${r.rating.toFixed(2)} · K–D ${esc(r.kd)} · ADR ${r.adr.toFixed(1)}`;
   return `<div class="t-wrap" role="listitem" data-map="${esc(r.map)}">${track}<article class="drow dgrid${done ? " done" : " t-drag"}">
-    <div class="who"><span class="maptile">${mapAbbr(r.map)}</span><span style="min-width:0">${done ? "" : '<small class="wtd">Wanted</small>'}<b>${esc(r.map)}</b><small>${when(r.finished_at)}</small></span></div>
-    <div class="res" style="color:${resColor}"><b class="num">${esc(r.score)}</b><small>${r.won ? "Win" : "Loss"}</small></div>
+    <div class="who"><span class="maptile">${mapAbbr(r.map)}</span><span style="min-width:0">${done ? "" : '<small class="wtd">Ready to download</small>'}<b>${esc(r.map)}</b><small>${when(r.finished_at)}</small><small class="detail">${detail}</small></span></div>
     <div class="hls" style="display:flex;gap:5px;flex-wrap:wrap">${badges(r.highlights)}</div>
-    <div class="rate c-rate" style="color:${rateColor}"><span class="num">${r.rating.toFixed(2)}</span>${arrow}</div>
-    <span class="num stat c-kd">${esc(r.kd)}</span>
-    <span class="num stat c-adr">${r.adr.toFixed(1)}</span>
-    <div class="stats"><div><b style="color:${rateColor}">${r.rating.toFixed(2)}</b><span>Rating 2.0</span></div><div><b>${esc(r.kd)}</b><span>K–D</span></div><div><b>${r.adr.toFixed(1)}</b><span>ADR</span></div></div>
     <div class="exp"><span style="font-size:13.5px;color:${soon ? "#FFB27A" : "#CFC5BA"}">${left(r.expires_at)}</span>${r.reminded ? '<span class="pill">Reminder</span>' : ""}
       <div class="life${soon ? " soon" : ""}" title="FACEIT keeps a Demo link for about 30 days"><i data-w="${Math.max(2, Math.min(100, days / 30 * 100)).toFixed(1)}%"></i></div></div>
     <div class="dact">${actions(r)}</div>
@@ -115,9 +106,9 @@ async function load() {
 document.addEventListener("click", async e => {
   const link = e.target.closest("a[data-open]");
   if (link) {
-    opened.add(link.dataset.open);
-    sessionStorage.setItem("opened", JSON.stringify([...opened]));
-    setTimeout(render, 0);
+    const r = data.rows.find(x => x.id === link.dataset.open);
+    if (r) { r.opened = true; setTimeout(render, 0); }
+    api(`demos/${link.dataset.open}/opened`, {method: "POST"}).catch(() => {});
     return;
   }
   const button = e.target.closest("button[data-act]");
@@ -126,8 +117,7 @@ document.addEventListener("click", async e => {
   await api(`demos/${button.dataset.id}/${button.dataset.act}`, {method: "POST"});
   await load();
 });
-load();
-setInterval(load, 5000);
+every(5000, load, 30000);
 </script>
 </body>
 </html>

@@ -627,6 +627,36 @@ def create_app(ctx: WebContext) -> Flask:
             index.close()
         return _no_store(jsonify(body))
 
+    @app.get("/api/reels/volume")
+    def api_reels_volume():
+        """Where the Reels player's volume slider was last left (0 to 1), or None before it has been moved: kept here,
+        since the window forgets what a page stores each time it closes. The page has its own quieter start."""
+        index = Index(ctx.index_path)
+        try:
+            stored = index.get_flag("reel_volume")
+        finally:
+            index.close()
+        try:
+            volume = float(stored) if stored is not None else None
+        except ValueError:
+            volume = None
+        if volume is not None and not 0 <= volume <= 1:       # NaN too
+            volume = None
+        return _no_store(jsonify(volume=volume))
+
+    @app.put("/api/reels/volume")
+    def api_reels_volume_save():
+        body = request.get_json(silent=True)
+        volume = body.get("volume") if isinstance(body, dict) else None
+        if isinstance(volume, bool) or not isinstance(volume, (int, float)) or not 0 <= volume <= 1:
+            return Response(status=400)
+        index = Index(ctx.index_path)
+        try:
+            index.set_flag("reel_volume", repr(float(volume)))
+        finally:
+            index.close()
+        return Response(status=204)
+
     @app.get("/reels/<int:reel_id>.mp4")
     def reel_video(reel_id: int):
         index = Index(ctx.index_path)

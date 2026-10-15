@@ -867,6 +867,36 @@ def test_a_phone_does_nothing_else_with_reels(tmp_path, index):
         assert phone_post(client, route, headers=MARKED, json={}).status_code == 403, route
 
 
+def test_the_reels_volume_is_none_until_the_slider_moves(client, index):
+    assert pc_get(client, "/api/reels/volume").get_json() == {"volume": None}
+    index.set_flag("reel_volume", "loud")      # a hand-edited index is as good as nothing saved
+    assert pc_get(client, "/api/reels/volume").get_json() == {"volume": None}
+
+
+def test_the_reels_volume_is_kept_where_the_slider_was_left(tmp_path, index):
+    response = pc_put(app_for(tmp_path).test_client(), "/api/reels/volume", headers=MARKED, json={"volume": 0.15})
+    assert response.status_code == 204
+    assert pc_get(app_for(tmp_path).test_client(), "/api/reels/volume").get_json() == {"volume": 0.15}
+
+
+@pytest.mark.parametrize("body", [{"volume": 1.5}, {"volume": -0.1}, {"volume": "0.5"}, {"volume": True},
+                                  {"volume": None}, {}, [0.5]])
+def test_a_reels_volume_that_is_not_0_to_1_is_400(client, body):
+    assert pc_put(client, "/api/reels/volume", headers=MARKED, json=body).status_code == 400
+
+
+def test_a_reels_volume_of_nan_is_400(client):
+    response = pc_put(client, "/api/reels/volume", headers=MARKED, data='{"volume": NaN}',
+                      content_type="application/json")
+    assert response.status_code == 400
+
+
+def test_the_reels_volume_is_the_pcs_alone(client):
+    assert phone_get(client, "/api/reels/volume").status_code == 403
+    assert phone_put(client, "/api/reels/volume", headers=MARKED, json={"volume": 0.5}).status_code == 403
+    assert pc_put(client, "/api/reels/volume", json={"volume": 0.5}).status_code == 403       # no marker
+
+
 def test_reel_video_is_served_whole_and_in_part(tmp_path, index):
     highlight_id = _reels_index(index)
     video_path = tmp_path / "clip.mp4"

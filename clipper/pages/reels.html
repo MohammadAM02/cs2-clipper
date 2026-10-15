@@ -218,6 +218,32 @@ async function askRender(button) {
   await load();
 }
 
+// The player's sound on the PC. CS2 records Reels at full volume, so they start at 30% until the slider is moved, and
+// from then on where it was left: each new player takes the last one's level (and its mute, while the page is
+// open). The app keeps the level, since this window forgets what a page stores each time it closes. A phone is left
+// to its own volume buttons.
+const sound = {volume: 0.3, muted: false};
+let volumeSave = 0;
+async function loadVolume() {
+  try {
+    const response = await api("api/reels/volume");
+    const saved = response.ok ? (await response.json()).volume : null;
+    if (typeof saved === "number") sound.volume = saved;
+  } catch (e) { /* the quieter start stays */ }
+}
+function keepSound(video) {
+  video.volume = sound.volume;
+  video.muted = sound.muted;
+  video.addEventListener("volumechange", () => {
+    sound.muted = video.muted;
+    if (video.volume === sound.volume) return;      // the level set just above, or only the mute changed
+    sound.volume = video.volume;
+    clearTimeout(volumeSave);                       // one save once the slider stops, not one per step of a drag
+    volumeSave = setTimeout(() => api("api/reels/volume", {method: "PUT", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({volume: sound.volume})}).catch(() => {}), 400);
+  });
+}
+
 // Plays Reel `id` of `row` in the player under it, which it opens (or moves there).
 let playingReel = null;
 function showReel(row, id) {
@@ -226,6 +252,7 @@ function showReel(row, id) {
     panel?.remove();
     row.insertAdjacentHTML("afterend", playerPanel(row));    // under the row that was clicked
     panel = document.getElementById("player");
+    if (PC) keepSound(document.getElementById("player-video"));
   }
   document.querySelectorAll(".hl.on, .pov.on").forEach(n => n.classList.remove("on"));
   row.classList.add("on");
@@ -315,7 +342,7 @@ document.addEventListener("click", async e => {
 });
 
 (async () => {
-  await load();
+  await Promise.all([load(), PC && loadVolume()]);      // a Reel asked for by ?play= starts at the kept level
   const wanted = new URLSearchParams(location.search).get("play");
   if (wanted && playById(wanted, true)) history.replaceState(null, "", location.pathname);
 })();

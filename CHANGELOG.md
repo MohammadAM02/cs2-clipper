@@ -3,6 +3,30 @@
 What changed in each release of CS2 Clipper. The release workflow publishes a version's section as the notes of
 its GitHub Release, and the app shows those notes on the Status page when it offers that version.
 
+## 0.9.0
+
+### Quieter Reels, and a new look: Press Box
+
+- **Reels start quieter and remember your volume.** CS2 records them at full volume, so the player now starts at 30%.
+  Move the slider and every Reel after that starts where you left it, even after the window closes. Mute carries to
+  the next Reel while the page is open. A phone keeps to its own volume buttons.
+- **Press Box: the comic look, laid out like a broadcast desk.** Nugget, Bangers titles, speech bubbles and halftone
+  map tiles stay where they mean something, and labels, tables and numbers line up. The top bar has an orange plate
+  with Nugget's head, tabs with an orange underline on the page you're on, and a status pill that keeps its light in
+  a narrow window.
+- **One meaning per colour.** Orange is working or "act on this", blue is "needs you" (a failed render, a Demo to
+  grab, setup), cream is done or Nugget talking, and the red dot is the recording light.
+- **Status** puts Nugget's rooftop on a monitor with a lower-third timer and a recording light, beside a rundown of
+  the pipeline with the current step lit. On hold, it says On hold instead of a time it isn't keeping.
+- **Reels and Demos to grab** show each map in its own colour, and scores and stats line up. A grabbed Demo is no
+  longer faded.
+- **Settings** marks the section you're in, and a switch that's off is a quiet grey knob. **First run** makes the
+  step that waits on you the loud one; finished steps go quiet.
+- **Easier to read.** Dim text is brighter, help text and captions are at least 13 px, the Status monitor stays
+  beside the rundown down to the smallest window, and Tab skips the Reels carousel's hidden slides.
+- Text is set in Barlow and Barlow Condensed, which ship with the app under the SIL Open Font License and replace
+  Hanken Grotesk.
+
 ## 0.8.0
 
 ### Set up in one go, and share what you clip

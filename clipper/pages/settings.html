@@ -157,6 +157,7 @@ function render() {
     <div class="gtitle">${title(g)}</div>
     <div class="fgrid">${g.name === "You" ? faceitBlock() : ""}${g.fields.map(fieldRow).join("")}</div></section>`).join("");
   document.querySelectorAll(".seg").forEach(placePill);
+  watchSections();
   updatePad();
   updateDepends();
   updateDirty();
@@ -357,6 +358,27 @@ document.getElementById("snav").addEventListener("click", e => {
   const link = e.target.closest('a[href="#g-advanced"]');
   if (link) document.getElementById("g-advanced").open = true;
 });
+
+// The section list marks where you are: the first section in the top half of the window, under the nav.
+// render() rebuilds both lists, so this starts over each time (the observer hangs on the function: render() can
+// run before this part of the script has).
+function watchSections() {
+  watchSections.spy?.disconnect();
+  const links = [...document.querySelectorAll("#snav a")];
+  const mark = id => links.forEach(a => {
+    const on = a.getAttribute("href") === "#" + id;
+    a.classList.toggle("on", on);
+    if (on) a.setAttribute("aria-current", "true"); else a.removeAttribute("aria-current");
+  });
+  const inView = new Set();
+  const spy = watchSections.spy = new IntersectionObserver(entries => {
+    entries.forEach(e => { if (e.isIntersecting) inView.add(e.target.id); else inView.delete(e.target.id); });
+    const first = links.map(a => a.getAttribute("href").slice(1)).find(id => inView.has(id));
+    if (first) mark(first);
+  }, {rootMargin: "-90px 0px -50% 0px"});
+  document.querySelectorAll("#form .group").forEach(g => spy.observe(g));
+  if (links.length && !links.some(a => a.classList.contains("on"))) mark(links[0].getAttribute("href").slice(1));
+}
 document.getElementById("discard").addEventListener("click", () => { load(); });
 document.getElementById("save").addEventListener("click", async () => {
   const button = document.getElementById("save");

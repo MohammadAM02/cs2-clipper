@@ -74,6 +74,10 @@
         <p class="lead" id="intro"></p>
         <p class="promise" id="promise"></p>
       </div>
+      <div id="current" hidden>
+        <div class="cstrip" id="strip" role="list" aria-label="Pipeline"></div>
+        <div class="jobs" id="jobs"></div>
+      </div>
       <div class="ctl">
         <div class="row">
           <button class="ghost" id="pause" hidden>${PAUSE}Pause rendering</button>
@@ -82,11 +86,6 @@
       </div>
     </div>
   </section>
-
-  <div id="current" hidden>
-    <div class="cstrip" id="strip" role="list" aria-label="Pipeline"></div>
-    <div class="jobs" id="jobs"></div>
-  </div>
 
   <section id="notice" aria-label="Needs attention" style="display:flex;flex-direction:column;gap:8px"></section>
 
@@ -175,7 +174,7 @@ document.querySelectorAll("main button, main a").forEach(el => {
   el.innerHTML = el.innerHTML.replace("${PAUSE}", ICON.pause).replace("${PLAY}", ICON.play).replace("${NEXT}", ICON.next);
 });
 const strip = document.getElementById("strip");
-strip.innerHTML = PHASES.map(([l], i) => `<div class="mini" role="listitem"><small>${i + 1}.</small><b>${l}</b><span class="eta"></span></div>`).join("");
+strip.innerHTML = PHASES.map(([l], i) => `<div class="mini" role="listitem"><small>${String(i + 1).padStart(2, "0")}</small><b>${l}</b><span class="eta"></span></div>`).join("");
 document.querySelectorAll("[data-nugget]").forEach(n => { n.outerHTML = NUGGET.head(n.dataset.nugget); });
 const carousel = Carousel(document.getElementById("hero"));
 
@@ -267,6 +266,7 @@ function renderStage(data) {
   const mood = nuggetMood(data), night = mood === "idle" && nightNow();
   const sfx = mood === "idle" && data.paused_by === "you" ? "paused" : mood;
   const key = `${mood}|${night}|${sfx}`;
+  document.getElementById("art").dataset.mood = mood;       // the lower third's recording light (app.css)
   if (key !== stageKey) {
     stageKey = key;
     const scene = document.getElementById("scene");
@@ -344,13 +344,16 @@ function renderNow(data) {
   if (!d) return;
   const {index} = progressOf(d, overallOf(data));
   const live = d.state === "rendering" && !!data.rendering, overall = overallOf(data);
+  // Rendering that waits (on hold for a fix, or paused) says so on its row instead of a time it is not keeping.
+  const held = d.state === "rendering" && !data.rendering && (data.problems.length > 0 || !!data.paused_by);
   [...strip.children].forEach((mini, i) => {
-    const cls = i < index ? "mini d" : i === index ? (d.state === "failed" ? "mini x" : "mini n" + (live ? " live" : "")) : "mini";
+    const cls = i < index ? "mini d" : i === index ? (d.state === "failed" ? "mini x" : "mini n" + (live ? " live" : held ? " held" : "")) : "mini";
     if (mini.className !== cls) mini.className = cls;
     mini.setAttribute("aria-current", i === index ? "step" : "false");
   });
   placeBuddy(strip.children[index], d.state === "failed" ? "problem" : "rendering", live && overall != null ? overall : null);
-  strip.children[1].querySelector(".eta").textContent = index === 1 || d.eta_s != null && index === 0 ? etaLabel(d.eta_s) : "";
+  strip.children[1].querySelector(".eta").textContent = held ? (data.problems.length ? "On hold" : "Paused")
+    : index === 1 || d.eta_s != null && index === 0 ? etaLabel(d.eta_s) : "";
   sync(document.getElementById("jobs"), d.jobs, j => j.perspective, jobPill);
 }
 
@@ -387,13 +390,13 @@ function demoCard(d) {
   const going = deleted.has(d.id), asking = askingDelete.has(d.id) && !going;
   const label = going ? "Deleting…" : d.state === "failed" ? "Failed" : PHASES[phaseOf(d.state)][0];
   const eta = !going && d.state === "rendering" && d.eta_s != null ? `<span class="help" style="display:block;margin-top:5px">${esc(etaLabel(d.eta_s))}</span>` : "";
-  const color = going ? "#8F857A" : d.state === "failed" ? "#FF8A3D" : d.state === "rendering" ? "#FFB27A" : "#D6CBBE";
+  const color = going ? "#8F857A" : d.state === "failed" ? "#7CC4FF" : d.state === "rendering" ? "#FFB27A" : "#D6CBBE";
   const bar = d.state === "failed" ? "pbar fail" : d.state === "rendering" && !going ? "pbar live" : "pbar";
   // A joined Demo is in Reels already, past deleting from here.
   const bin = going || d.state === "joined" ? '<span class="nobin"></span>' :
     `<button class="del" data-delete="${+d.id}" aria-expanded="${asking}" aria-label="Delete ${demoName(d)}" title="Delete">${ICON.bin}</button>`;
   return `<div class="dcard">
-    <div class="top"><span class="maptile">${mapAbbr(d.map || "?")}</span>
+    <div class="top">${maptile(d.map)}
       <span style="flex-grow:1;min-width:0"><span class="dname">${esc(d.map || "Reading the Demo…")} <em>#${+d.id}</em></span>
         <span class="${bar}" style="display:block;margin-top:6px" aria-hidden="true"><i data-w="${(frac * 100).toFixed(1)}%"></i></span>${eta}</span>
       <span class="dstate" style="color:${color}">${esc(label)}</span>${bin}</div>
@@ -663,6 +666,15 @@ function renderOnboard(ob, setup) {
   document.getElementById("ob-folder-change").hidden = !canPick;
   document.getElementById("ob-tools").classList.toggle("done", ob.tools === "ok");
   tick("ob-tools-ok", ob.tools === "ok");
+  // The one step that waits on the player is the loud one; the download that runs by itself shows it is working.
+  const waiting = !ob.steamid ? "ob-who" : !ob.clips_folder ? "ob-folder"
+    : ob.tools === "failed" || ob.tools === "needed" ? "ob-tools" : "";
+  ["ob-who", "ob-folder", "ob-tools"].forEach(id => {
+    const step = document.getElementById(id);
+    step.classList.toggle("now", id === waiting);
+    if (id === waiting) step.setAttribute("aria-current", "step"); else step.removeAttribute("aria-current");
+  });
+  document.getElementById("ob-tools").classList.toggle("work", ob.tools === "downloading");
   const p = setup && setup.progress, size = ob.download_mb ? `about ${ob.download_mb} MB` : "";
   document.getElementById("ob-tools-line").textContent = ob.tools === "ok" ? "csda, FFmpeg and HLAE are installed."
     : ob.tools === "downloading" ? `Downloading csda, FFmpeg and HLAE${size ? ` (${size})` : ""}. Leave the app open.`

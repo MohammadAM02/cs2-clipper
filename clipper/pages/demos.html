@@ -71,7 +71,7 @@ function row(r) {
   const track = done ? "" : `<div class="t-trk" aria-hidden="true">${ICON.skip}<span>Skip</span></div>`;
   const detail = `${r.won ? "Win" : "Loss"} ${esc(r.score)} · Rating ${r.rating.toFixed(2)} · K–D ${esc(r.kd)} · ADR ${r.adr.toFixed(1)}`;
   return `<div class="t-wrap" role="listitem" data-map="${esc(r.map)}">${track}<article class="drow dgrid${done ? " done" : " t-drag"}">
-    <div class="who"><span class="maptile">${mapAbbr(r.map)}</span><span style="min-width:0">${done ? "" : '<small class="wtd">Ready to download</small>'}<b>${esc(r.map)}</b><small>${when(r.finished_at)}</small><small class="detail">${detail}</small></span></div>
+    <div class="who">${maptile(r.map)}<span style="min-width:0">${done ? "" : '<small class="wtd">Ready to download</small>'}<b>${esc(r.map)}</b><small>${when(r.finished_at)}</small><small class="detail">${detail}</small></span></div>
     <div class="hls" style="display:flex;gap:5px;flex-wrap:wrap">${badges(r.highlights)}</div>
     <div class="exp"><span style="font-size:13.5px;color:${soon ? "#FFB27A" : "#CFC5BA"}">${left(r.expires_at)}</span>${r.reminded ? '<span class="pill">Reminder</span>' : ""}
       <div class="life${soon ? " soon" : ""}" title="FACEIT keeps a Demo link for about 30 days"><i data-w="${Math.max(2, Math.min(100, days / 30 * 100)).toFixed(1)}%"></i></div></div>

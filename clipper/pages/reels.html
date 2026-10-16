@@ -119,7 +119,7 @@ function matchBlock(m) {
   const won = m.result === "win";
   return `<section class="mcard${closed.has(m.checksum) ? "" : " open"}" data-checksum="${esc(m.checksum)}" aria-label="${esc(m.map)}, ${dateLabel(m.played_at)}">
     <button class="mhead" data-toggle aria-expanded="${!closed.has(m.checksum)}">
-      <span class="maptile" style="width:54px;height:54px;font-size:21px">${mapAbbr(m.map)}</span>
+      ${maptile(m.map, "width:54px;height:54px;font-size:21px")}
       <span class="nm"><b>${esc(m.map)}</b><small>${dateLabel(m.played_at)}, ${plural(m.highlights.length, "Highlight")}</small></span>
       <span class="sc" style="color:${won ? "#F2EFEA" : "#8F857A"}"><b>${esc(m.score)}</b><small>${esc(resultLabel(m.result))}</small></span>
       <span class="strip-w" aria-hidden="true"><span class="rstrip">${cells}</span><span class="ends"><span>Round 1</span><span>Round ${rounds(m.score)}</span></span></span>

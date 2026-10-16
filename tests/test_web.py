@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import socket
 import sqlite3
@@ -1793,20 +1794,30 @@ def test_check_for_demos_says_why_not_with_409(tmp_path):
     assert (response.status_code, response.get_json()) == (409, {"error": "Match alerts are off"})
 
 
-# --- Nugget and the comic look: nugget.js and the two fonts the pages use ---------------------------------
+# --- Nugget and the Press Box look: nugget.js, Bangers, and Barlow in its two widths ------------------------
+
+FONT_FILES = ("Bangers.woff2", "Barlow-Regular.woff2", "Barlow-Medium.woff2", "Barlow-SemiBold.woff2", "Barlow-Bold.woff2",
+              "BarlowCondensed-SemiBold.woff2", "BarlowCondensed-Bold.woff2", "BarlowCondensed-ExtraBold.woff2")
 
 
 def test_nugget_and_the_fonts_are_served_to_the_pc_and_the_phone_like_the_shared_files(client):
-    for path, mimetype in (("/nugget.js", "text/javascript"), ("/fonts/Bangers.woff2", "font/woff2"),
-                           ("/fonts/HankenGrotesk.woff2", "font/woff2")):
+    for path, mimetype in (("/nugget.js", "text/javascript"),
+                           *((f"/fonts/{name}", "font/woff2") for name in FONT_FILES)):
         response = pc_get(client, path)
         assert (response.status_code, response.mimetype) == (200, mimetype), path
         assert response.data == (PAGES_DIR / path.lstrip("/")).read_bytes(), path
         assert phone_get(client, path).status_code == 200, path
 
 
-def test_only_the_two_fonts_come_out_of_the_fonts_folder(client):
-    for path in ("/fonts/Bangers-OFL.txt", "/fonts/HankenGrotesk-OFL.txt", "/fonts/Saira.woff2"):
+def test_every_font_the_css_loads_is_served(client):
+    css = pc_get(client, "/app.css").get_data(as_text=True)
+    loaded = set(re.findall(r'url\("/fonts/([^"]+)"\)', css))
+    assert loaded == set(FONT_FILES)
+
+
+def test_only_the_fonts_come_out_of_the_fonts_folder(client):
+    for path in ("/fonts/Bangers-OFL.txt", "/fonts/Barlow-OFL.txt", "/fonts/BarlowCondensed-OFL.txt",
+                 "/fonts/HankenGrotesk.woff2", "/fonts/Saira.woff2"):
         assert pc_get(client, path).status_code == 404, path
 
 
@@ -1817,7 +1828,7 @@ def test_every_page_loads_nugget_after_the_shared_script(client):
 
 
 def test_the_exe_carries_nugget_and_the_fonts():
-    for name in ("nugget.js", "fonts/Bangers.woff2", "fonts/HankenGrotesk.woff2"):
+    for name in ("nugget.js", *(f"fonts/{font}" for font in FONT_FILES)):
         assert name in PAGE_FILES, name
 
 

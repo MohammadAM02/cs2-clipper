@@ -96,7 +96,9 @@ _PHONE_ENDPOINTS = frozenset({"demos_page", "demos_json", "demos_action", "app_c
 # cannot send (`_plain_host`), since what they show is the player's own clips.
 _WATCH_ENDPOINTS = frozenset({"reels_page", "api_reels", "reel_video", "reel_frame", "reel_strip"})
 # The fonts the pages load from /fonts/ (their licences sit next to them and are not served).
-_FONTS = frozenset({"Bangers.woff2", "HankenGrotesk.woff2"})
+_FONTS = frozenset({"Bangers.woff2", "Barlow-Regular.woff2", "Barlow-Medium.woff2", "Barlow-SemiBold.woff2",
+                    "Barlow-Bold.woff2", "BarlowCondensed-SemiBold.woff2", "BarlowCondensed-Bold.woff2",
+                    "BarlowCondensed-ExtraBold.woff2"})
 
 
 class _MatchIdConverter(BaseConverter):

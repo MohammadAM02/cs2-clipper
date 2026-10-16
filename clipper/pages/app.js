@@ -55,7 +55,7 @@ const ICON = {
   check: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>',
   bang: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="13"/><line x1="12" y1="19" x2="12.01" y2="19"/></svg>',
   dash: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" aria-hidden="true"><line x1="6" y1="12" x2="18" y2="12"/></svg>',
-  info: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#FF8A3D" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
+  info: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
   next: '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg>',
   out: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>',
   folder: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>',
@@ -66,6 +66,14 @@ const ICON = {
 const BADGE = {ACE: "b-ace", "5K": "b-ace", "4K": "b-4k", "3K": "b-3k", "2K": "b-2k"};
 const badge = type => `<span class="badge ${BADGE[String(type).toUpperCase()] || "b-2k"}">${esc(String(type).toUpperCase())}</span>`;
 const mapAbbr = map => { const m = String(map || "?").replace(/[^A-Za-z0-9]/g, ""); const d = m.match(/\d/); return esc((d ? m[0] + d[0] : m.slice(0, 2)).toUpperCase()); };
+// Each map's colour (touches.js's map glow uses them too), and its tile: the colour with halftone dots on it.
+const MAP_TINTS = {Mirage: "#E7C995", Inferno: "#E59A7A", Nuke: "#8FC9C4", Ancient: "#B9C98F", Dust2: "#D9B57A",
+  Anubis: "#7FC4B8", Train: "#B8BEC6", Vertigo: "#A9C4E8", Overpass: "#9DB7A5"};
+const maptile = (map, style = "") => {
+  const tint = MAP_TINTS[map];
+  const css = [tint ? `--tint:${tint}` : "", style].filter(Boolean).join(";");
+  return `<span class="maptile${tint ? " tinted" : ""}"${css ? ` style="${css}"` : ""}>${mapAbbr(map || "?")}</span>`;
+};
 
 // --- updating lists without replaying everything ------------------------------------------------------
 // Every page polls and gets the whole picture back. `sync` keeps each row's element while its HTML is
@@ -176,7 +184,8 @@ function renderNav(current) {
   const nav = document.createElement("nav");
   nav.className = "nav";
   nav.setAttribute("aria-label", "Pages");
-  nav.innerHTML = `<a class="brand" href="/status" aria-label="CS2 Clipper">${MARK}<span>CS2 Clipper</span></a>
+  const face = typeof NUGGET !== "undefined" ? NUGGET.head("rendering") : MARK;
+  nav.innerHTML = `<a class="brand" href="/status" aria-label="CS2 Clipper"><span class="face">${face}</span><span>CS2 Clipper</span></a>
     <div class="tabs"><span class="navhover"></span><span class="navline"></span>
     ${NAV_PAGES.map(([href, label]) => `<a class="tab${href === current ? " on" : ""}" href="${href}"${href === current ? ' aria-current="page"' : ""}>${label}${href === "/demos" ? '<span class="count" hidden></span>' : ""}</a>`).join("")}</div>
     <div class="spacer pywebview-drag-region"></div>
@@ -224,6 +233,8 @@ function renderNav(current) {
 function setNavStatus(text, mode = "") {
   if (!navPill) return;
   navPill.hidden = !text;
+  navPill.className = "navpill" + (mode ? " " + mode : "");
+  navPill.title = text || "";      // the narrow window shows only its light
   navPill.firstElementChild.className = "dot" + (mode ? " " + mode : "");
   navPill.lastElementChild.textContent = text || "";
 }
@@ -306,7 +317,8 @@ function Carousel(root, {slideMs = 7000, onPlay} = {}) {
   const show = i => {
     si = (i + slides.length) % slides.length;
     [...scenes.children].forEach((n, j) => n.classList.toggle("on", j === si));
-    [...copy.children].forEach((n, j) => { n.classList.toggle("on", j === si); n.setAttribute("aria-hidden", j === si ? "false" : "true"); });
+    // A slide out of view is inert too: its buttons leave the Tab order, not only the screen.
+    [...copy.children].forEach((n, j) => { n.classList.toggle("on", j === si); n.setAttribute("aria-hidden", j === si ? "false" : "true"); n.inert = j !== si; });
     [...tabs.children].forEach((n, j) => {
       n.classList.remove("on");
       n.classList.toggle("seen", j < si);

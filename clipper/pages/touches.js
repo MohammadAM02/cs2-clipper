@@ -8,8 +8,7 @@
 const PAGE = location.pathname;
 const PC = onThisPC();
 const PAGES = [["/status", "Status"], ["/demos", "Demos to grab"], ["/reels", "Reels"], ["/settings", "Settings"]];
-const MAP_TINT = {Mirage: "#E7C995", Inferno: "#E59A7A", Nuke: "#8FC9C4", Ancient: "#B9C98F", Dust2: "#D9B57A",
-  Anubis: "#7FC4B8", Train: "#B8BEC6", Vertigo: "#A9C4E8", Overpass: "#9DB7A5"};
+const MAP_TINT = MAP_TINTS;        // app.js: the map tiles wear the same colours
 const STRIP_FRAMES = 12;           // as many frames as the app cuts into a Reel's strip (web.py, STRIP_FRAMES)
 
 // --- what Settings says, remembered for the next page so it applies before the app answers ------------------

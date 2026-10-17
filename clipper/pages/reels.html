@@ -32,7 +32,8 @@
 <script>
 // Reels (spec: Pages -> Reels): every match's Highlights. A click on a Highlight plays it from your view in a
 // player that opens under it; the player switches to the Enemy POV, and shares: Copy file (paste it into Discord),
-// an export that fits Discord, a 9:16 one, and Show in folder.
+// an export that fits Discord, a 9:16 one, and Show in folder. A match's Breaks (the talk at halftime and around
+// each overtime, both teams' voices) sit between its rounds and play the same way.
 const HEIGHT = {ACE: 36, "5K": 36, "4K": 30, "3K": 24, "2K": 18};
 // The two views a Reel can be rendered from: the words of its button and of the toasts about it.
 const VIEWS = {
@@ -78,6 +79,16 @@ function highlightRow(h) {
   </div>`;
 }
 
+// One Break: a row like a Highlight's, with your view only. CSS writes its label in capitals, as it does "Round 8".
+function breakRow(b) {
+  const name = b.label === "HALFTIME" ? "Halftime" : b.label.replace(" HALF", " half");
+  return `<div class="hl" data-after="${+b.after_round}" data-player="${+b.reel}" data-enemy="" data-scrub="${+b.reel}" data-secs="${+b.secs || 0}">
+    <span class="rd">${esc(name)}</span>${hitBurst("TALK")}
+    <span class="tags"><span class="tag">Both teams' voices</span><span class="views">Your view</span></span>
+    <button class="pov play" data-reel="${+b.reel}" aria-label="Play the talk at ${esc(name.toLowerCase())}">${ICON.play}Play</button>
+  </div>`;
+}
+
 // The player under a Highlight: the video, the views it has, and the ways to share the one playing.
 function playerPanel(row) {
   const has = view => row.dataset[view] !== "";
@@ -109,7 +120,9 @@ function renderButtons(m) {
 }
 
 function matchBlock(m) {
-  const rows = m.highlights.filter(keep);
+  const rows = [...m.highlights.filter(keep).map(h => [h.round, highlightRow(h)]),        // each Break after its round
+    ...(filter === "all" ? m.breaks || [] : []).map(b => [b.after_round + 0.5, breakRow(b)])]
+    .sort((a, b) => a[0] - b[0]).map(([, html]) => html);
   const byRound = {};
   m.highlights.forEach(h => { byRound[h.round] = h; });
   const cells = Array.from({length: rounds(m.score)}, (_, i) => {
@@ -126,7 +139,7 @@ function matchBlock(m) {
       ${ICON.chev}
     </button>
     <div class="collapse"><div>
-      ${rows.length ? rows.map(highlightRow).join("") : '<p class="empty" style="padding:16px 22px">No Highlights of this kind in this match.</p>'}
+      ${rows.length ? rows.join("") : '<p class="empty" style="padding:16px 22px">No Highlights of this kind in this match.</p>'}
       ${PC ? `<div class="mfoot">${renderButtons(m)}<button class="ghost" data-open="${esc(m.checksum)}">${ICON.folder}Open folder</button></div>` : ""}
     </div></div>
   </section>`;

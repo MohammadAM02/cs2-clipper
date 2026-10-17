@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from clipper.model import ClipFile
+from clipper.model import Break, ClipFile
 
 CLIP_NAME = re.compile(r"^sequence-(\d+)-tick-(\d+)-to-(\d+)\.mp4$", re.IGNORECASE)
 ABORTED = "aborted: FACEIT AC started during the render"
@@ -27,6 +27,7 @@ class RenderRequest:
     width: int = 1920
     height: int = 1080
     checksum: str = ""          # the Demo's match, whose analysis the plan is made from
+    breaks: tuple[Break, ...] = ()      # recorded too, in the player view, with every player's voice
 
     def __post_init__(self) -> None:
         if not 1 <= len(self.outputs) <= 2:
@@ -47,6 +48,7 @@ class RenderResult:
     aborted: bool = False
     failure: str | None = None
     clips: dict[str, tuple[ClipFile, ...]] = field(default_factory=dict)     # by Perspective: the views that recorded
+    breaks: tuple[tuple[Break, ClipFile], ...] = ()     # each Break recorded, with its Clip, which `clips` leaves out
 
 
 @dataclass(frozen=True)

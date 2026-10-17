@@ -23,7 +23,7 @@ from clipper import cs2_paths, hlae_files, hlae_plan, winjob
 from clipper.hlae_files import MuxError
 from clipper.hlae_plan import PlanError, RenderInputs, Sequence
 from clipper.media import MediaError
-from clipper.model import ClipFile
+from clipper.model import Break, ClipFile
 from clipper.procs import HOOKED_FLAG, ProcessProbe
 from clipper.render import ABORTED, RenderProgress, RenderRequest, RenderResult, find_clips
 from clipper.windows import keep_awake
@@ -424,7 +424,9 @@ def render(
     `cs2_settings_dir` while it records, so the player's own are left as they are. What happens goes into
     `req.log_path` as it happens. A launch that fails once the first view is recorded keeps that view's Clips in the
     result. `progress` is told how far the launch has got; one that raises is said once in the log, and the job goes
-    on. `video` is what the cfg files record with (the HUD settings among them), which the mux has to expect too."""
+    on. `video` is what the cfg files record with (the HUD settings among them), which the mux has to expect too.
+    Each of `req.breaks` is recorded in the player view (`hlae_plan.add_breaks`) and comes back with its Clip in the
+    result's `breaks`, not among the view's `clips`."""
     req.log_path.parent.mkdir(parents=True, exist_ok=True)
     with keep_awake(), open(req.log_path, "w", encoding="utf-8", errors="replace", newline="\n") as log_file:
 
@@ -433,6 +435,7 @@ def render(
             log_file.flush()                # the Status page shows the log while the Render Job runs
 
         progress_failed = False
+        recorded: dict[int, Break] = {}         # the Break each Sequence that records one records, by its number
 
         def report(update: RenderProgress) -> None:
             """Hands `update` to the caller. A callback that raises is said once, and the Render Job goes on."""
@@ -455,7 +458,8 @@ def render(
                         say(f"    {line}")
                 else:
                     say("nothing written to console.log since the launch")
-            return RenderResult(ok=False, failure=text, clips=clips or {})
+            kept, breaks = _breaks_apart(clips or {}, recorded)
+            return RenderResult(ok=False, failure=text, clips=kept, breaks=breaks)
 
         def join(views: list[tuple[str, list[Sequence]]]) -> tuple[dict[str, tuple[ClipFile, ...]], str | None]:
             """Joins what HLAE recorded for each of `views`, in order, into the Clips of its output folder. Returns the
@@ -505,11 +509,16 @@ def render(
                 sequences = hlae_plan.build_sequences(
                     inputs, req.steamid, event=req.event, perspective=perspective, rounds=req.rounds,
                     padding_before_s=req.padding_before_s, padding_after_s=req.padding_after_s)
+                view_breaks: dict[int, Break] = {}
+                if perspective == "player" and req.breaks:
+                    sequences, view_breaks = hlae_plan.add_breaks(sequences, req.breaks, req.steamid, inputs.tickrate)
                 if not sequences:
                     return fail("nothing to record")
                 if planned:         # the second view's Sequences are numbered on from the first view's
                     offset = len(planned[0][1])
                     sequences = [replace(sequence, number=sequence.number + offset) for sequence in sequences]
+                    view_breaks = {number + offset: view_breaks[number] for number in view_breaks}
+                recorded.update(view_breaks)
                 planned.append((perspective, sequences))
             files = hlae_plan.script(
                 planned[0][1], inputs, demo_path=req.demo_path, raw_dir=raw_dir, settings=video,
@@ -578,4 +587,15 @@ def render(
         if problem is not None:
             return fail(problem, console, clips)
         say(f"done: {_plural(sum(len(found) for found in clips.values()), 'Clip')}")
-        return RenderResult(ok=True, clips=clips)
+        kept, breaks = _breaks_apart(clips, recorded)
+        return RenderResult(ok=True, clips=kept, breaks=breaks)
+
+
+def _breaks_apart(clips: dict[str, tuple[ClipFile, ...]], recorded: dict[int, Break],
+                  ) -> tuple[dict[str, tuple[ClipFile, ...]], tuple[tuple[Break, ClipFile], ...]]:
+    """`clips` without the Clips of the Breaks, and each Break `recorded` names by its Sequence's number with its Clip."""
+    kept = {perspective: tuple(clip for clip in found if clip.sequence not in recorded)
+            for perspective, found in clips.items()}
+    breaks = tuple((recorded[clip.sequence], clip) for found in clips.values() for clip in found
+                   if clip.sequence in recorded)
+    return kept, breaks

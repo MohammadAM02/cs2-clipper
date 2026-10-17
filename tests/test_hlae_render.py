@@ -18,6 +18,7 @@ import pytest
 from clipper import hlae_render
 from clipper.hlae_plan import Kill, Player, RenderInputs, Round, VideoSettings
 from clipper.media import MediaError
+from clipper.model import Break
 from clipper.render import ABORTED, RenderRequest
 from tests.fixtures import MATCH_CHECKSUM, SUBJECT
 
@@ -273,12 +274,12 @@ def game(numbers=(1, 2), *, quits=True, closes=True) -> list[tuple]:
     return script
 
 
-def two_views_game(*, second=(3, 4), quits=True, closes=True) -> list[tuple]:
-    """A game of two views: the player view's Sequences 1 and 2, then the demo starts again (`again`, and `go2` at its
+def two_views_game(*, first=(1, 2), second=(3, 4), quits=True, closes=True) -> list[tuple]:
+    """A game of two views: the player view's Sequences `first`, then the demo starts again (`again`, and `go2` at its
     first tick), then the enemy view's `second`, as the plan of two views has them."""
     script = [(2, "hlae_exits", 0), (4, "cs2_up"), (15, "line", ran("go"))]
     at = 17
-    for number in (1, 2):
+    for number in first:
         script += sequence_events(number, at)
         at += 15
     script += [(at - 4, "line", ran("again")), (at - 2, "line", ran("go2"))]
@@ -367,6 +368,36 @@ def test_two_sequences_become_two_clips_and_nothing_is_left_behind(world, req):
     assert_clean(world)
     assert len(world.launches) == 1 and world.kills == 0 and world.hlae_ended == 0
 
+
+
+HALFTIME = Break(12, 80000, 82240, "HALFTIME")
+BREAK_CLIP = "sequence-3-tick-80000-to-82240.mp4"
+
+
+def test_a_break_is_recorded_with_the_player_view_and_comes_back_apart_from_its_clips(world, req):
+    world.scripts = [game((1, 2, 3))]
+    result = run(world, replace(req, breaks=(HALFTIME,)))
+    assert result.ok
+    assert [clip.path.name for clip in result.clips["player"]] == [CLIP_1, CLIP_2]
+    assert [(found, clip.path.name) for found, clip in result.breaks] == [(HALFTIME, BREAK_CLIP)]
+    assert (req.outputs["player"] / BREAK_CLIP).is_file()
+
+
+def test_the_enemy_view_records_no_break(world, both):
+    world.scripts = [two_views_game(first=(1, 2, 3), second=(4, 5))]
+    result = run(world, replace(both, breaks=(HALFTIME,)))
+    assert result.ok
+    assert [clip.sequence for clip in result.clips["enemy"]] == [4, 5]
+    assert [(found, clip.sequence) for found, clip in result.breaks] == [(HALFTIME, 3)]
+
+
+def test_a_launch_that_fails_during_the_second_view_keeps_the_break_of_the_first(world, both):
+    world.scripts = [[event for event in two_views_game(first=(1, 2, 3), second=(4,), quits=False, closes=False)
+                      if event[1:] != ("line", ran("s4_end"))]]
+    result = run(world, replace(both, breaks=(HALFTIME,)))
+    assert result.failure == "stalled: no progress for 30s after 'recording 4'"
+    assert [clip.path.name for clip in result.clips["player"]] == [CLIP_1, CLIP_2]
+    assert [(found, clip.path.name) for found, clip in result.breaks] == [(HALFTIME, BREAK_CLIP)]
 
 def test_the_raw_recordings_are_joined_with_the_ffmpeg_it_was_given(world, req):
     world.scripts = [game()]

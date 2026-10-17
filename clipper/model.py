@@ -42,6 +42,18 @@ class Highlight:
 
 
 @dataclass(frozen=True)
+class Break:
+    """The talk between two rounds where the sides switch or an overtime starts (`breaks.windows`): from the end of
+    the round it follows to the end of the next round's freeze time. A Break someone talks in gets one Reel, of your
+    view, with every player's voice in it."""
+
+    after_round: int
+    start_tick: int
+    end_tick: int
+    label: str          # "HALFTIME", "OT 1", "OT 1 HALF", ...
+
+
+@dataclass(frozen=True)
 class MatchInfo:
     """A match as seen from the subject's team."""
 

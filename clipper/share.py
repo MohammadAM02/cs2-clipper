@@ -49,9 +49,10 @@ def _clean(text: str) -> str:
 
 
 def reel_name(highlight_type: str, map_name: str, round_number: int, nickname: str, perspective: str) -> str:
-    """What a Reel's file is called, without ".mp4": "ACE Dust2 R9 s1mple", and " (Enemy POV)" for the other view."""
+    """What a Reel's file is called, without ".mp4": "ACE Dust2 R9 s1mple", and " (Enemy POV)" for the other view. A
+    round number under 1 is no round: a Break's Reel is "HALFTIME Dust2 s1mple"."""
     kind = "ACE" if highlight_type.upper() in ("ACE", "5K") else highlight_type.upper()
-    parts = [kind, map_label(map_name), f"R{round_number}", _clean(nickname)]
+    parts = [kind, map_label(map_name), f"R{round_number}" if round_number >= 1 else "", _clean(nickname)]
     name = _clean(" ".join(part for part in parts if part))
     return name + (" (Enemy POV)" if perspective == "enemy" else "")
 
@@ -65,7 +66,8 @@ def match_folder(map_name: str, played_at: str, team_score: int, opponent_score:
 def title(highlight_type: str, map_name: str, round_number: int, nickname: str) -> Title:
     kind = "ACE" if highlight_type.upper() in ("ACE", "5K") else highlight_type.upper()
     who = [_clean(nickname)] if _clean(nickname) else []
-    return Title(kind, " · ".join([*who, map_label(map_name), f"Round {round_number}"]))
+    where = [f"Round {round_number}"] if round_number >= 1 else []         # a Break is of no round
+    return Title(kind, " · ".join([*who, map_label(map_name), *where]))
 
 
 def copy_to_clipboard(path: Path, run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> None:

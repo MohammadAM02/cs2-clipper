@@ -26,7 +26,7 @@ from clipper.faceit import FaceitError
 from clipper.faceit_oauth import OAuthError
 from clipper.footprint import Usage
 from clipper.index import Index
-from clipper.model import FaceitStats, Highlight, MatchInfo
+from clipper.model import Break, FaceitStats, Highlight, MatchInfo
 from clipper.packaged import PAGE_FILES
 from clipper.render import RenderProgress
 from clipper.settings import FIELDS, KEY_FIELD, SECRET_FIELD, STORED_KEY, Loaded, SettingsStore
@@ -835,6 +835,19 @@ def test_api_reels_shape(tmp_path, index):
     assert isinstance(h["player"], int)
     assert (h["player_s"], h["enemy_s"]) == (12.5, None)      # how long each Reel runs, for the hover scrub
 
+
+
+def test_api_reels_lists_a_matchs_breaks_apart_from_its_highlights(tmp_path, index):
+    highlight_id = _reels_index(index)
+    index.save_reel(highlight_id, "player", tmp_path / "r8-player.mp4", 12.5)
+    index.save_breaks(REEL_MATCH.checksum, [Break(12, 70000, 72240, "HALFTIME"), Break(24, 150000, 152240, "OT 1")])
+    index.save_reel(index.breaks(REEL_MATCH.checksum)[0]["id"], "player", tmp_path / "HALFTIME Mirage.mp4", 35.0)
+
+    match = pc_get(app_for(tmp_path).test_client(), "/api/reels").get_json()[0]
+
+    assert [h["round"] for h in match["highlights"]] == [8]
+    assert [(b["label"], b["after_round"], b["secs"]) for b in match["breaks"]] == [("HALFTIME", 12, 35.0)]
+    assert isinstance(match["breaks"][0]["reel"], int)
 
 def test_a_phone_watches_reels_the_page_and_its_list(client):
     assert phone_get(client, "/api/reels").status_code == 200

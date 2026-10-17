@@ -278,8 +278,9 @@ def _render_options(index: Index, config: Config, checksum: str) -> tuple[list[s
 
 
 def reels_row(index: Index, match: sqlite3.Row, config: Config) -> dict:
-    """One entry of `/api/reels`: `match`'s Reels, in round order, and the views the Reels page can render for it:
-    `rendering` (asked for, not done yet) and `can_render` (see `_render_options`) (spec: Pages, Reels)."""
+    """One entry of `/api/reels`: `match`'s Reels, in round order, its Breaks' Reels (your view only), and the views
+    the Reels page can render for it: `rendering` (asked for, not done yet) and `can_render` (see `_render_options`)
+    (spec: Pages, Reels)."""
     highlights = [
         {"round": h["round"], "type": h["type"], "reasons": json.loads(h["reasons"]),
          "player": h["player_reel_id"], "enemy": h["enemy_reel_id"],
@@ -291,6 +292,8 @@ def reels_row(index: Index, match: sqlite3.Row, config: Config) -> dict:
         "checksum": match["checksum"], "map": map_label(match["map"]), "played_at": match["played_at"],
         "score": f"{match['team_score']}–{match['opponent_score']}", "result": match["result"],
         "highlights": highlights,
+        "breaks": [{"label": b["label"], "after_round": b["after_round"], "reel": b["reel_id"], "secs": b["duration_s"]}
+                   for b in index.match_breaks(match["checksum"])],
         "rendering": rendering,
         "can_render": [perspective for perspective in PERSPECTIVES if refusals[perspective] is None],
     }

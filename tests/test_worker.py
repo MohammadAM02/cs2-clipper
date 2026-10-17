@@ -8,10 +8,12 @@ import pytest
 from clipper import share
 from clipper.config import Config
 from clipper.gate import GateStatus
+from clipper.hlae_plan import RenderInputs, Round
 from clipper.index import Index
-from clipper.model import ClipFile, Highlight, MatchInfo
+from clipper.model import Break, ClipFile, Highlight, MatchInfo
 from clipper.render import ABORTED, RenderProgress, RenderResult
 from clipper.state import AppState
+from clipper.voice import VoiceError
 from clipper.worker import (
     QUIT_ABORT, DeleteRequest, Services, StopRequest, Worker, delete_demo, prune_renders, reel_path, rename_old_reels,
 )
@@ -23,6 +25,11 @@ SECOND_CHECKSUM = "00000000000000b2"
 MATCH = MatchInfo(checksum=MATCH_CHECKSUM, map_name="de_inferno",
                   played_at=datetime(2026, 9, 22, 9, 39, 14, tzinfo=timezone.utc),
                   team_score=13, opponent_score=5)
+# Round 12 ends at 81477 and round 13's freeze time ends at 84000: the halftime is between them.
+INPUTS = RenderInputs(tickrate=64.0, tick_count=130_000, kills=(), players=(),
+                      rounds=(Round(12, end_tick=81477, freeze_time_end_tick=73000),
+                              Round(13, end_tick=89000, freeze_time_end_tick=84000)))
+HALFTIME = Break(12, 81477, 84000, "HALFTIME")
 
 
 class FakeIntake:
@@ -42,6 +49,7 @@ class FakeFacts:
         self.checksums = {SECOND_DEMO: SECOND_CHECKSUM}
         self.kept: set[str] = set()
         self.analyzed: list[str] = []
+        self.inputs = INPUTS
 
     def analyze(self, dem, log_path):
         self.analyzed.append(dem.name)
@@ -57,6 +65,24 @@ class FakeFacts:
 
     def round_facts(self, checksum, steamid):
         return list(self.facts)
+
+    def render_inputs(self, checksum):
+        return self.inputs
+
+
+class FakeTalk:
+    """The voice in a Demo: the ticks of its voice messages (none, unless a test gives some), or an error."""
+
+    def __init__(self):
+        self.ticks: list[int] = []
+        self.error: Exception | None = None
+        self.read: list[str] = []
+
+    def __call__(self, dem):
+        self.read.append(dem.name)
+        if self.error is not None:
+            raise self.error
+        return self.ticks
 
 
 class FakeGate:
@@ -85,6 +111,16 @@ def clips_of(request):
     }
 
 
+def breaks_of(request):
+    """What a render of `request` gives back for its Breaks: each one's Clip, in your view's folder."""
+    folder = request.outputs.get("player")
+    if folder is None:
+        return ()
+    return tuple((found, ClipFile(sequence=100 + n, start_tick=found.start_tick, end_tick=found.end_tick,
+                                  path=folder / f"sequence-{100 + n}.mp4", duration_s=35.0))
+                 for n, found in enumerate(request.breaks))
+
+
 class FakeRender:
     """Succeeds with one Clip per requested round, unless canned results are queued: a RenderResult, or a function
     of the request that gives one (for a partial result, whose Clips depend on the request)."""
@@ -98,7 +134,7 @@ class FakeRender:
         if self.results:
             result = self.results.pop(0)
             return result(request) if callable(result) else result
-        return RenderResult(ok=True, clips=clips_of(request))
+        return RenderResult(ok=True, clips=clips_of(request), breaks=breaks_of(request))
 
 
 class FakeClock:
@@ -126,6 +162,7 @@ class World:
     deletes: DeleteRequest
     clock: FakeClock
     buttons: list                                     # each toast's buttons, in the order the toasts went out
+    talk: FakeTalk
 
     def add_demo(self, name: str = DEMO_NAME, sha256: str = "0" * 64) -> int:
         file_name = f"{name}.dem.zst"
@@ -152,7 +189,7 @@ def world(tmp_path):
                  index_path=tmp_path / "clipper.sqlite", analyses_dir=tmp_path / "analyses")
     index = Index(cfg.index_path)
     facts, gate, render, notices, buttons = FakeFacts(), FakeGate(), FakeRender(), [], []
-    state, stop, deletes, clock = AppState(), StopRequest(), DeleteRequest(), FakeClock()
+    state, stop, deletes, clock, talk = AppState(), StopRequest(), DeleteRequest(), FakeClock(), FakeTalk()
     services = Services(
         intake=FakeIntake(),
         unpack=lambda archive, out_dir: _write(out_dir / archive.name.removesuffix(".zst")),
@@ -164,9 +201,10 @@ def world(tmp_path):
         notify=lambda title, body, actions=(): notices.append((title, body)) or buttons.append(actions),
         sleep=lambda seconds: None,
         clock=clock,
+        talk_ticks=talk,
     )
     worker = Worker(cfg, index, services, state=state, stop=stop, deletes=deletes)
-    yield World(cfg, index, services, worker, facts, gate, render, notices, state, stop, deletes, clock, buttons)
+    yield World(cfg, index, services, worker, facts, gate, render, notices, state, stop, deletes, clock, buttons, talk)
     index.close()
 
 
@@ -471,6 +509,57 @@ def test_a_match_without_frags_finishes_without_rendering(world):
     assert world.index.demo(demo_id)["state"] == "done"
     assert world.render.calls == []
     assert world.notices == []
+
+
+
+def test_a_break_someone_talks_in_is_recorded_with_your_view_and_gets_a_reel(world):
+    world.talk.ticks = [82000] * 100                  # a second of talk in the halftime
+    demo_id = world.add_demo()
+    world.ticks(9)
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert [call.breaks for call in world.render.calls] == [(HALFTIME,), ()]       # your view, then the Enemy POV
+    [half] = world.index.match_breaks(MATCH_CHECKSUM)
+    assert (half["after_round"], half["label"], half["duration_s"]) == (12, "HALFTIME", 4.0)
+    assert Path(world.index.reel_details(half["reel_id"])["path"]).name == "HALFTIME Inferno.mp4"
+    assert world.index.reel_count(MATCH_CHECKSUM) == 11
+    assert world.titles() == ["Rendering highlights", "Highlights ready", "Rendering highlights", "Enemy POV ready"]
+    assert world.notices[1][1].startswith("5 Highlights from de_inferno are ready.")
+
+
+def test_a_break_nobody_talks_in_is_not_recorded(world):
+    world.talk.ticks = [82000] * 99                   # under a second
+    world.add_demo()
+    world.ticks(9)
+    assert [call.breaks for call in world.render.calls] == [(), ()]
+    assert world.index.breaks(MATCH_CHECKSUM) == []
+
+
+def test_a_demo_whose_voice_cannot_be_read_still_gets_its_highlights(world, caplog):
+    world.talk.error = VoiceError("match.dem is not a CS2 demo")
+    demo_id = world.add_demo()
+    with caplog.at_level(logging.WARNING):
+        world.ticks(9)
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert world.render.calls[0].breaks == ()
+    assert world.index.reel_count(MATCH_CHECKSUM) == 10
+    assert "match.dem is not a CS2 demo" in caplog.text
+
+
+def test_a_match_without_frags_is_not_read_for_voice(world):
+    world.facts.facts = ()
+    world.add_demo()
+    world.ticks(4)
+    assert world.talk.read == []
+
+
+def test_a_break_the_render_did_not_record_gets_no_reel_and_holds_nothing_up(world):
+    world.talk.ticks = [82000] * 100
+    world.render.results = [lambda request: RenderResult(ok=True, clips=clips_of(request))] * 2
+    demo_id = world.add_demo()
+    world.ticks(9)
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert world.index.match_breaks(MATCH_CHECKSUM) == []
+    assert world.index.reel_count(MATCH_CHECKSUM) == 10
 
 
 class FailingAlerts:

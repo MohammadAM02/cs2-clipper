@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from clipper.model import ClipFile, FaceitStats, Highlight, MatchInfo
+from clipper.model import Break, ClipFile, FaceitStats, Highlight, MatchInfo
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS demos (
@@ -303,6 +303,40 @@ class Index:
     def selected_highlights(self, checksum: str) -> list[sqlite3.Row]:
         return self._all(
             "SELECT * FROM highlights WHERE match_checksum = ? AND selected = 1 ORDER BY round", (checksum,)
+        )
+
+    # Breaks live in the highlights table, so their Clips and Reels are like any others: the Reels page plays, copies
+    # and exports them by Reel id. A Break is the row of round -N, N the round it follows, with its label as the type,
+    # and it is never selected. The table keeps one row per round number, and builds of the app that know nothing of
+    # Breaks share this database: they list selected rows only.
+
+    def save_breaks(self, checksum: str, breaks: Iterable[Break]) -> None:
+        """Saved again, a Break is updated in place."""
+        for found in breaks:
+            self._db.execute(
+                "INSERT INTO highlights (match_checksum, round, type, score, reasons, frag_ticks,"
+                " round_start_tick, round_end_tick, selected) VALUES (?, ?, ?, 0, '[]', '[]', ?, ?, 0)"
+                " ON CONFLICT (match_checksum, round) DO UPDATE SET type = excluded.type,"
+                " round_start_tick = excluded.round_start_tick, round_end_tick = excluded.round_end_tick",
+                (checksum, -found.after_round, found.label, found.start_tick, found.end_tick),
+            )
+
+    def breaks(self, checksum: str) -> list[sqlite3.Row]:
+        """The match's Breaks in round order: each row's id, the round it follows, its label and its ticks."""
+        return self._all(
+            "SELECT id, -round AS after_round, type AS label, round_start_tick AS start_tick,"
+            " round_end_tick AS end_tick FROM highlights WHERE match_checksum = ? AND round < 0 ORDER BY round DESC",
+            (checksum,),
+        )
+
+    def match_breaks(self, checksum: str) -> list[sqlite3.Row]:
+        """The match's Breaks that have their Reel (a Break has your view only), in round order, each with the round
+        it follows, its label, and its Reel's id and length in seconds."""
+        return self._all(
+            "SELECT -h.round AS after_round, h.type AS label, r.id AS reel_id, r.duration_s"
+            " FROM highlights h JOIN reels r ON r.highlight_id = h.id AND r.perspective = 'player'"
+            " WHERE h.match_checksum = ? AND h.round < 0 ORDER BY h.round DESC",
+            (checksum,),
         )
 
     # --- Render Jobs, Clips and Reels --------------------------------------------------------------

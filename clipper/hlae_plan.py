@@ -36,8 +36,10 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
+
+from clipper.model import Break
 
 ENTRY = "cs2clipper"        # CS2 starts with `+exec cs2clipper`; every other cfg file is named after it
 AGAIN = f"{ENTRY}_again"    # a second view: the demo starts again, as this cfg does it
@@ -47,6 +49,7 @@ SECOND_GO = f"{ENTRY}_go2"  # and plays from its first tick, as `cs2clipper_go` 
 # another this close after it carries on into it.
 MERGE_GAP_S = 2.0
 EXTEND_WITHIN_S = 10.0
+MIN_BREAK_S = 10.0     # a Break cut down to less than this, around the Sequences of its rounds, is left out
 
 # When the console script acts. Nothing runs before FIRST_TICK, as in CS:DM (`getValidTick`): the game may skip
 # the first ticks after it loads a demo. A Sequence is approached PREROLL_S before its first tick; the demo
@@ -91,6 +94,7 @@ class RenderInputs:
     kills: tuple[Kill, ...]         # by tick
     rounds: tuple[Round, ...]       # by number
     players: tuple[Player, ...]
+    max_rounds: int = 24            # of regulation: FACEIT plays MR12
 
 
 @dataclass(frozen=True)
@@ -111,6 +115,7 @@ class Sequence:
     end_tick: int
     cameras: tuple[tuple[int, str], ...]        # (tick, steam id): whom the camera follows from that tick on
     notices: tuple[NoticePlayer, ...] = ()      # empty: every death notice shows
+    all_voices: bool = False                    # every player's voice, whatever the settings say (a Break)
 
 
 class PlanError(Exception):
@@ -247,6 +252,43 @@ def _rounds_sequences(
         sequences.append(Sequence(len(sequences) + 1, start, end, ((start, steamid),)))
     return sequences
 
+
+
+def add_breaks(sequences: Iterable[Sequence], breaks: Iterable[Break], steamid: str,
+               tickrate: float) -> tuple[list[Sequence], dict[int, Break]]:
+    """`sequences` and a Sequence for each of `breaks`, numbered again from 1 in start order, and the Break each new
+    Sequence records, by its number. A Break's Sequence follows `steamid`, aimed again halfway (by then everyone is
+    alive in the next round's freeze time), with every player's voice. It keeps clear of the other Sequences with room
+    to set each up: a Break one runs into or out of is cut to its longest free stretch, and left out when that is
+    shorter than MIN_BREAK_S."""
+    room = _ticks(tickrate, HANDOFF_S) + _ticks(tickrate, CAMERA_S) + 1     # after an end, till the next start
+    placed: list[tuple[Sequence, Break | None]] = [(sequence, None) for sequence in sequences]
+    for found in breaks:
+        stretch = _free_stretch(found.start_tick, found.end_tick,
+                                [(sequence.start_tick - room, sequence.end_tick + room) for sequence, _ in placed])
+        if stretch is None or stretch[1] - stretch[0] < _ticks(tickrate, MIN_BREAK_S):
+            continue
+        start, end = stretch
+        cameras = ((start, steamid), (_round_half_up((start + end) / 2), steamid))
+        placed.append((Sequence(0, start, end, cameras, all_voices=True), found))
+    placed.sort(key=lambda pair: pair[0].start_tick)
+    numbered = [replace(sequence, number=number) for number, (sequence, _) in enumerate(placed, start=1)]
+    return numbered, {number: found for number, (_, found) in enumerate(placed, start=1) if found is not None}
+
+
+def _free_stretch(start: int, end: int, taken: list[tuple[int, int]]) -> tuple[int, int] | None:
+    """The longest part of `start` to `end` outside each (first, last) of `taken`, which it may touch, or None."""
+    stretches = []
+    cursor = start
+    for low, high in sorted(taken):
+        if low > cursor:
+            stretches.append((cursor, min(low, end)))
+        cursor = max(cursor, high)
+        if cursor >= end:
+            break
+    if cursor < end:
+        stretches.append((cursor, end))
+    return max(stretches, key=lambda stretch: stretch[1] - stretch[0], default=None)
 
 def clip_name(sequence: Sequence) -> str:
     """The file CS:DM names the Clip of `sequence` (3.20.1, `get-sequence-output-file-path.ts`), which
@@ -442,8 +484,8 @@ def _cameras(sequence: Sequence, slots: dict[str, int]) -> tuple[int | None, lis
 
 def _pinned_lines(settings: VideoSettings) -> list[str]:
     """What CS:DM sends at the first valid tick for every Sequence (3.20.1, `create-cs2-video-json-file.ts`).
-    A Render Job pins the settings, so they are the same for all of them and are sent once."""
-    voices = -1 if settings.player_voices_enabled else 0
+    A Render Job pins the settings, so they are the same for all of them and are sent once. The voices are not among
+    them: a Break has every voice, so each Sequence sets them up (`_prepare_lines`)."""
     return [
         "sv_cheats 1",
         "volume 1",
@@ -458,8 +500,6 @@ def _pinned_lines(settings: VideoSettings) -> list[str]:
         f"cl_draw_only_deathnotices {_flag(settings.show_only_death_notices)}",
         f"mirv_deathmsg lifetime {settings.death_notices_duration:g}",
         "mirv_deathmsg filter clear",
-        f"tv_listen_voice_indices {voices}",
-        f"tv_listen_voice_indices_h {voices}",
     ]
 
 
@@ -468,12 +508,15 @@ def _prepare_lines(sequence: Sequence, folder: str, settings: VideoSettings) -> 
     number = sequence.number
     preset = f"{ENTRY}Preset{number}"       # one per Sequence, as each records into a folder of its own
     quality = settings.output_parameters or f"-crf {settings.constant_rate_factor:g}"      # either, not both
+    voices = -1 if sequence.all_voices or settings.player_voices_enabled else 0     # -1: every player, both halves
     lines = [
         f"mirv_streams record startMovieWav {_flag(settings.record_audio)}",
         f'mirv_streams record name "{folder}"',
         "mirv_deathmsg clear",
         f"spec_show_xray {_flag(settings.show_xray)}",
         f"mp_display_kill_assists {_flag(settings.show_assists)}",
+        f"tv_listen_voice_indices {voices}",
+        f"tv_listen_voice_indices_h {voices}",
         # the quotes inside the preset are {QUOTE}, and two backslashes come before the file
         f'mirv_streams settings add ffmpeg {preset} "-c:v {settings.video_codec} -pix_fmt yuv420p {quality} '
         f'{{QUOTE}}{folder}\\\\video.{settings.container}{{QUOTE}}"',

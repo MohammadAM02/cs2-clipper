@@ -117,6 +117,7 @@ def render_inputs(data: Data) -> RenderInputs:
                      for r in sorted(data["rounds"], key=lambda r: r["number"])),
         players=tuple(Player(steam_id=_steam_id(p["steamId"]), name=p["name"], slot=p["userId"] + 1)
                       for p in sorted(data["players"].values(), key=lambda p: p["name"])),
+        max_rounds=data.get("maxRounds") or 24,
     )
 
 

@@ -1,12 +1,13 @@
 import json
 import sqlite3
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from clipper.index import Index
-from clipper.model import ClipFile, FaceitStats, Highlight, MatchInfo
+from clipper.model import Break, ClipFile, FaceitStats, Highlight, MatchInfo
 
 MATCH = MatchInfo(checksum="aea4e59ccfc6c962", map_name="de_inferno",
                   played_at=datetime(2026, 9, 22, 9, 39, 14, tzinfo=timezone.utc),
@@ -287,6 +288,46 @@ def test_clips_come_from_finished_renders_in_tick_order(index):
     # the stored path is the one handed in (relative to the clips folder), not the file's own
     assert [row["path"] for row in index.clips_for(highlight_id, "player")] == ["b.mp4", "c.mp4"]
 
+
+
+HALFTIME = Break(12, 72031, 74271, "HALFTIME")
+OVERTIME = Break(24, 150000, 152240, "OT 1")
+
+
+def test_a_break_is_kept_beside_the_highlight_of_the_round_it_follows(index):
+    index.save_highlights(MATCH.checksum, [highlight(12, 80, 70000)], {12})
+    index.save_breaks(MATCH.checksum, [OVERTIME, HALFTIME])
+    assert [(row["after_round"], row["label"], row["start_tick"], row["end_tick"])
+            for row in index.breaks(MATCH.checksum)] == [(12, "HALFTIME", 72031, 74271), (24, "OT 1", 150000, 152240)]
+    assert [row["round"] for row in index.selected_highlights(MATCH.checksum)] == [12]
+
+
+def test_saving_breaks_again_updates_them_in_place(index):
+    index.save_breaks(MATCH.checksum, [HALFTIME])
+    first = index.breaks(MATCH.checksum)[0]["id"]
+    index.save_breaks(MATCH.checksum, [replace(HALFTIME, start_tick=72100)])
+    assert [(row["id"], row["start_tick"]) for row in index.breaks(MATCH.checksum)] == [(first, 72100)]
+
+
+def test_scoring_the_match_again_leaves_its_breaks_alone(index):
+    index.save_breaks(MATCH.checksum, [HALFTIME])
+    index.save_highlights(MATCH.checksum, [highlight(12, 80, 70000)], {12})
+    assert [row["label"] for row in index.breaks(MATCH.checksum)] == ["HALFTIME"]
+
+
+def test_a_breaks_reel_is_listed_apart_from_the_highlights_reels(index):
+    index.save_match(MATCH)
+    index.save_highlights(MATCH.checksum, [highlight(12, 80, 70000)], {12})
+    index.save_breaks(MATCH.checksum, [HALFTIME, OVERTIME])
+    twelve = index.selected_highlights(MATCH.checksum)[0]["id"]
+    index.save_reel(twelve, "player", "r12.mp4", 15.0)
+    half = index.breaks(MATCH.checksum)[0]["id"]
+    index.save_reel(half, "player", "half.mp4", 35.0)
+    assert [(row["after_round"], row["label"], row["duration_s"])
+            for row in index.match_breaks(MATCH.checksum)] == [(12, "HALFTIME", 35.0)]
+    assert [row["round"] for row in index.match_reels(MATCH.checksum)] == [12]
+    assert index.reel_details(index.best_reel(MATCH.checksum, "player"))["path"] == "r12.mp4"
+    assert index.reel_details(index.match_breaks(MATCH.checksum)[0]["reel_id"])["type"] == "HALFTIME"
 
 def test_one_reel_per_highlight_and_perspective(index):
     index.save_match(MATCH)

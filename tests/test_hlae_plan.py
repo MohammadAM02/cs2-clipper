@@ -1,12 +1,14 @@
 """The HLAE plan: the Sequences a request records, and the console script that records them through HLAE.
 Everything here is pure: no CS2 and no HLAE."""
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from clipper import analysis, hlae_plan, render
 from clipper.hlae_plan import Kill, NoticePlayer, Player, RenderInputs, Round, Sequence, build_sequences
+from clipper.model import Break
 from tests import csda_json
 from tests.fixtures import SUBJECT
 
@@ -347,8 +349,6 @@ def test_the_go_cfg_sends_the_pinned_settings_once_and_hands_over_to_the_first_s
         "cl_draw_only_deathnotices 1",
         "mirv_deathmsg lifetime 5",
         "mirv_deathmsg filter clear",
-        "tv_listen_voice_indices -1",
-        "tv_listen_voice_indices_h -1",
         "exec cs2clipper_s1",
     ]
 
@@ -360,14 +360,13 @@ def test_the_video_settings_change_what_is_sent():
         constant_rate_factor=18, container="mkv")
     files = plan_script(two_sequences(), settings=settings)
     go = cfg_lines(files, "cs2clipper_go")
-    for line in ("cl_demo_predict 1", "cl_draw_only_deathnotices 0", "mirv_deathmsg lifetime 8",
-                 "tv_listen_voice_indices 0", "tv_listen_voice_indices_h 0"):
+    for line in ("cl_demo_predict 1", "cl_draw_only_deathnotices 0", "mirv_deathmsg lifetime 8"):
         assert line in go
-    assert "tv_listen_voice_indices -1" not in go
     prepare = cfg_lines(files, "cs2clipper_s1_prepare")
     for line in ("mirv_streams record startMovieWav 0", "spec_show_xray 0", "mp_display_kill_assists 0",
-                 "mirv_streams record fps 30"):
+                 "tv_listen_voice_indices 0", "tv_listen_voice_indices_h 0", "mirv_streams record fps 30"):
         assert line in prepare
+    assert "tv_listen_voice_indices -1" not in prepare
     [preset] = [line for line in prepare if line.startswith("mirv_streams settings add ffmpeg")]
     assert preset == ('mirv_streams settings add ffmpeg cs2clipperPreset1 "-c:v libx265 -pix_fmt yuv420p -crf 18 '
                       '{QUOTE}' + RAW_1 + r'\\video.mkv{QUOTE}"')
@@ -416,19 +415,21 @@ def test_a_sequences_cfg_schedules_its_steps_then_seeks_to_where_it_lands():
 
 def test_the_prepare_cfg_sets_up_the_recording():
     lines = cfg_lines(plan_script(two_sequences()), "cs2clipper_s1_prepare")
-    assert lines[:9] == [
+    assert lines[:11] == [
         "mirv_streams record startMovieWav 1",
         f'mirv_streams record name "{RAW_1}"',
         "mirv_deathmsg clear",
         "spec_show_xray 1",
         "mp_display_kill_assists 1",
+        "tv_listen_voice_indices -1",
+        "tv_listen_voice_indices_h -1",
         'mirv_streams settings add ffmpeg cs2clipperPreset1 "-c:v libx264 -pix_fmt yuv420p -crf 23 '
         + "{QUOTE}" + RAW_1 + r"\\video.mp4{QUOTE}" + '"',
         "mirv_streams record screen settings cs2clipperPreset1",
         "mirv_streams record fps 60",
         "mirv_deathmsg filter clear",
     ]
-    assert lines[9] == "mirv_deathmsg filter add block=1"       # nothing shows but what is allowed below
+    assert lines[11] == "mirv_deathmsg filter add block=1"       # nothing shows but what is allowed below
     allowed = []
     for player in PLAYERS:
         allowed += [
@@ -436,7 +437,59 @@ def test_the_prepare_cfg_sets_up_the_recording():
             f"mirv_deathmsg filter add attackerMatch=x{player.steam_id} "
             f"attackerIsLocal={1 if player.steam_id == SUBJECT else 0} block=0",
         ]
-    assert lines[10:] == allowed
+    assert lines[12:] == allowed
+
+
+def test_a_sequence_with_every_voice_has_them_whatever_the_setting_and_the_next_goes_back():
+    first, second = two_sequences()
+    files = plan_script([replace(first, all_voices=True), second],
+                        settings=hlae_plan.VideoSettings(player_voices_enabled=False))
+    assert {"tv_listen_voice_indices -1", "tv_listen_voice_indices_h -1"} <= set(
+        cfg_lines(files, "cs2clipper_s1_prepare"))
+    assert {"tv_listen_voice_indices 0", "tv_listen_voice_indices_h 0"} <= set(
+        cfg_lines(files, "cs2clipper_s2_prepare"))
+
+
+HALFTIME = Break(12, 20000, 22240, "HALFTIME")
+
+
+def spans(sequences):
+    return [(sequence.number, sequence.start_tick, sequence.end_tick, sequence.all_voices) for sequence in sequences]
+
+
+def test_a_break_is_a_sequence_of_its_own_that_follows_the_subject_with_every_voice():
+    sequences, recorded = hlae_plan.add_breaks(two_sequences(), [HALFTIME], SUBJECT, 64.0)
+    assert spans(sequences) == [(1, 10235, 10491, False), (2, 20000, 22240, True), (3, 29872, 30128, False)]
+    assert recorded == {2: HALFTIME}
+    # the camera is aimed again halfway, by when everyone is alive in the next round's freeze time
+    assert sequences[1].cameras == ((20000, SUBJECT), (21120, SUBJECT))
+    assert sequences[1].notices == ()
+
+
+def test_a_break_starts_late_enough_after_a_sequence_that_runs_into_it_to_be_set_up():
+    sequences, recorded = hlae_plan.add_breaks(kills_plan([kill(20050, round_number=12)]), [HALFTIME], SUBJECT, 64.0)
+    # 0.5 s to hand over and 0.5 s to aim the camera, and a tick
+    assert spans(sequences) == [(1, 19922, 20178, False), (2, 20243, 22240, True)]
+    assert recorded == {2: HALFTIME}
+    plan_script(sequences)
+
+
+def test_a_break_ends_early_enough_before_a_sequence_that_starts_inside_it():
+    sequences, _ = hlae_plan.add_breaks(kills_plan([kill(22300, round_number=13)]), [HALFTIME], SUBJECT, 64.0)
+    assert spans(sequences) == [(1, 20000, 22107, True), (2, 22172, 22428, False)]
+    plan_script(sequences)
+
+
+def test_a_sequence_inside_a_break_leaves_it_the_longer_side():
+    sequences, _ = hlae_plan.add_breaks(kills_plan([kill(20300, round_number=12)]), [HALFTIME], SUBJECT, 64.0)
+    assert spans(sequences) == [(1, 20172, 20428, False), (2, 20493, 22240, True)]
+
+
+def test_a_break_left_with_under_ten_seconds_is_not_recorded():
+    kills = kills_plan([kill(20628, round_number=12)], before=2.0, after=20.0)     # 20500 to 21908
+    sequences, recorded = hlae_plan.add_breaks(kills, [HALFTIME], SUBJECT, 64.0)
+    assert spans(sequences) == [(1, 20500, 21908, False)]
+    assert recorded == {}
 
 
 def test_every_sequence_gets_its_own_folder_and_preset():

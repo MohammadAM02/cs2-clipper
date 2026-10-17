@@ -20,12 +20,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
 
-from clipper import links, share
+from clipper import links, share, voice
+from clipper.breaks import talking, windows
 from clipper.config import Config
 from clipper.gate import CS2_REASON, FACEIT_REASON, STEAM_REASON, GateStatus
+from clipper.hlae_plan import RenderInputs
 from clipper.index import Index
 from clipper.join import JoinError, assign_clips
-from clipper.model import MatchInfo, RoundFacts
+from clipper.model import Break, MatchInfo, RoundFacts
 from clipper.render import RenderProgress, RenderRequest, RenderResult
 from clipper.scoring import score_match, select
 from clipper.state import AppState, Rendering, view_name, views_label
@@ -65,6 +67,7 @@ class FactsSource(Protocol):
     def has(self, checksum: str) -> bool: ...
     def match_info(self, checksum: str, steamid: str) -> MatchInfo | None: ...
     def round_facts(self, checksum: str, steamid: str) -> list[RoundFacts]: ...
+    def render_inputs(self, checksum: str) -> RenderInputs | None: ...
 
 
 class GateLike(Protocol):
@@ -181,6 +184,7 @@ class Services:
     clock: Callable[[], float] = time.monotonic
     alerts: AlertsStep | None = None
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
+    talk_ticks: Callable[[Path], list[int]] = voice.talk_ticks     # the tick of each voice message in a .dem
 
 
 def _fresh_dir(path: Path) -> Path:
@@ -443,7 +447,22 @@ class Worker:
         highlights = score_match(facts)
         chosen = select(highlights, self.cfg.top_n)
         self.index.save_highlights(demo["match_checksum"], highlights, {h.round for h in chosen})
+        if chosen:                                    # a Break is recorded with the Highlights, never by itself
+            self._find_breaks(demo)
         self.index.advance(demo["id"], "scored")
+
+    def _find_breaks(self, demo) -> None:
+        """Keeps the match's Breaks someone talks in, for its render to record in your view. A Demo whose voice
+        cannot be read keeps none and goes on to render its Highlights."""
+        inputs = self.services.facts.render_inputs(demo["match_checksum"])
+        if inputs is None:
+            return
+        try:
+            ticks = self.services.talk_ticks(Path(demo["dem_path"]))
+        except (OSError, voice.VoiceError) as exc:
+            log.warning("demo #%s: no Breaks, as its voice could not be read: %s", demo["id"], exc)
+            return
+        self.index.save_breaks(demo["match_checksum"], talking(windows(inputs.rounds, inputs.max_rounds), ticks))
 
     def _queue_renders(self, demo) -> None:
         if not self.index.selected_highlights(demo["match_checksum"]):
@@ -597,6 +616,7 @@ class Worker:
             width=self.cfg.video_size[0],
             height=self.cfg.video_size[1],
             checksum=demo["match_checksum"],
+            breaks=self._breaks(demo) if any(job["perspective"] == "player" for job in jobs) else (),
         )
         try:
             result = self.services.render(
@@ -651,7 +671,16 @@ class Worker:
         for number, clips in groups.items():
             for clip in clips:
                 self.index.add_clip(job["id"], ids[number], clip, self.cfg.store_path(clip.path))
+        if job["perspective"] == "player":            # a Break is recorded in your view only
+            breaks = {row["after_round"]: row["id"] for row in self.index.breaks(demo["match_checksum"])}
+            for found, clip in result.breaks:
+                if found.after_round in breaks:
+                    self.index.add_clip(job["id"], breaks[found.after_round], clip, self.cfg.store_path(clip.path))
         return None
+
+    def _breaks(self, demo) -> tuple[Break, ...]:
+        return tuple(Break(row["after_round"], row["start_tick"], row["end_tick"], row["label"])
+                     for row in self.index.breaks(demo["match_checksum"]))
 
     def _back_to_back(self, demo_id: int) -> bool:
         """True when the last render not aborted was of this same Demo and ended less than BACK_TO_BACK_SECONDS
@@ -726,6 +755,18 @@ class Worker:
                                 perspective)
                 duration = self.services.join(clips, out)
                 self.index.save_reel(highlight["id"], perspective, self.cfg.store_path(out), duration)
+        if "player" in rendered:
+            self._join_breaks(demo)
+
+    def _join_breaks(self, demo) -> None:
+        """Each Break your view recorded becomes its Reel, of its one Clip. One the render had no room for among the
+        Highlights' Sequences (`hlae_plan.add_breaks`) has no Clip and gets none."""
+        for row in self.index.breaks(demo["match_checksum"]):
+            clips = [self.cfg.load_path(clip["path"]) for clip in self.index.clips_for(row["id"], "player")]
+            if not clips or self.index.has_reel(row["id"], "player"):
+                continue
+            out = reel_path(self.index, self.cfg, demo["match_checksum"], 0, row["label"], "player")
+            self.index.save_reel(row["id"], "player", self.cfg.store_path(out), self.services.join(clips, out))
 
     def _finish(self, demo) -> None:
         asked = self.index.asked_renders(demo["id"])

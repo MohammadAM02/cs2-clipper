@@ -24,6 +24,13 @@ def test_a_matchs_folder_is_its_day_map_and_score():
     assert share.match_folder("de_dust2", "2026-10-12T18:00:00+00:00", 13, 9)[:10] in ("2026-10-12", "2026-10-13")
 
 
+
+def test_a_reel_of_no_round_names_none():
+    # a Break: the index keeps it under the negative of the round it follows
+    assert share.reel_name("HALFTIME", "de_mirage", -12, "s1mple", "player") == "HALFTIME Mirage s1mple"
+    assert share.reel_name("OT 1 HALF", "de_mirage", 0, "", "player") == "OT 1 HALF Mirage"
+    assert share.title("HALFTIME", "de_mirage", -12, "s1mple") == Title("HALFTIME", "s1mple · Mirage")
+
 def test_the_title_card_says_what_who_where_and_when():
     assert share.title("ACE", "de_dust2", 9, "s1mple") == Title("ACE", "s1mple · Dust2 · Round 9")
     assert share.title("3K", "de_nuke", 2, "") == Title("3K", "Nuke · Round 2")

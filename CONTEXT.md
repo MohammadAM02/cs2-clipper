@@ -48,6 +48,12 @@ _Avoid_: Video, highlight video, montage
 A single video file containing several Clips concatenated in Sequence order.
 _Avoid_: Montage (that is an edit), compilation, highlight video
 
+**Break**:
+The talk between two rounds where the sides switch or an overtime starts: halftime, and the start and the half of
+each overtime. A Break someone talks in becomes one Clip of the subject's POV with every player's voice in it, both
+teams'.
+_Avoid_: Timeout (that is a team's pause), halftime clip
+
 **Render Job**:
 The unit of work that turns one Highlight into one Clip.
 _Avoid_: Task, encode job, export

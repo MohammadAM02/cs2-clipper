@@ -7,20 +7,25 @@ and every render read that copy."""
 
 from __future__ import annotations
 
+import ctypes
 import json
+import logging
 import re
 import shutil
 import subprocess
 import tempfile
 from collections import defaultdict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from clipper import paths, winjob
+from clipper import paths, replay, stats, winjob
 from clipper.hlae_plan import Kill, Player, RenderInputs, Round
 from clipper.model import MatchInfo, RoundFacts
+
+log = logging.getLogger(__name__)
 
 ANALYZE_TIMEOUT_SECONDS = 600      # csda reads a Demo in seconds; it never launches CS2, so stopping it orphans nothing
 KEPT = ("checksum", "date", "mapName", "tickrate", "tickCount", "demoFileName", "source", "type", "serverName",
@@ -121,6 +126,59 @@ def render_inputs(data: Data) -> RenderInputs:
     )
 
 
+def stats_match(data: Data) -> stats.Match:
+    """What the match's stats are worked out from: csda's players, rounds, Frags, damage, flashes, bomb events and
+    clutches, in the records stats.py reads. csda's full output is needed: the kept copy has none of the damage,
+    flash or bomb events."""
+    return stats.Match(
+        checksum=str(data["checksum"]),
+        tickrate=float(data["tickrate"]),
+        players=tuple(stats.Player(_steam_id(p["steamId"]), p["name"], p["team"]["name"])
+                      for p in data["players"].values()),
+        rounds=tuple(stats.Round(r["number"], r["startTick"], r["endTick"], r["winnerName"],
+                                 str(r.get("endReason", "")))
+                     for r in data["rounds"]),
+        kills=tuple(stats.Kill(k["tick"], k["roundNumber"], _steam_id(k["killerSteamId"]),
+                               _steam_id(k["victimSteamId"]), _steam_id(k.get("assisterSteamId")), k["weaponName"],
+                               bool(k["isHeadshot"]), bool(k.get("isAssistedFlash")))
+                    for k in data["kills"]),
+        damages=tuple(stats.Damage(d["roundNumber"], _steam_id(d["attackerSteamId"]), _steam_id(d["victimSteamId"]),
+                                   d["healthDamage"], d["weaponName"])
+                      for d in data.get("damages", ())),
+        flashes=tuple(stats.Flash(f["tick"], f["roundNumber"], _steam_id(f["flasherSteamId"]),
+                                  _steam_id(f["flashedSteamId"]), float(f["duration"]))
+                      for f in data.get("playersFlashed", ())),
+        bombs=(
+            *(stats.Bomb(b["tick"], b["roundNumber"], "planted", _steam_id(b.get("planterSteamId")), b.get("site", ""))
+              for b in data.get("bombsPlanted", ())),
+            *(stats.Bomb(b["tick"], b["roundNumber"], "defused", _steam_id(b.get("defuserSteamId")), b.get("site", ""))
+              for b in data.get("bombsDefused", ())),
+            *(stats.Bomb(b["tick"], b["roundNumber"], "exploded", "", b.get("site", ""))
+              for b in data.get("bombsExploded", ())),
+        ),
+        clutches=tuple(stats.Clutch(c["roundNumber"], _steam_id(c["clutcherSteamId"]), c["opponentCount"],
+                                    bool(c["hasWon"]))
+                       for c in data.get("clutches", ())),
+    )
+
+
+@contextmanager
+def _below_normal_thread() -> Iterator[None]:
+    """This thread at below-normal priority while it works, as the renders beside it run: Windows only, a no-op
+    anywhere else."""
+    kernel = getattr(getattr(ctypes, "windll", None), "kernel32", None)
+    if kernel is None:
+        yield
+        return
+    handle = kernel.GetCurrentThread()
+    previous = kernel.GetThreadPriority(handle)
+    kernel.SetThreadPriority(handle, -1)                 # THREAD_PRIORITY_BELOW_NORMAL
+    try:
+        yield
+    finally:
+        kernel.SetThreadPriority(handle, previous)
+
+
 def run_logged(command: list[str], log_path: Path) -> int:
     """Run `command`, keep what it printed in `log_path`, and give its exit code. Runs inside the app's
     kill-on-close job object, and is killed on a timeout or any other failure, as subprocess.run would. Below normal
@@ -174,9 +232,44 @@ class Analyses:
             if not is_checksum(checksum):
                 raise RuntimeError(f"csda gave {checksum[:40]!r}, which is not a checksum")
             paths.atomic_write_text(self._path(checksum), json.dumps(trim(data), separators=(",", ":")))
+            self._write_stats(checksum, data)
             return checksum
         finally:
             shutil.rmtree(output, ignore_errors=True)
+
+    def _stats_path(self, checksum: str) -> Path:
+        return self._path(checksum).with_name(f"{checksum}.stats.json")
+
+    def _write_stats(self, checksum: str, data: Data) -> None:
+        """Works out the match's stats from csda's full output and keeps them beside the analysis. A failure is logged,
+        not raised: the analysis is kept either way, and the stats can be worked out again later."""
+        try:
+            with _below_normal_thread():
+                worked = stats.compute(stats_match(data))
+        except Exception:  # noqa: BLE001 - the stats must never stop the pipeline
+            log.exception("could not work out the stats of match %s", checksum)
+            return
+        paths.atomic_write_text(self._stats_path(checksum), json.dumps(worked, separators=(",", ":")))
+
+    def stats(self, checksum: str) -> dict[str, Any] | None:
+        """The match's stats, or None when they have not been worked out."""
+        try:
+            return json.loads(self._stats_path(checksum).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+
+    def has_stats(self, checksum: str) -> bool:
+        return self._stats_path(checksum).is_file()
+
+    def add_faceit(self, checksum: str, lines: Mapping[str, Mapping[str, Any]]) -> bool:
+        """Adds each player's FACEIT line (by SteamID64, see `stats.attach_faceit`) to the match's stats. False when
+        the match has no stats to add them to."""
+        worked = self.stats(checksum)
+        if worked is None:
+            return False
+        paths.atomic_write_text(self._stats_path(checksum),
+                                json.dumps(stats.attach_faceit(worked, lines), separators=(",", ":")))
+        return True
 
     def _load(self, checksum: str) -> dict[str, Any]:
         try:
@@ -189,6 +282,42 @@ class Analyses:
 
     def forget(self, checksum: str) -> None:
         self._path(checksum).unlink(missing_ok=True)
+        self._stats_path(checksum).unlink(missing_ok=True)
+        self._positions_path(checksum).unlink(missing_ok=True)
+
+    def _positions_path(self, checksum: str) -> Path:
+        return self._path(checksum).with_name(f"{checksum}.positions.json")
+
+    def positions(self, checksum: str, dem: Path, log_path: Path) -> Path:
+        """Runs csda with -positions on `dem`, the Demo of match `checksum` (which must have its analysis), and keeps
+        one sample a second of each player's position. csda's own output, which is large, is removed afterwards."""
+        tickrate = float(self._load(checksum)["tickrate"])
+        self.folder.mkdir(parents=True, exist_ok=True)
+        output = Path(tempfile.mkdtemp(prefix="csda-positions-", dir=self.folder))
+        try:
+            code = self._run([str(self.csda_exe), "-demo-path", str(dem), "-output", str(output), "-format", "json",
+                              "-minify", "-positions", "-source", "faceit"], log_path)
+            written = output / f"{dem.stem}.json"
+            if not written.is_file():
+                raise RuntimeError(f"csda wrote no positions (exit code {code}): see {log_path.name}")
+            rows = replay.sample_file(written, tickrate)
+            if not rows:
+                raise RuntimeError(f"csda gave no player positions: see {log_path.name}")
+            paths.atomic_write_text(self._positions_path(checksum),
+                                    json.dumps(replay.document(checksum, tickrate, rows), separators=(",", ":")))
+            return self._positions_path(checksum)
+        finally:
+            shutil.rmtree(output, ignore_errors=True)
+
+    def has_positions(self, checksum: str) -> bool:
+        return self._positions_path(checksum).is_file()
+
+    def positions_of(self, checksum: str) -> dict[str, Any] | None:
+        """The match's sampled positions, or None when they have not been worked out."""
+        try:
+            return json.loads(self._positions_path(checksum).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
 
     def match_info(self, checksum: str, steamid: str) -> MatchInfo | None:
         return match_info(self._load(checksum), steamid)

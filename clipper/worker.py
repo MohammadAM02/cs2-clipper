@@ -82,6 +82,11 @@ class AlertsStep(Protocol):
     def check_now(self) -> str | None: ...
 
 
+class StatsBackfillLike(Protocol):
+    def tick(self, clear: Callable[[], bool]) -> None: ...
+    def add_faceit(self, demo, checksum: str) -> None: ...
+
+
 class StopRequest:
     """How the app asks the worker to stop. "after_render": a running render finishes, then no new
     step. "now": a running render is aborted the way a FACEIT AC abort stops it. Thread-safe: the
@@ -183,6 +188,7 @@ class Services:
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], float] = time.monotonic
     alerts: AlertsStep | None = None
+    stats_backfill: StatsBackfillLike | None = None
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
     talk_ticks: Callable[[Path], list[int]] = voice.talk_ticks     # the tick of each voice message in a .dem
 
@@ -214,11 +220,12 @@ def delete_demo(index: Index, cfg: Config, demo_id: int) -> bool:
         shutil.rmtree(renders, ignore_errors=True)
         if renders.exists():
             log.warning("demo #%s: could not remove all of %s", demo_id, renders)
-        analysis = cfg.analyses_dir / f"{checksum}.json"
-        try:
-            analysis.unlink(missing_ok=True)
-        except OSError as exc:
-            log.warning("demo #%s: could not remove %s: %s", demo_id, analysis, exc)
+        for analysis in (cfg.analyses_dir / f"{checksum}.json", cfg.analyses_dir / f"{checksum}.stats.json",
+                         cfg.analyses_dir / f"{checksum}.positions.json"):
+            try:
+                analysis.unlink(missing_ok=True)
+            except OSError as exc:
+                log.warning("demo #%s: could not remove %s: %s", demo_id, analysis, exc)
     log.info("demo #%s deleted: %s", demo_id, demo["file_name"])
     return True
 
@@ -334,8 +341,9 @@ class Worker:
                              perspective, removed, "" if removed == 1 else "s")
             render_turn_taken = False
             demos = self.index.demos_in(ACTIVE_STATES)
-            if demos and self.services.gate.cs2_running():
-                self._waiting_reasons = (CS2_REASON,)  # someone is playing: no unpack, analysis, render or join
+            held = self._held_by_game() if demos else None
+            if held:
+                self._waiting_reasons = (held,)  # someone is playing, or FACEIT AC runs: no unpack, analysis, render or join
                 demos = []
             for demo in demos:
                 if self.stop.stopping():
@@ -347,6 +355,11 @@ class Worker:
                 self._step(demo["id"])
             if self.stop.stopping():
                 return
+            if self.services.stats_backfill is not None and not demos:
+                try:
+                    self.services.stats_backfill.tick(lambda: self._held_by_game() is None)
+                except Exception:  # noqa: BLE001 - the stats are a side job: they never stop the pipeline
+                    log.exception("stats backfill failed")
             if self.services.alerts is not None:
                 try:
                     self.services.alerts.tick()
@@ -430,6 +443,8 @@ class Worker:
             raise Skip("the subject's SteamID is not in this match")
         self.index.save_match(info)
         self.index.advance(demo["id"], "analyzed", match_checksum=checksum)
+        if self.services.stats_backfill is not None:
+            self.services.stats_backfill.add_faceit(demo, checksum)
 
     def _ensure_analysis(self, demo) -> None:
         """Analyze the Demo again when the app has no analysis of its match, as for a Demo analyzed before
@@ -689,6 +704,14 @@ class Worker:
             return False
         last_demo_id, ended = self._last_render
         return last_demo_id == demo_id and self.services.clock() - ended < BACK_TO_BACK_SECONDS
+
+    def _held_by_game(self) -> str | None:
+        """What keeps the Demo steps waiting: CS2 open, or FACEIT AC running. Nothing heavy runs while either is."""
+        if self.services.gate.cs2_running():
+            return CS2_REASON
+        if self.services.gate.faceit_running():
+            return FACEIT_REASON
+        return None
 
     def _gate_is_clear(self) -> bool:
         status = self.services.gate.check()

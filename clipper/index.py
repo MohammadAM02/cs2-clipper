@@ -286,6 +286,10 @@ class Index:
     def match(self, checksum: str) -> sqlite3.Row | None:
         return self._one("SELECT * FROM matches WHERE checksum = ?", (checksum,))
 
+    def other_matches(self, checksum: str) -> list[sqlite3.Row]:
+        """Every match but `checksum`, most recently played first."""
+        return self._all("SELECT * FROM matches WHERE checksum != ? ORDER BY played_at DESC", (checksum,))
+
     def save_highlights(self, checksum: str, highlights: Iterable[Highlight], selected_rounds: set[int]) -> None:
         for h in highlights:
             self._db.execute(
@@ -404,6 +408,31 @@ class Index:
             " WHERE c.highlight_id = ? AND j.perspective = ? AND j.state = 'done' ORDER BY c.start_tick",
             (highlight_id, perspective),
         )
+
+    def clip_moments(self, checksum: str, round_number: int, tick: int, tickrate: float) -> list[dict]:
+        """Where `tick` falls in the Reels of its round's Highlight: one entry per perspective whose rendered Clip spans
+        the tick, with the Reel's id and how many seconds into that Reel the tick is (its Clips joined in Tick order).
+        Raw Clips are pruned once their match is done, so the Reel is what the page can play."""
+        spans = self._all(
+            "SELECT c.start_tick, c.highlight_id, j.perspective, r.id AS reel_id FROM clips c"
+            " JOIN render_jobs j ON j.id = c.render_job_id JOIN highlights h ON h.id = c.highlight_id"
+            " LEFT JOIN reels r ON r.highlight_id = h.id AND r.perspective = j.perspective"
+            " WHERE h.match_checksum = ? AND h.round = ? AND j.state = 'done' AND c.start_tick <= ? AND c.end_tick >= ?"
+            " ORDER BY j.perspective",
+            (checksum, round_number, tick, tick),
+        )
+        moments = []
+        for row in spans:
+            if row["reel_id"] is None:
+                continue
+            before = self._one(
+                "SELECT COALESCE(SUM(c.duration_s), 0) FROM clips c JOIN render_jobs j ON j.id = c.render_job_id"
+                " WHERE c.highlight_id = ? AND j.perspective = ? AND j.state = 'done' AND c.start_tick < ?",
+                (row["highlight_id"], row["perspective"], row["start_tick"]),
+            )[0]
+            moments.append({"reel_id": row["reel_id"], "perspective": row["perspective"],
+                            "seconds": round(before + (tick - row["start_tick"]) / tickrate, 2)})
+        return moments
 
     def save_reel(self, highlight_id: int, perspective: str, path: Path | str, duration_s: float) -> None:
         """`path` is stored as given: the app passes `Config.store_path` (relative to the clips folder),
@@ -613,6 +642,11 @@ class Index:
         )
 
     # --- App state -----------------------------------------------------------------------------------
+
+    def flags_with_prefix(self, prefix: str) -> list[str]:
+        """The keys of the flags whose names start with `prefix`."""
+        rows = self._all("SELECT key FROM app_state WHERE substr(key, 1, ?) = ?", (len(prefix), prefix))
+        return [row["key"] for row in rows]
 
     def get_flag(self, key: str, default: str | None = None) -> str | None:
         row = self._one("SELECT value FROM app_state WHERE key = ?", (key,))

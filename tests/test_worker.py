@@ -89,12 +89,13 @@ class FakeGate:
     def __init__(self):
         self.reasons: tuple[str, ...] = ()
         self.playing = False                          # CS2 open: then the worker moves no Demo at all
+        self.faceit_open = False                      # FACEIT AC running: the same, for the Demo steps
 
     def check(self):
         return GateStatus(ok=not self.reasons, reasons=self.reasons)
 
     def faceit_running(self):
-        return False
+        return self.faceit_open
 
     def cs2_running(self):
         return self.playing

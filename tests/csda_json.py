@@ -69,7 +69,8 @@ MATCH: dict[str, Any] = {
         kill(30000, 4, SUBJECT, OTHER_ENEMY),                                # a round with no row
     ],
     "clutches": [{"roundNumber": 3, "clutcherSteamId": int(SUBJECT), "opponentCount": 2, "hasWon": True}],
-    "damages": [{"tick": 3000, "healthDamage": 100}],
+    "damages": [{"tick": 3000, "roundNumber": 1, "attackerSteamId": int(SUBJECT), "victimSteamId": int(ENEMY),
+                 "healthDamage": 100, "weaponName": "AK-47"}],
     "playerPositions": [{"tick": 3000, "x": 1.0}],
     "grenadePositions": [],
     "shots": [{"tick": 2999}],

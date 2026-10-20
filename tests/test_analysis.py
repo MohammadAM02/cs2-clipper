@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from clipper import analysis
+from clipper import analysis, stats
 from clipper.hlae_plan import Kill, Player, Round
 from clipper.model import MatchInfo, RoundFacts
 from tests.csda_json import (ALLY, BRAVO, CHECKSUM, DEMO_NAME, ENEMY, MATCH, OTHER_ENEMY, SUBJECT, kill,
@@ -145,7 +145,8 @@ def test_analyze_runs_csda_and_keeps_its_analysis_by_checksum(tmp_path, dem):
                        "-format", "json", "-minify", "-source", "faceit"]
     saved = tmp_path / "analyses" / f"{CHECKSUM}.json"
     assert json.loads(saved.read_text(encoding="utf-8")) == analysis.trim(MATCH)
-    assert sorted(p.name for p in (tmp_path / "analyses").iterdir()) == [saved.name]   # csda's own file is gone
+    assert sorted(p.name for p in (tmp_path / "analyses").iterdir()) == \
+        [f"{CHECKSUM}.json", f"{CHECKSUM}.stats.json"]          # csda's own file is gone
     assert store.has(CHECKSUM)
 
 
@@ -181,12 +182,38 @@ def test_a_match_without_an_analysis(tmp_path):
         store.match_info("fedcba9876543210", SUBJECT)
 
 
-def test_forget_removes_a_kept_analysis(tmp_path, dem):
+def test_forget_removes_a_kept_analysis_and_its_stats(tmp_path, dem):
     store = analysis.Analyses(tmp_path / "analyses", tmp_path / "csda.exe", run=FakeCsda())
     store.analyze(dem, tmp_path / "analyze.log")
+    assert store.has_stats(CHECKSUM)
     store.forget(CHECKSUM)
     store.forget(CHECKSUM)                           # already gone: nothing to do
     assert not store.has(CHECKSUM)
+    assert not store.has_stats(CHECKSUM)
+
+
+def test_analyze_works_out_the_match_stats_from_csdas_full_output(tmp_path, dem):
+    store = analysis.Analyses(tmp_path / "analyses", tmp_path / "csda.exe", run=FakeCsda())
+    store.analyze(dem, tmp_path / "analyze.log")
+    assert store.stats(CHECKSUM) == json.loads(json.dumps(stats.compute(analysis.stats_match(MATCH))))
+
+
+def test_a_stats_failure_keeps_the_analysis(tmp_path, dem):
+    broken = match(damages=[{"tick": 1}])            # a damage with none of the fields the stats read
+    store = analysis.Analyses(tmp_path / "analyses", tmp_path / "csda.exe", run=FakeCsda(broken))
+    assert store.analyze(dem, tmp_path / "analyze.log") == CHECKSUM
+    assert store.has(CHECKSUM)
+    assert not store.has_stats(CHECKSUM)
+
+
+def test_add_faceit_adds_each_players_line_to_the_stats(tmp_path, dem):
+    store = analysis.Analyses(tmp_path / "analyses", tmp_path / "csda.exe", run=FakeCsda())
+    assert store.add_faceit(CHECKSUM, {}) is False   # no stats worked out yet
+    store.analyze(dem, tmp_path / "analyze.log")
+    line = {SUBJECT: {"nickname": "subject-faceit", "stats": {"Kills": "9", "Headshots %": "50"}}}
+    assert store.add_faceit(CHECKSUM, line) is True
+    faceit = store.stats(CHECKSUM)["players"][SUBJECT]["faceit"]
+    assert (faceit["nickname"], faceit["kills"], faceit["hs_pct"]) == ("subject-faceit", 9.0, 50.0)
 
 
 def test_a_checksum_can_be_shorter_than_16_characters():

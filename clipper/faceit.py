@@ -174,6 +174,23 @@ class FaceitClient:
             penta_kills=_int(line.get("Penta Kills")),
         )
 
+    def match_lines(self, match_id: str) -> dict:
+        """Every player's line in a finished match, keyed by SteamID64. FACEIT's stats name each player by FACEIT id,
+        and the match's roster gives the SteamID64 of each FACEIT id, so the two are joined here."""
+        details = self._fetch(f"{DATA_API}/matches/{match_id}")
+        steam_of = {player["player_id"]: str(player["game_player_id"])
+                    for faction in details.get("teams", {}).values()
+                    for player in faction.get("roster", []) if player.get("game_player_id")}
+        lines: dict = {}
+        for rnd in self._fetch(f"{DATA_API}/matches/{match_id}/stats").get("rounds", []):
+            for team in rnd.get("teams", []):
+                for player in team.get("players", []):
+                    steam = steam_of.get(player.get("player_id"))
+                    if steam:
+                        lines[steam] = {"nickname": player.get("nickname", ""),
+                                        "stats": player.get("player_stats", {})}
+        return lines
+
     def details(self, match_id: str) -> MatchDetails:
         data = self._fetch(f"{DATA_API}/matches/{match_id}")
         url = data.get("faceit_url") or f"https://www.faceit.com/{{lang}}/cs2/room/{match_id}"

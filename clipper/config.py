@@ -51,6 +51,7 @@ class Config:
     logs_dir: Path = field(default_factory=paths.logs_dir)
     tools_dir: Path = field(default_factory=paths.tools_dir)
     analyses_dir: Path = field(default_factory=paths.analyses_dir)
+    radar_dir: Path = field(default_factory=paths.radar_dir)
     cs2_settings_dir: Path = field(default_factory=paths.cs2_settings_dir)
     ffmpeg: str = "ffmpeg"
     ffprobe: str = "ffprobe"

@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Replay</title>
+<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/touches.css">
+<style>
+  /* The replay's own pieces; colours and type are app.css's. */
+  .back { color: var(--muted); text-decoration: none; font: 700 14px var(--ui); letter-spacing: .06em; text-transform: uppercase; }
+  .back:hover { color: var(--ink); }
+  .rounds { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 12px; }
+  .rounds button { all: unset; cursor: pointer; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line2); font: 700 14px var(--ui); color: var(--ink2); }
+  .rounds button[aria-pressed="true"] { background: var(--accent); color: var(--k); border-color: var(--accent); }
+  .rounds button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .viewer { display: grid; grid-template-columns: minmax(0, 640px) minmax(220px, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .viewer { grid-template-columns: 1fr; } }
+  .stage { position: relative; width: min(100%, 640px); aspect-ratio: 1 / 1; background: #0A0806; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; max-width: 640px; }
+  .controls button { all: unset; cursor: pointer; padding: 7px 14px; border-radius: 8px; background: var(--panel2); border: 1px solid var(--line2); font: 700 14px var(--ui); color: var(--ink); }
+  .controls button:focus-visible, .controls select:focus-visible, .controls input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .controls select { background: var(--panel2); color: var(--ink); border: 1px solid var(--line2); border-radius: 8px; padding: 6px 8px; font: 700 14px var(--ui); }
+  .controls input[type="range"] { flex: 1 1 220px; accent-color: var(--accent); }
+  .clock { font: 600 14px var(--mono); color: var(--muted); min-width: 92px; text-align: right; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font: 600 14px var(--ui); color: var(--muted); margin: 8px 0; }
+  .legend i { display: inline-block; width: 11px; height: 11px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+  .feed { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); max-height: 520px; overflow: auto; }
+  .feed li { padding: 9px 14px; border-bottom: 1px solid var(--line); font: 600 15px var(--ui); display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+  .feed li:last-child { border-bottom: 0; }
+  .feed button { all: unset; cursor: pointer; display: flex; gap: 8px; flex-wrap: wrap; width: 100%; }
+  .feed button:hover b, .feed button:focus-visible b { color: var(--accent); }
+  .feed .t { font: 600 13px var(--mono); color: var(--muted); min-width: 46px; }
+  .feed .w { color: var(--dim); font-size: 13px; }
+  .feed .you { color: var(--accent); }
+  .note { color: var(--dim); font: 500 14px var(--body); margin: 8px 0 14px; max-width: 760px; }
+  .statebox { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); padding: 18px 20px; max-width: 760px; }
+  .statebox p { margin: 6px 0 0; color: var(--ink2); }
+  .statebox .ghost, .statebox .primary { margin-top: 12px; }
+</style>
+</head>
+<body>
+<script src="/app.js"></script>
+<script src="/nugget.js"></script>
+<script src="/touches.js" defer></script>
+<script>renderNav("/reels");</script>
+<main>
+  <p><a class="back" id="back" href="/reels">← Reels</a></p>
+  <section class="pagehead rise">
+    <h1 class="title" id="title">Replay</h1>
+    <div class="saybox"><p class="say" id="say">Loading…</p></div>
+  </section>
+  <div id="body"></div>
+</main>
+<script>
+// Replay (spec: Replay): a round of one match, drawn over the map's radar. Each player's place is known once a second
+// (from the Demo's positions), and the dots move between those places. The kill feed on the right jumps the replay to
+// each kill. Nothing here runs anything: the positions were worked out when the replay was asked for.
+const params = new URLSearchParams(location.search);
+const checksum = params.get("match") || "";
+let data = null;          // the /api/replay answer
+let byRound = {};         // round number -> steam id -> the player's samples, by tick
+let roundNo = +params.get("round") || 1;
+let t = 0;                // seconds into the round
+let playing = false, speed = 1, last = 0, pollTimer = null;
+const COLOR = {you: "#FF5500", other: "#7CC4FF", dead: "#8F857A", ink: "#F2EFEA", bomb: "#FFB27A"};
+const back = document.getElementById("back");
+back.href = `/stats?match=${encodeURIComponent(checksum)}`;
+
+function roundOf(n) { return (data?.rounds || []).find(r => r.number === n) || null; }
+function durationOf(r) { return Math.max(0, (r.end_tick - r.start_tick) / data.tickrate); }
+function nameOf(steam) { const p = (data?.players || []).find(x => x.steam_id === steam); return p ? p.name : "World"; }
+function teamOf(steam) { return (data?.players || []).find(x => x.steam_id === steam)?.team || ""; }
+function youTeam() { return (data?.players || []).find(x => x.you)?.team || ""; }
+function mmss(s) { return `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`; }
+
+// The map's world-to-picture arithmetic (radar.world_to_pixel): picture pixels, 1024 across for a radar.
+function toPicture(x, y) {
+  const m = data.radar;
+  const u = (x - m.pos_x) / m.scale, v = (m.pos_y - y) / m.scale;
+  return m.rotate === 1 ? [m.height - v, u] : [u, v];
+}
+
+// Sorts the samples into rounds and players, once, from the rows (fields in the order the server gives).
+function indexSamples() {
+  const at = Object.fromEntries(data.fields.map((f, i) => [f, i]));
+  byRound = {};
+  for (const row of data.samples || []) {
+    const round = row[at.round], steam = row[at.steam_id];
+    (byRound[round] ||= {})[steam] ||= [];
+    byRound[round][steam].push({tick: row[at.tick], x: row[at.x], y: row[at.y], alive: row[at.alive], health: row[at.health]});
+  }
+}
+
+// Where a player is at a tick: the samples either side, blended by time. Null when the round has none of them.
+function placeAt(steam, moment) {
+  const list = byRound[roundNo]?.[steam];
+  if (!list || !list.length) return null;
+  let lo = 0, hi = list.length - 1;
+  if (moment <= list[0].tick) return {...list[0]};
+  if (moment >= list[hi].tick) return list[hi];
+  while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (list[mid].tick <= moment) lo = mid; else hi = mid; }
+  const a = list[lo], b = list[hi], f = (moment - a.tick) / (b.tick - a.tick);
+  return {x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, alive: a.alive, health: a.health};
+}
+
+function draw() {
+  const canvas = document.getElementById("canvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d"), W = canvas.width, H = canvas.height, r = roundOf(roundNo);
+  ctx.clearRect(0, 0, W, H);
+  if (data.radar && radarImg.complete && radarImg.naturalWidth) ctx.drawImage(radarImg, 0, 0, W, H);
+  if (!r) return;
+  const now = r.start_tick + t * data.tickrate, size = data.radar.width;
+  const to = (x, y) => { const [px, py] = toPicture(x, y); return [px / size * W, py / size * H]; };
+  // kill and bomb moments that have just happened: a line from killer to victim, a flash on a bomb
+  for (const e of r.events) {
+    const age = t - (e.tick - r.start_tick) / data.tickrate;
+    if (age < 0 || age > 1.4) continue;
+    if (e.type === "kill" && e.killer) {
+      const k = placeAt(e.killer, e.tick), v = placeAt(e.victim, e.tick);
+      if (k && v) {
+        const [kx, ky] = to(k.x, k.y), [vx, vy] = to(v.x, v.y);
+        ctx.globalAlpha = 1 - age / 1.4;
+        ctx.strokeStyle = e.trade ? COLOR.you : COLOR.ink; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.moveTo(kx, ky); ctx.lineTo(vx, vy); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    }
+    if (e.type.startsWith("bomb_") && e.player) {
+      const p = placeAt(e.player, e.tick);
+      if (p) { const [bx, by] = to(p.x, p.y); ctx.strokeStyle = COLOR.bomb; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(bx, by, 16 * (1 - age / 1.4) + 6, 0, Math.PI * 2); ctx.stroke(); }
+    }
+  }
+  // the players, alive ones in colour and the dead as grey crosses
+  ctx.font = "700 13px 'Barlow Condensed', 'Arial Narrow', sans-serif";
+  ctx.textAlign = "center";
+  for (const p of data.players) {
+    const s = placeAt(p.steam_id, now);
+    if (!s) continue;
+    const [x, y] = to(s.x, s.y);
+    const mine = p.team === youTeam();
+    if (s.alive) {
+      ctx.fillStyle = mine ? COLOR.you : COLOR.other;
+      ctx.strokeStyle = "#0D0A08"; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, y, p.you ? 9 : 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = COLOR.ink;
+      ctx.fillText(p.name, x, y - 12);
+    } else {
+      ctx.strokeStyle = COLOR.dead; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(x - 6, y - 6); ctx.lineTo(x + 6, y + 6); ctx.moveTo(x + 6, y - 6); ctx.lineTo(x - 6, y + 6); ctx.stroke();
+    }
+  }
+  document.getElementById("clock").textContent = `${mmss(t)} / ${mmss(durationOf(r))}`;
+  document.getElementById("scrub").value = Math.round(t * 10);
+}
+
+let radarImg = new Image();
+function tick(now) {
+  if (playing) {
+    const r = roundOf(roundNo), dt = (now - last) / 1000;
+    t = Math.min(durationOf(r), t + dt * speed);
+    if (t >= durationOf(r)) playing = false;
+    draw();
+    updatePlayButton();
+  }
+  last = now;
+  if (playing) requestAnimationFrame(tick);
+}
+function updatePlayButton() { document.getElementById("play").textContent = playing ? "Pause" : "Play"; }
+
+function seek(seconds) { t = Math.max(0, seconds); draw(); }
+
+function renderRound() {
+  const r = roundOf(roundNo);
+  t = 0; playing = false;
+  document.querySelectorAll(".rounds button").forEach(b => b.setAttribute("aria-pressed", String(+b.dataset.round === roundNo)));
+  const feed = document.getElementById("feed");
+  const you = youTeam();
+  feed.innerHTML = r.events.length ? r.events.map(e => {
+    const at = (e.tick - r.start_tick) / data.tickrate;
+    if (e.type === "kill") {
+      const k = e.killer ? `<b class="${teamOf(e.killer) === you ? "you" : ""}">${esc(nameOf(e.killer))}</b>` : "<b>World</b>";
+      return `<li><button data-at="${at}" type="button"><span class="t">${mmss(at)}</span>${k}<span class="w">${esc(e.weapon)}</span><b>${esc(nameOf(e.victim))}</b>${e.headshot ? '<span class="w">HS</span>' : ""}${e.trade ? '<span class="w">trade</span>' : ""}</button></li>`;
+    }
+    const what = e.type === "bomb_planted" ? "Bomb planted" : e.type === "bomb_defused" ? "Bomb defused" : "Bomb exploded";
+    return `<li><button data-at="${at}" type="button"><span class="t">${mmss(at)}</span><b>${esc(what)}</b>${e.site ? `<span class="w">${esc(e.site)}</span>` : ""}</button></li>`;
+  }).join("") : '<li class="note" style="border:0">No kills or bomb events in this round.</li>';
+  const scrub = document.getElementById("scrub");
+  scrub.max = Math.round(durationOf(r) * 10);
+  scrub.value = 0;
+  document.getElementById("round-title").textContent = `Round ${r.number} · ${youTeam() && r.winner === youTeam() ? "You won" : "Enemy won"} · ${String(r.end_reason ?? "")}`;
+  draw();
+}
+
+function showState(html) {
+  document.getElementById("body").innerHTML = `<div class="statebox rise">${html}</div>`;
+}
+
+function renderPage() {
+  const title = document.getElementById("title"), say = document.getElementById("say");
+  title.textContent = `Replay, ${data.map}`;
+  if (data.state === "not_computed") {
+    say.textContent = "The stats of this match are still being worked out.";
+    showState(`<h2 class="h2">Not yet</h2><p>The replay needs the match's stats first. They are worked out when the match is analyzed.</p>`);
+    return;
+  }
+  if (data.state !== "ready") {
+    const waiting = data.state === "requested";
+    say.textContent = waiting ? "Waiting for CS2 and FACEIT AC to close." : "The replay of this match is not built yet.";
+    showState(`<h2 class="h2">${waiting ? "Waiting" : "Build the replay"}</h2>` +
+      `<p>${waiting ? "The replay's positions are worked out while CS2 and FACEIT AC are both closed. This page checks again every ten seconds." :
+        "Building it runs csda over this Demo with player positions. That is slow and uses a lot of memory, so it waits until CS2 and FACEIT AC are both closed."}</p>` +
+      (waiting ? "" : `<button class="primary" id="ask" type="button">Build the replay</button>`));
+    document.getElementById("ask")?.addEventListener("click", askForReplay);
+    if (waiting && !pollTimer) pollTimer = setInterval(load, 10000);
+    return;
+  }
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  say.textContent = data.radar
+    ? "Players move between their places each second. Click a kill to jump to it."
+    : "The map's radar is not on this PC yet, so the players cannot be placed. It is read from CS2 when the replay is built.";
+  if (!data.radar) { showState(`<h2 class="h2">No radar yet</h2><p>The radar of ${esc(data.map)} is read from the installed CS2 when it is closed and the replay is built.</p>`); return; }
+  indexSamples();
+  radarImg = new Image();
+  radarImg.src = `/radar/${encodeURIComponent(data.map)}.png`;
+  radarImg.onload = () => draw();
+  const rounds = data.rounds.map(r => `<button type="button" data-round="${r.number}" aria-pressed="false">${r.number}</button>`).join("");
+  document.getElementById("body").innerHTML = `
+    <div class="rounds" role="group" aria-label="Round">${rounds}</div>
+    <p class="note" id="round-title"></p>
+    <div class="viewer">
+      <div>
+        <div class="stage"><canvas id="canvas" width="640" height="640" aria-label="Replay of the round"></canvas></div>
+        <div class="legend"><span><i style="background:${COLOR.you}"></i>Your team</span><span><i style="background:${COLOR.other}"></i>Other team</span><span><i style="background:${COLOR.dead}"></i>Dead (cross)</span></div>
+        <div class="controls">
+          <button id="play" type="button">Play</button>
+          <select id="speed" aria-label="Speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
+          <input id="scrub" type="range" min="0" max="0" value="0" step="1" aria-label="Time in the round">
+          <span class="clock" id="clock">0:00</span>
+        </div>
+      </div>
+      <ol class="feed" id="feed" aria-label="Kills and bomb events"></ol>
+    </div>`;
+  document.querySelectorAll(".rounds button").forEach(b => b.addEventListener("click", () => { roundNo = +b.dataset.round; renderRound(); }));
+  document.getElementById("play").addEventListener("click", () => { if (t >= durationOf(roundOf(roundNo))) t = 0; playing = !playing; updatePlayButton(); if (playing) { last = performance.now(); requestAnimationFrame(tick); } });
+  document.getElementById("speed").addEventListener("change", e => { speed = +e.target.value; });
+  document.getElementById("scrub").addEventListener("input", e => seek(+e.target.value / 10));
+  document.getElementById("feed").addEventListener("click", e => { const b = e.target.closest("button[data-at]"); if (b) seek(+b.dataset.at); });
+  if (!roundOf(roundNo)) roundNo = data.rounds[0]?.number ?? 1;
+  renderRound();
+}
+
+async function askForReplay() {
+  const response = await api(`api/replay/${encodeURIComponent(checksum)}`, {method: "POST"});
+  if (response.ok) load();
+}
+
+async function load() {
+  if (!checksum) { document.getElementById("say").textContent = "No match asked for."; return; }
+  const response = await api(`api/replay/${encodeURIComponent(checksum)}`);
+  if (!response.ok) {
+    document.getElementById("say").textContent = response.status === 404 ? "No such match." : "The replay could not be read.";
+    return;
+  }
+  data = await response.json();
+  renderPage();
+}
+load();
+</script>
+</body>
+</html>

@@ -98,6 +98,12 @@ def analyses_dir() -> Path:
     return data_dir() / "analyses"
 
 
+def radar_dir() -> Path:
+    """Each map's radar image and its overview metadata, read from the installed CS2 (`radar.py`). Made by the first
+    replay that needs one."""
+    return data_dir() / "radar"
+
+
 def cs2_settings_dir() -> Path:
     """Where the CS2 a Render Job starts keeps its settings (video, convars, keys), so that the player's own, in
     Steam's userdata, are never changed by a recording. Made by the first Render Job."""

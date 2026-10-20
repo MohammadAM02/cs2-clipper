@@ -53,8 +53,10 @@ from flask import Flask, Response, jsonify, redirect, request, send_file
 from waitress.server import create_server
 from werkzeug.routing import BaseConverter
 
-from clipper import applog, links, share
+from clipper import applog, links, share, stats_view
 from clipper.alerts import LINK_LIFETIME, map_label, utc_now
+from clipper.analysis import Analyses
+from clipper.backfill import REPLAY_REQUESTED
 from clipper.checks import Check
 from clipper.config import Config
 from clipper.faceit import FaceitError
@@ -617,6 +619,62 @@ def create_app(ctx: WebContext) -> Flask:
         if mode is not None and mode not in ("now", "after_render"):
             return Response(status=400)
         return _no_store(jsonify(result=ctx.quit(mode)))
+
+    @app.get("/stats")
+    def stats_page():
+        return _no_store(Response((PAGES_DIR / "stats.html").read_bytes(), mimetype="text/html"))
+
+    @app.get("/api/stats/<checksum:checksum>")
+    def api_stats(checksum: str):
+        config = ctx.load_settings().config
+        index = Index(ctx.index_path)
+        try:
+            body = stats_view.match_view(index, Analyses(config.analyses_dir, config.csda_exe),
+                                         config.subject_steamid, checksum)
+        finally:
+            index.close()
+        if body is None:
+            return _no_store(jsonify(error="no such match")), 404
+        return _no_store(jsonify(body))
+
+    @app.get("/replay")
+    def replay_page():
+        return _no_store(Response((PAGES_DIR / "replay.html").read_bytes(), mimetype="text/html"))
+
+    @app.get("/api/replay/<checksum:checksum>")
+    def api_replay(checksum: str):
+        config = ctx.load_settings().config
+        index = Index(ctx.index_path)
+        try:
+            requested = index.get_flag(REPLAY_REQUESTED + checksum) is not None
+            body = stats_view.replay_view(index, Analyses(config.analyses_dir, config.csda_exe),
+                                          config.subject_steamid, config.radar_dir, checksum, requested)
+        finally:
+            index.close()
+        if body is None:
+            return _no_store(jsonify(error="no such match")), 404
+        return _no_store(jsonify(body))
+
+    @app.post("/api/replay/<checksum:checksum>")
+    def api_request_replay(checksum: str):
+        index = Index(ctx.index_path)
+        try:
+            if index.match(checksum) is None:
+                return _no_store(jsonify(error="no such match")), 404
+            index.set_flag(REPLAY_REQUESTED + checksum, utc_now().isoformat())
+        finally:
+            index.close()
+        return _no_store(jsonify(requested=True)), 202
+
+    @app.get("/radar/<name>")
+    def radar_image(name: str):
+        config = ctx.load_settings().config
+        if not re.fullmatch(r"[a-z0-9_]{2,40}[.]png", name):
+            return _no_store(jsonify(error="not a radar")), 404
+        path = config.radar_dir / name
+        if not path.is_file():
+            return _no_store(jsonify(error="no radar yet")), 404
+        return send_file(path, mimetype="image/png", conditional=True)
 
     @app.get("/reels")
     def reels_page():

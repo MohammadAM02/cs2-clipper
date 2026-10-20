@@ -52,6 +52,7 @@ from clipper import (
 )
 from clipper import notify as toasts
 from clipper.alerts import MatchAlerts, utc_now
+from clipper.backfill import StatsBackfill
 from clipper.config import Config
 from clipper.faceit import FaceitClient, FaceitError
 from clipper.faceit_oauth import OAuthError
@@ -205,6 +206,21 @@ def _program(name: str) -> Path | None:
     return Path(found) if found else None
 
 
+def _faceit_stats(cfg: Config, analyses: analysis.Analyses):
+    """Adds FACEIT's line for a match to its stats, by its checksum and FACEIT match id; None when this copy has no
+    FACEIT key to ask with."""
+    if not cfg.faceit_api_key_protected:
+        return None
+    faceit = FaceitClient(lambda: protect.unprotect(cfg.faceit_api_key_protected))
+    return lambda checksum, match_id: analyses.add_faceit(checksum, faceit.match_lines(match_id))
+
+
+def _radar_source() -> Path | None:
+    """CS2's game\\csgo folder, where the map radars are, or None when CS2 is not installed."""
+    exe = cs2_paths.find_cs2_exe()
+    return cs2_paths.csgo_dir(exe) if exe else None
+
+
 def build_worker(cfg: Config, index: Index, *, state: AppState, stop: StopRequest, deletes: DeleteRequest,
                  page_url: str | None, pages_off: str | None) -> Worker:
     probe = SystemProbe()
@@ -231,6 +247,8 @@ def build_worker(cfg: Config, index: Index, *, state: AppState, stop: StopReques
         join=partial(join_reel, ffmpeg=cfg.ffmpeg, duration_of=duration_of, stretch=cfg.stretch),
         notify=toasts.notify,
         alerts=start_match_alerts(cfg, index, probe, page_url=page_url, pages_off=pages_off),
+        stats_backfill=StatsBackfill(index, cfg, analyses, unpack, _faceit_stats(cfg, analyses),
+                                     radar_source=_radar_source),
     )
     return Worker(cfg, index, services, state=state, stop=stop, deletes=deletes)
 

@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stats</title>
+<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/touches.css">
+<style>
+  /* The Stats page's own pieces; the colours, type and frames are app.css's. */
+  .back { color: var(--muted); text-decoration: none; font: 700 14px var(--ui); letter-spacing: .06em; text-transform: uppercase; }
+  .back:hover { color: var(--ink); }
+  .scorecard { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 6px 0 18px; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+  .tile .k { font: 700 13px var(--ui); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .tile .v { font: 800 30px var(--ui); color: var(--ink); margin-top: 2px; white-space: nowrap; }
+  .tile .d { font: 700 14px var(--ui); margin-top: 2px; min-height: 18px; color: var(--dim); }
+  .arrow.good { color: #8BE08B; } .arrow.bad { color: #FF7A66; }
+  .src { font: 700 11px var(--ui); letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+  .wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+  table.tbl { width: 100%; border-collapse: collapse; font: 600 15px var(--ui); white-space: nowrap; }
+  .tbl th, .tbl td { padding: 9px 10px; text-align: right; border-bottom: 1px solid var(--line); }
+  .tbl th:first-child, .tbl td:first-child { text-align: left; }
+  .tbl thead th { color: var(--muted); font-size: 13px; letter-spacing: .06em; text-transform: uppercase; background: var(--panel2); }
+  .tbl .grp th { font-size: 11px; color: var(--dim); background: var(--panel); border-bottom: 0; padding-top: 6px; }
+  .tbl button.sort { all: unset; cursor: pointer; color: inherit; }
+  .tbl button.sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .tbl button.sort[aria-sort="ascending"]::after { content: " ▲"; color: var(--accent); }
+  .tbl button.sort[aria-sort="descending"]::after { content: " ▼"; color: var(--accent); }
+  .tbl tr.you td { background: rgba(255, 85, 0, .09); }
+  .tbl .team { display: inline-block; width: 4px; height: 16px; border-radius: 2px; margin-right: 8px; vertical-align: -3px; background: var(--line2); }
+  .tbl .team.a { background: var(--accent); }
+  .round { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); margin-bottom: 10px; }
+  .round summary { cursor: pointer; padding: 12px 16px; font: 700 17px var(--ui); letter-spacing: .04em; }
+  .round[open] summary { border-bottom: 1px solid var(--line); }
+  .events { list-style: none; margin: 0; padding: 6px 16px 12px; }
+  .events li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 7px 0; border-bottom: 1px dashed var(--line); font: 600 15px var(--ui); }
+  .events li:last-child { border-bottom: 0; }
+  .events .t { color: var(--muted); font-family: var(--mono); font-size: 13px; min-width: 52px; }
+  .events .weapon { color: var(--muted); }
+  .events .tag { font-size: 12px; }
+  .events .watch { margin-left: auto; color: var(--accent); text-decoration: none; font-weight: 700; }
+  .events .watch:hover { text-decoration: underline; }
+  .events .noclip { margin-left: auto; color: var(--dim); font-size: 13px; }
+  .note { color: var(--dim); font: 500 14px var(--body); margin: 8px 0 14px; }
+  @media (max-width: 640px) { .tile .v { font-size: 26px; } }
+</style>
+</head>
+<body>
+<script src="/app.js"></script>
+<script src="/nugget.js"></script>
+<script src="/touches.js" defer></script>
+<script>renderNav("/reels");</script>
+<main>
+  <p><a class="back" href="/reels">← Reels</a></p>
+  <section class="pagehead rise">
+    <h1 class="title" id="title">Stats</h1>
+    <div class="saybox"><p class="say" id="say">Loading…</p></div>
+  </section>
+  <div id="body"></div>
+</main>
+<script>
+// Stats (spec: Stats): one match. The scorecard is your player; the table is all ten; the timeline is each round,
+// and each kill links to its Reel at the kill's moment when the Reel has it. Nothing here runs anything: the page
+// reads the match's stats, and the stats were worked out when the match was analyzed.
+const checksum = new URLSearchParams(location.search).get("match") || "";
+let view = null;
+let sortKey = "kills", sortDir = -1;
+
+const pct = v => (v === null || v === undefined) ? "–" : `${v}%`;
+const num = v => (v === null || v === undefined) ? "–" : String(v);
+const mmss = s => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+// csda's end reason, as the page shows it: the reason as csda wrote it, until the names are mapped.
+const endReason = raw => String(raw ?? "");
+
+function nameOf(steamId) {
+  const p = view.players.find(x => x.steam_id === steamId);
+  return p ? p.name : "World";
+}
+function youOf() { return view.players.find(p => p.you) || null; }
+
+// The change against the average of the subject's last matches with stats: up is more, and for deaths more is worse.
+function arrow(metric, lowerIsBetter = false, unit = "") {
+  const d = view.comparison?.deltas?.[metric];
+  if (d === null || d === undefined) return "";
+  if (d === 0) return `<span class="arrow" aria-label="level with your average">= avg</span>`;
+  const up = d > 0, good = lowerIsBetter ? !up : up;
+  return `<span class="arrow ${good ? "good" : "bad"}" aria-label="${up ? "up" : "down"} ${Math.abs(d)}${unit} against your average">${up ? "▲" : "▼"} ${Math.abs(d)}${unit}</span>`;
+}
+
+function tile(label, value, delta, source) {
+  return `<div class="tile"><div class="k">${esc(label)}</div><div class="v">${value}</div>` +
+    `<div class="d">${delta || ""}</div>${source ? `<div class="src">${esc(source)}</div>` : ""}</div>`;
+}
+
+function scorecard(you) {
+  const h = you.headline, src = h.source === "faceit" ? "FACEIT" : "Demo";
+  return `<div class="scorecard" aria-label="Your scorecard">` +
+    tile("K–D–A", `${num(h.kills)}–${num(h.deaths)}–${num(h.assists)}`,
+      `${arrow("kills")} ${arrow("deaths", true)}`, src) +
+    tile("ADR", num(h.adr), arrow("adr"), src) +
+    tile("HS%", pct(h.hs_pct), arrow("hs_pct", false, " pts"), src) +
+    tile("KAST", pct(you.kast_pct), "", "Demo") +
+    tile("Opening", you.opening_win_pct === null ? "–" : pct(you.opening_win_pct),
+      `${you.opening_kills}–${you.opening_deaths} duels`, "Demo") +
+    tile("Clutches", `${you.clutch_wins}/${you.clutch_attempts}`, "won / tried", "Demo") +
+    tile("Flashes", num(you.enemies_flashed),
+      you.enemy_blind_avg_s === null ? "" : `${you.enemy_blind_avg_s}s avg blind`, "Demo") +
+    tile("Utility", num(you.utility_damage), "damage", "Demo") +
+    `</div>`;
+}
+
+const COLUMNS = [
+  {key: "name", label: "Player", get: p => p.name, text: true},
+  {key: "kills", label: "K", src: "FACEIT", get: p => p.headline.kills},
+  {key: "deaths", label: "D", src: "FACEIT", get: p => p.headline.deaths},
+  {key: "assists", label: "A", src: "FACEIT", get: p => p.headline.assists},
+  {key: "adr", label: "ADR", src: "FACEIT", get: p => p.headline.adr},
+  {key: "hs_pct", label: "HS%", src: "FACEIT", get: p => p.headline.hs_pct, show: p => pct(p.headline.hs_pct)},
+  {key: "kd", label: "K/D", src: "FACEIT", get: p => p.headline.kd},
+  {key: "kast_pct", label: "KAST", src: "Demo", get: p => p.kast_pct, show: p => pct(p.kast_pct)},
+  {key: "opening_win_pct", label: "Opening", src: "Demo", get: p => p.opening_win_pct,
+    show: p => `${p.opening_kills}–${p.opening_deaths}${p.opening_win_pct === null ? "" : ` (${pct(p.opening_win_pct)})`}`},
+  {key: "trade_kills", label: "Trades", src: "Demo", get: p => p.trade_kills, show: p => `${p.trade_kills} / ${p.traded_deaths}`},
+  {key: "enemies_flashed", label: "Flashes", src: "Demo", get: p => p.enemies_flashed,
+    show: p => `${p.enemies_flashed}${p.enemy_blind_avg_s === null ? "" : ` · ${p.enemy_blind_avg_s}s`}`},
+  {key: "utility_damage", label: "Util dmg", src: "Demo", get: p => p.utility_damage},
+  {key: "clutch_wins", label: "Clutch", src: "Demo", get: p => p.clutch_wins, show: p => `${p.clutch_wins}/${p.clutch_attempts}`},
+  {key: "multi", label: "2K · 3K · 4K · 5K", src: "Demo", get: p => p.multi_kill_rounds[2] + p.multi_kill_rounds[3] * 10 + p.multi_kill_rounds[4] * 100 + p.multi_kill_rounds[5] * 1000,
+    show: p => ["2", "3", "4", "5"].map(k => p.multi_kill_rounds[k]).join(" · ")},
+];
+
+function table() {
+  const col = COLUMNS.find(c => c.key === sortKey) || COLUMNS[1];
+  const key = p => { const v = col.get(p); return v === null || v === undefined ? (col.text ? "" : -Infinity) : v; };
+  const rows = [...view.players].sort((a, b) => {
+    const x = key(a), y = key(b);
+    if (x === y) return 0;
+    return (x > y ? 1 : -1) * sortDir;
+  });
+  const heads = COLUMNS.map(c => {
+    const aria = c.key === sortKey ? (sortDir > 0 ? "ascending" : "descending") : "none";
+    return `<th scope="col"><button class="sort" data-key="${c.key}" aria-sort="${aria}">${esc(c.label)}</button></th>`;
+  }).join("");
+  const body = rows.map(p => {
+    const cells = COLUMNS.map(c => {
+      if (c.key === "name") {
+        return `<td><span class="team ${p.team === youOf()?.team ? "a" : ""}"></span>${esc(p.name)}${p.you ? ' <span class="tag">you</span>' : ""}</td>`;
+      }
+      return `<td>${esc(c.show ? c.show(p) : num(c.get(p)))}</td>`;
+    }).join("");
+    return `<tr class="${p.you ? "you" : ""}">${cells}</tr>`;
+  }).join("");
+  const topRow = `<tr class="grp"><th></th><th colspan="6">FACEIT's line</th><th colspan="7">From the demo</th></tr>`;
+  return `<div class="wrap"><table class="tbl" aria-label="All players in this match"><thead>${topRow}<tr>${heads}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function eventRow(e) {
+  const at = `<span class="t">${mmss(e.t)}</span>`;
+  if (e.type !== "kill") {
+    const what = e.type === "bomb_planted" ? "Bomb planted" : e.type === "bomb_defused" ? "Bomb defused" : "Bomb exploded";
+    return `<li>${at}<span>${esc(what)}${e.site ? ` at ${esc(e.site)}` : ""}${e.player ? ` by ${esc(nameOf(e.player))}` : ""}</span></li>`;
+  }
+  const tags = [e.headshot ? "HS" : "", e.trade ? "Trade" : "", e.flash_assist ? "Flash assist" : ""]
+    .filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join(" ");
+  const clip = (e.clips || []).find(c => c.perspective === "player") || (e.clips || [])[0];
+  const watch = clip ? `<a class="watch" href="/reels?play=${+clip.reel_id}&t=${clip.seconds}">Watch</a>`
+                     : `<span class="noclip">no Reel for this moment</span>`;
+  return `<li>${at}<span><b>${esc(e.killer ? nameOf(e.killer) : "World")}</b> <span class="weapon">${esc(e.weapon)}</span> <b>${esc(nameOf(e.victim))}</b></span>${tags}${watch}</li>`;
+}
+
+function timeline() {
+  const you = youOf();
+  return view.rounds.map(r => {
+    const who = you && r.winner === you.team ? "You won" : "Enemy won";
+    return `<details class="round"${r.number === 1 ? " open" : ""}><summary>Round ${r.number} · ${who} · ${esc(endReason(r.end_reason))}</summary>` +
+      `<ol class="events">${r.events.length ? r.events.map(eventRow).join("") : '<li class="note">No kills or bomb events.</li>'}</ol>` +
+      `<p class="note" style="padding:0 16px 12px"><a class="watch" href="/replay?match=${encodeURIComponent(checksum)}&round=${r.number}">Replay this round</a></p></details>`;
+  }).join("");
+}
+
+function render() {
+  const body = document.getElementById("body");
+  const title = document.getElementById("title"), say = document.getElementById("say");
+  title.textContent = `${view.map}, ${dateLabel(view.played_at)}`;
+  const won = view.result === "win";
+  if (view.state !== "ready") {
+    say.textContent = "This match's stats are still being worked out.";
+    body.innerHTML = `<div class="emptybig rise"><h2>Not yet</h2><p>The stats of this match are worked out once CS2 and FACEIT AC are both closed. They appear here then.</p></div>`;
+    return;
+  }
+  say.textContent = `${view.team_score}–${view.opponent_score}, ${won ? "a win" : view.result === "loss" ? "a loss" : "a tie"}.` +
+    (view.faceit ? " Headline numbers are FACEIT's." : " No FACEIT line for this match, so the numbers are the demo's.");
+  const you = youOf();
+  const parts = [];
+  if (you) {
+    const c = view.comparison;
+    parts.push(`<div class="sechead"><h2 class="h2">You</h2><span class="lbl">${c && c.count ? `Against your last ${plural(c.count, "match", "matches")} with stats` : "No earlier matches with stats to compare with"}</span></div>`);
+    parts.push(scorecard(you));
+  } else {
+    parts.push(`<p class="note">Set your SteamID in Settings to see your scorecard here.</p>`);
+  }
+  parts.push(`<div class="sechead"><h2 class="h2">All ten</h2><span class="lbl">Click a column to sort</span></div>`);
+  parts.push(table());
+  parts.push(`<p class="note">FACEIT's numbers are FACEIT's, as its match page shows them. The demo's are worked out here from the events in the Demo: KAST, openings, trades, flashes, utility damage, clutches and multi-kill rounds.</p>`);
+  parts.push(`<div class="sechead"><h2 class="h2">Rounds</h2><span class="lbl">Kills link to their Reel when it has the moment</span></div>`);
+  parts.push(timeline());
+  body.innerHTML = parts.join("");
+}
+
+document.getElementById("body").addEventListener("click", e => {
+  const button = e.target.closest("button.sort");
+  if (!button) return;
+  const key = button.dataset.key;
+  sortDir = key === sortKey ? -sortDir : (key === "name" ? 1 : -1);
+  sortKey = key;
+  document.getElementById("body").querySelector(".wrap").outerHTML = table();
+});
+
+async function load() {
+  if (!checksum) { document.getElementById("say").textContent = "No match asked for."; return; }
+  const response = await api(`api/stats/${encodeURIComponent(checksum)}`);
+  if (!response.ok) {
+    document.getElementById("say").textContent = response.status === 404 ? "No such match." : "The stats could not be read.";
+    return;
+  }
+  view = await response.json();
+  render();
+}
+load();
+</script>
+</body>
+</html>

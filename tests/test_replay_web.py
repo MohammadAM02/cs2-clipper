@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timezone
 
 from clipper import analysis, replay, stats
+from clipper.backfill import REPLAY_FAILED, REPLAY_REQUESTED
 from clipper.config import Config
 from clipper.index import Index
 from clipper.model import MatchInfo
@@ -58,6 +59,19 @@ def test_a_replay_is_asked_for_once_and_then_waits_for_the_game_to_close(tmp_pat
     waiting = pc_get(client, f"/api/replay/{CHECKSUM}").get_json()
     assert (waiting["state"], waiting["requested"]) == ("requested", True)
     assert [player["name"] for player in waiting["players"]][:1] == ["subject"]
+
+
+def test_a_failed_replay_says_why_and_can_be_asked_for_again(tmp_path):
+    client = setup(tmp_path, positions=False)
+    index = Index(tmp_path / "clipper.sqlite")
+    index.set_flag(REPLAY_REQUESTED + CHECKSUM, "2026-10-22T10:00:00+00:00")      # a failed run stays asked for
+    index.set_flag(REPLAY_FAILED + CHECKSUM, "csda gave no player positions: see demo-1-positions.log")
+    index.close()
+    failed = pc_get(client, f"/api/replay/{CHECKSUM}").get_json()
+    assert (failed["state"], failed["failure"]) == ("failed", "csda gave no player positions: see demo-1-positions.log")
+    assert pc_post(client, f"/api/replay/{CHECKSUM}", headers=MARKED).status_code == 202
+    again = pc_get(client, f"/api/replay/{CHECKSUM}").get_json()
+    assert (again["state"], again["failure"]) == ("requested", None)
 
 
 def test_a_replay_without_the_marker_header_is_refused(tmp_path):

@@ -48,7 +48,8 @@ BOMBS = (
     Bomb(10000, 2, "planted", "3", "B"),
     Bomb(12000, 2, "defused", "2", "B"),
 )
-CLUTCHES = (Clutch(3, "1", 2, True), Clutch(2, "4", 1, False))
+CLUTCHES = (Clutch(3, "1", 2, True),             # a1 alone against two, and wins: a Clutch
+            Clutch(2, "4", 1, False))            # b2 alone against one: not a Clutch (CONTEXT.md: two or more)
 
 
 def match(**changes) -> Match:
@@ -94,7 +95,12 @@ def test_b1_scorecard_by_hand(result):
 def test_b2_scorecard_by_hand(result):
     check(result["players"]["4"], kills=1, deaths=2, assists=1, flash_assists=1, hs_pct=0.0, damage=100, adr=33.3,
           kast_pct=66.7, opening_kills=0, opening_deaths=0, opening_win_pct=None, trade_kills=0, traded_deaths=0,
-          enemies_flashed=1, enemy_blind_avg_s=2.5, clutch_attempts=1, clutch_wins=0)
+          enemies_flashed=1, enemy_blind_avg_s=2.5, clutch_attempts=0, clutch_wins=0)
+
+
+def test_a_1v1_is_not_a_clutch_even_when_won():
+    players = stats.compute(match(clutches=(Clutch(1, "1", 1, True), Clutch(3, "1", 3, False))))["players"]
+    assert (players["1"]["clutch_attempts"], players["1"]["clutch_wins"]) == (1, 0)    # only the 1v3 counts
 
 
 def test_every_player_is_there_with_their_team_and_name(result):
@@ -142,7 +148,8 @@ def test_with_no_rounds_the_rates_are_empty_not_zero():
 
 
 def test_a_player_with_no_deaths_has_no_kd():
-    line = stats.headline({"kills": 3, "deaths": 0, "assists": 1, "adr": 40.0, "hs_pct": 33.3})
+    line = stats.headline({"kills": 3, "deaths": 0, "assists": 1, "adr": 40.0, "hs_pct": 33.3,
+                           "multi_kill_rounds": {"2": 1, "3": 0, "4": 0, "5": 0}})
     assert (line["source"], line["kd"]) == ("demo", None)
 
 
@@ -193,6 +200,14 @@ def test_the_headline_is_faceits_when_the_match_has_it_and_the_demos_otherwise(r
     without = stats.headline(result["players"]["1"])
     assert (without["source"], without["kills"], without["deaths"], without["kd"]) == ("demo", 4, 1, 4.0)
     assert stats.headline(result["players"]["3"])["kd"] == round(1 / 3, 2)
+
+
+def test_the_headline_has_faceits_multi_kills_or_else_the_demos(result):
+    line = {"nickname": "a1-faceit", "stats": {**FACEIT_LINE["stats"], "Double Kills": "3", "Triple Kills": "1",
+                                               "Quadro Kills": "0"}}
+    with_faceit = stats.headline(stats.attach_faceit(result, {"1": line})["players"]["1"])
+    assert with_faceit["multi_kills"] == {"2": 3.0, "3": 1.0, "4": 0.0, "5": 0.0}
+    assert stats.headline(result["players"]["1"])["multi_kills"] == {"2": 2, "3": 0, "4": 0, "5": 0}   # a1's two 2Ks
 
 
 # --- the comparison ---------------------------------------------------------------------------------------------

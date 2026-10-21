@@ -16,10 +16,11 @@ COMPARE_WITH = 20      # the subject's most recent other matches with stats that
 
 
 def replay_view(index: Index, analyses: Analyses, subject: str, radar_dir: Path, checksum: str,
-                requested: bool) -> dict[str, Any] | None:
+                requested: bool, failure: str | None = None) -> dict[str, Any] | None:
     """The replay page's data for match `checksum`, or None when the app has no such match. `state` is "ready" once
-    the positions are worked out, "requested" while they are waiting (CS2 and FACEIT AC closed), else "not_requested".
-    The radar is None when CS2 has not been read yet; the samples are only sent when the replay is ready."""
+    the positions are worked out, "failed" when the last try failed (`failure` says why), "requested" while they wait
+    for CS2 and FACEIT AC to close, else "not_requested". The radar is None when CS2 has not been read yet; the samples
+    are only sent when the replay is ready."""
     row = index.match(checksum)
     if row is None:
         return None
@@ -27,16 +28,18 @@ def replay_view(index: Index, analyses: Analyses, subject: str, radar_dir: Path,
     positions = analyses.positions_of(checksum)
     if worked is None:
         state = "not_computed"
-    elif positions is None:
-        state = "requested" if requested else "not_requested"
-    else:
+    elif positions is not None:
         state = "ready"
+    elif failure is not None:
+        state = "failed"
+    else:
+        state = "requested" if requested else "not_requested"
     try:
         picture = radar.ready(row["map"], radar_dir)
     except radar.RadarError:
         picture = None
-    body: dict[str, Any] = {"state": state, "requested": requested, "checksum": checksum, "map": row["map"],
-                            "subject": subject, "radar": picture}
+    body: dict[str, Any] = {"state": state, "requested": requested, "failure": failure, "checksum": checksum,
+                            "map": row["map"], "subject": subject, "radar": picture}
     if worked is not None:
         body["tickrate"] = worked["tickrate"]
         body["players"] = [{**player, "steam_id": steam, "you": steam == subject}

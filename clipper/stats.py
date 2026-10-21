@@ -17,6 +17,7 @@ VERSION = 1
 TRADE_WINDOW_S = 5.0                                                          # a kill trades a death this soon after it
 UTILITY_WEAPONS = frozenset({"HE Grenade", "Molotov", "Incendiary Grenade"})  # csda's names for the damaging grenades
 MULTI_KILL_SIZES = (2, 3, 4, 5)                                               # rounds with exactly this many Frags (5: an ace)
+CLUTCH_MIN_OPPONENTS = 2                  # CONTEXT.md: a Clutch is the last player of a team against two or more
 # FACEIT's per-player fields the headline numbers and the comparison use, by the name FACEIT gives them.
 FACEIT_FIELDS = {
     "kills": "Kills", "deaths": "Deaths", "assists": "Assists", "adr": "ADR", "hs_pct": "Headshots %",
@@ -225,8 +226,8 @@ def compute(match: Match) -> dict[str, Any]:
         elif teammates(flash.flasher, flash.flashed):
             tally[flash.flasher].team_flashes += 1
 
-    for clutch in match.clutches:
-        if clutch.player in tally:
+    for clutch in match.clutches:             # csda also lists 1v1s, and the other side's last player in one
+        if clutch.player in tally and clutch.opponents >= CLUTCH_MIN_OPPONENTS:
             tally[clutch.player].clutch_attempts += 1
             tally[clutch.player].clutch_wins += clutch.won
 
@@ -314,15 +315,21 @@ def _number(text: object) -> float | None:
         return None
 
 
+FACEIT_MULTI_KILLS = {"2": "double_kills", "3": "triple_kills", "4": "quadro_kills", "5": "penta_kills"}
+
+
 def headline(player: Mapping[str, Any]) -> dict[str, Any]:
-    """The numbers the scorecard and the table lead with: FACEIT's when the match has FACEIT's line, else the demo's."""
+    """The numbers the scorecard and the table lead with: FACEIT's when the match has FACEIT's line, else the demo's.
+    `multi_kills` counts the rounds with 2, 3, 4 and 5 Frags, keyed by that number as text."""
     faceit = player.get("faceit")
     if faceit:
         return {"source": "faceit", "kills": faceit["kills"], "deaths": faceit["deaths"],
-                "assists": faceit["assists"], "adr": faceit["adr"], "hs_pct": faceit["hs_pct"], "kd": faceit["kd"]}
+                "assists": faceit["assists"], "adr": faceit["adr"], "hs_pct": faceit["hs_pct"], "kd": faceit["kd"],
+                "multi_kills": {size: faceit[name] for size, name in FACEIT_MULTI_KILLS.items()}}
     kd = round(player["kills"] / player["deaths"], 2) if player["deaths"] else None
     return {"source": "demo", "kills": player["kills"], "deaths": player["deaths"], "assists": player["assists"],
-            "adr": player["adr"], "hs_pct": player["hs_pct"], "kd": kd}
+            "adr": player["adr"], "hs_pct": player["hs_pct"], "kd": kd,
+            "multi_kills": dict(player["multi_kill_rounds"])}
 
 
 COMPARED = ("kills", "deaths", "assists", "adr", "hs_pct")

@@ -11,10 +11,11 @@ from types import SimpleNamespace
 import pytest
 
 from clipper import replay
-from clipper.analysis import Analyses, MissingAnalysis
-from clipper.backfill import REPLAY_REQUESTED, StatsBackfill
+from clipper.analysis import Analyses, MissingAnalysis, iter_array
+from clipper.backfill import REPLAY_REQUESTED, StatsBackfill, replay_request, request_replay
 from clipper.config import Config
 from clipper.index import Index
+from clipper.unpack import UnpackError
 from tests.csda_json import CHECKSUM, DEMO_NAME, ENEMY, MATCH, SUBJECT
 
 T0 = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
@@ -56,24 +57,25 @@ def test_the_array_is_read_object_by_object_whatever_the_size_of_the_pieces(tmp_
     path.write_text(json.dumps({"checksum": "abc", "kills": [{"tick": 5}], "playerPositions": records, "after": 1},
                                separators=(",", ":")), encoding="utf-8")
     for piece in (1, 2, 3, 7, 64, 1 << 20):
-        assert list(replay.iter_array(path, "playerPositions", piece)) == records
+        assert list(iter_array(path, "playerPositions", piece)) == records
 
 
 def test_a_missing_or_empty_array_gives_no_records(tmp_path):
     path = tmp_path / "out.json"
     path.write_text('{"checksum":"abc"}', encoding="utf-8")
-    assert list(replay.iter_array(path, "playerPositions")) == []
+    assert list(iter_array(path, "playerPositions")) == []
     path.write_text('{"playerPositions":[]}', encoding="utf-8")
-    assert list(replay.iter_array(path, "playerPositions", 3)) == []
+    assert list(iter_array(path, "playerPositions", 3)) == []
     path.write_text('{"playerPositions":null}', encoding="utf-8")
-    assert list(replay.iter_array(path, "playerPositions")) == []
+    assert list(iter_array(path, "playerPositions")) == []
 
 
-def test_only_the_frames_on_a_whole_second_are_kept_as_compact_rows(tmp_path):
-    path = tmp_path / "out.json"
-    records = [position(0), position(1), position(64), position(65, ENEMY, x=3.5), position(128, alive=False)]
-    path.write_text(json.dumps({"playerPositions": records}, separators=(",", ":")), encoding="utf-8")
-    assert replay.sample_file(path, 64.0) == [
+def test_only_the_frames_on_a_whole_second_are_kept_as_compact_rows():
+    def at(tick: int, steam: str = str(SUBJECT), *, alive: bool = True, x: float = 1.0) -> replay.Position:
+        return replay.Position(tick, 1, steam, x, 2.0, 90.0, alive, 2, 100)
+
+    frames = [at(0), at(1), at(64), at(65, str(ENEMY), x=3.5), at(128, alive=False)]
+    assert replay.sample(frames, 64.0) == [
         ROW, [64, 1, str(SUBJECT), 1.0, 2.0, 90.0, True, 2, 100],
         [128, 1, str(SUBJECT), 1.0, 2.0, 90.0, False, 2, 100],
     ]
@@ -81,7 +83,8 @@ def test_only_the_frames_on_a_whole_second_are_kept_as_compact_rows(tmp_path):
 
 
 def test_a_run_with_positions_is_kept_by_checksum_and_its_csda_output_removed(tmp_path):
-    csda = CsdaRun(MATCH, positions=[position(0), position(64), position(70)])
+    # csda's own records, turned into the replay's rows by analysis.py: the one place that reads csda's output
+    csda = CsdaRun(MATCH, positions=[position(0), position(64), position(70), position(128, alive=False)])
     store = Analyses(tmp_path / "analyses", tmp_path / "csda.exe", run=csda)
     dem = tmp_path / "demos" / f"{DEMO_NAME}.dem"
     dem.parent.mkdir()
@@ -91,7 +94,8 @@ def test_a_run_with_positions_is_kept_by_checksum_and_its_csda_output_removed(tm
     assert kept.name == f"{CHECKSUM}.positions.json"
     [command] = csda.positions_runs()
     assert "-positions" in command and "-minify" in command
-    assert store.positions_of(CHECKSUM)["samples"] == [ROW, [64, 1, str(SUBJECT), 1.0, 2.0, 90.0, True, 2, 100]]
+    assert store.positions_of(CHECKSUM)["samples"] == [ROW, [64, 1, str(SUBJECT), 1.0, 2.0, 90.0, True, 2, 100],
+                                                       [128, 1, str(SUBJECT), 1.0, 2.0, 90.0, False, 2, 100]]
     assert store.has_positions(CHECKSUM)
     assert sorted(p.name for p in (tmp_path / "analyses").iterdir()) == \
         sorted([f"{CHECKSUM}.json", f"{CHECKSUM}.stats.json", f"{CHECKSUM}.positions.json"])
@@ -152,7 +156,7 @@ def world(tmp_path):
 
 
 def test_a_requested_replay_is_worked_out_only_when_the_game_is_closed(world):
-    world.backfill.request_replay(CHECKSUM)
+    request_replay(world.index, CHECKSUM, world.clock.now)
     world.backfill.tick(lambda: False)                          # CS2 or FACEIT AC open: nothing is done
     assert not world.analyses.has_positions(CHECKSUM)
     assert world.csda.positions_runs() == []
@@ -164,15 +168,55 @@ def test_a_requested_replay_is_worked_out_only_when_the_game_is_closed(world):
 
 
 def test_a_replay_for_a_match_with_no_finished_demo_is_dropped(world):
-    world.backfill.request_replay("fedcba9876543210")
+    request_replay(world.index, "fedcba9876543210", world.clock.now)
     world.backfill.tick(lambda: True)
-    assert world.index.get_flag(REPLAY_REQUESTED + "fedcba9876543210") is None
+    asked, failure = replay_request(world.index, "fedcba9876543210")
+    assert not asked and "no finished Demo" in failure          # dropped, and the page can say why
     assert world.csda.positions_runs() == []
+
+
+def test_a_failed_replay_says_why_and_stays_asked_for(world):
+    world.csda.positions = None                                 # csda gives no positions: the run fails
+    request_replay(world.index, CHECKSUM, world.clock.now)
+    world.backfill.tick(lambda: True)
+    asked, failure = replay_request(world.index, CHECKSUM)
+    assert asked                                                # still asked for: tried again a day later
+    assert failure.startswith("csda gave no player positions")
+
+
+def test_asking_again_after_a_failure_tries_again_at_once(world):
+    world.csda.positions = None
+    request_replay(world.index, CHECKSUM, world.clock.now)
+    world.backfill.tick(lambda: True)                           # the run fails
+    world.csda.positions = [position(0)]
+    request_replay(world.index, CHECKSUM, world.clock.now)      # asked again, the same day
+    world.backfill.tick(lambda: True)
+    assert len(world.csda.positions_runs()) == 2
+    assert world.analyses.has_positions(CHECKSUM)
+    assert replay_request(world.index, CHECKSUM) == (False, None)   # built: neither asked for nor failed
+
+
+def test_a_replay_whose_download_is_gone_says_so(world):
+    (world.cfg.downloads_dir / f"{DEMO_NAME}.dem.zst").unlink()
+    request_replay(world.index, CHECKSUM, world.clock.now)
+    world.backfill.tick(lambda: True)
+    assert "download is gone" in replay_request(world.index, CHECKSUM)[1]
+    assert world.csda.positions_runs() == []
+
+
+def test_a_demo_that_does_not_unpack_is_a_failure_with_its_reason(world):
+    def broken(src, out_dir):
+        raise UnpackError(f"could not unpack {src.name}: not a zstd frame")
+
+    world.backfill.unpack = broken
+    request_replay(world.index, CHECKSUM, world.clock.now)
+    world.backfill.tick(lambda: True)                           # the error is kept, not raised out of the tick
+    assert replay_request(world.index, CHECKSUM)[1].startswith("could not unpack")
 
 
 def test_a_replay_that_fails_is_tried_again_only_a_day_later(world):
     world.csda.positions = None                                 # csda gives no positions: the run fails
-    world.backfill.request_replay(CHECKSUM)
+    request_replay(world.index, CHECKSUM, world.clock.now)
     world.backfill.tick(lambda: True)
     assert not world.analyses.has_positions(CHECKSUM)
     world.backfill.tick(lambda: True)

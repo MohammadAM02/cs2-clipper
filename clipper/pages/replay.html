@@ -201,14 +201,23 @@ function showState(html) {
 function renderPage() {
   const title = document.getElementById("title"), say = document.getElementById("say");
   title.textContent = `Replay, ${data.map}`;
+  const waiting = data.state === "requested";
+  if (!waiting && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   if (data.state === "not_computed") {
     say.textContent = "The stats of this match are still being worked out.";
     showState(`<h2 class="h2">Not yet</h2><p>The replay needs the match's stats first. They are worked out when the match is analyzed.</p>`);
     return;
   }
+  if (data.state === "failed") {
+    say.textContent = "The replay could not be built.";
+    showState(`<h2 class="h2">Not built</h2><p>${esc(data.failure)}</p>` +
+      `<p>The app tries again by itself a day later. Try again now to build it as soon as CS2 and FACEIT AC are both closed.</p>` +
+      `<button class="primary" id="ask" type="button">Try again</button>`);
+    document.getElementById("ask").addEventListener("click", askForReplay);
+    return;
+  }
   if (data.state !== "ready") {
-    const waiting = data.state === "requested";
-    say.textContent = waiting ? "Waiting for CS2 and FACEIT AC to close." : "The replay of this match is not built yet.";
+    say.textContent = waiting ? "Asked for: it builds while CS2 and FACEIT AC are both closed." : "The replay of this match is not built yet.";
     showState(`<h2 class="h2">${waiting ? "Waiting" : "Build the replay"}</h2>` +
       `<p>${waiting ? "The replay's positions are worked out while CS2 and FACEIT AC are both closed. This page checks again every ten seconds." :
         "Building it runs csda over this Demo with player positions. That is slow and uses a lot of memory, so it waits until CS2 and FACEIT AC are both closed."}</p>` +
@@ -217,7 +226,6 @@ function renderPage() {
     if (waiting && !pollTimer) pollTimer = setInterval(load, 10000);
     return;
   }
-  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   say.textContent = data.radar
     ? "Players move between their places each second. Click a kill to jump to it."
     : "The map's radar is not on this PC yet, so the players cannot be placed. It is read from CS2 when the replay is built.";

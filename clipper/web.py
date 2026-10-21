@@ -56,7 +56,7 @@ from werkzeug.routing import BaseConverter
 from clipper import applog, links, share, stats_view
 from clipper.alerts import LINK_LIFETIME, map_label, utc_now
 from clipper.analysis import Analyses
-from clipper.backfill import REPLAY_REQUESTED
+from clipper.backfill import replay_request, request_replay
 from clipper.checks import Check
 from clipper.config import Config
 from clipper.faceit import FaceitError
@@ -646,9 +646,9 @@ def create_app(ctx: WebContext) -> Flask:
         config = ctx.load_settings().config
         index = Index(ctx.index_path)
         try:
-            requested = index.get_flag(REPLAY_REQUESTED + checksum) is not None
+            requested, failure = replay_request(index, checksum)
             body = stats_view.replay_view(index, Analyses(config.analyses_dir, config.csda_exe),
-                                          config.subject_steamid, config.radar_dir, checksum, requested)
+                                          config.subject_steamid, config.radar_dir, checksum, requested, failure)
         finally:
             index.close()
         if body is None:
@@ -661,7 +661,7 @@ def create_app(ctx: WebContext) -> Flask:
         try:
             if index.match(checksum) is None:
                 return _no_store(jsonify(error="no such match")), 404
-            index.set_flag(REPLAY_REQUESTED + checksum, utc_now().isoformat())
+            request_replay(index, checksum, utc_now())
         finally:
             index.close()
         return _no_store(jsonify(requested=True)), 202

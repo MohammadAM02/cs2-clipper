@@ -19,6 +19,8 @@ from clipper.index import Index
 from clipper.intake import faceit_match_id
 
 REPLAY_REQUESTED = "replay_requested:"
+REPLAY_FAILED = "replay_failed:"          # why the last try at a match's replay failed, for the page to show
+REPLAY_TRIED = "replay_tried"
 
 log = logging.getLogger(__name__)
 
@@ -28,6 +30,19 @@ DONE = "done"
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def request_replay(index: Index, checksum: str, now: datetime) -> None:
+    """Asks for a match's replay data: its positions, and its radar. Worked out on a tick when CS2 and FACEIT AC are
+    both closed. Asking again after a failure forgets the failure and tries at once, not a day later."""
+    index.delete_flag(f"{REPLAY_TRIED}:{checksum}")
+    index.delete_flag(REPLAY_FAILED + checksum)
+    index.set_flag(REPLAY_REQUESTED + checksum, now.isoformat())
+
+
+def replay_request(index: Index, checksum: str) -> tuple[bool, str | None]:
+    """Whether a match's replay is asked for, and why its last try failed (None when it has not failed)."""
+    return index.get_flag(REPLAY_REQUESTED + checksum) is not None, index.get_flag(REPLAY_FAILED + checksum)
 
 
 class StatsBackfill:
@@ -43,11 +58,6 @@ class StatsBackfill:
         self.now = now
         self.radar_source = radar_source          # CS2's game\csgo folder, or None when CS2 is not installed
         self._complete: set[str] = set()          # matches whose stats and FACEIT line are settled this run
-
-    def request_replay(self, checksum: str) -> None:
-        """Asks for a match's replay data: its positions, and its radar. Worked out on a tick when CS2 and FACEIT AC
-        are both closed."""
-        self.index.set_flag(REPLAY_REQUESTED + checksum, self.now().isoformat())
 
     def tick(self, clear: Callable[[], bool]) -> None:
         """Works on one match, if one needs it: a replay asked for, then its stats, then FACEIT's line. `clear` says
@@ -136,36 +146,44 @@ class StatsBackfill:
         for key in self.index.flags_with_prefix(REPLAY_REQUESTED):
             checksum = key[len(REPLAY_REQUESTED):]
             demo = next((row for row in self._finished_demos() if row["match_checksum"] == checksum), None)
-            if demo is None:
-                self.index.delete_flag(key)              # no finished Demo of that match: nothing to replay
+            if demo is None:                             # no finished Demo of that match: nothing to replay
+                self.index.set_flag(REPLAY_FAILED + checksum,
+                                    "This match has no finished Demo to read the positions from.")
+                self.index.delete_flag(key)
                 continue
             if self.analyses.has_positions(checksum) and self._radar_ready(checksum):
                 self.index.delete_flag(key)
                 continue
-            if self._due("replay_tried", checksum) and clear():
+            if self._due(REPLAY_TRIED, checksum) and clear():
                 self._work_out_replay(demo, checksum)
                 return True
         return False
 
     def _work_out_replay(self, demo, checksum: str) -> None:
-        """Unpacks the Demo, has csda write its positions, and builds the radar of the map if it is not built yet."""
-        self._mark("replay_tried", checksum)
+        """Unpacks the Demo, has csda write its positions, and builds the radar of the map if it is not built yet. A
+        failure keeps its reason for the page and stays asked for: it is tried again a day later, or when asked again."""
+        self._mark(REPLAY_TRIED, checksum)
         archive = Path(demo["archive_path"])
         if not self.analyses.has_positions(checksum):
             if not archive.is_file():
                 log.warning("demo #%s: its download is gone, so its replay cannot be made", demo["id"])
+                self.index.set_flag(REPLAY_FAILED + checksum,
+                                    "The Demo's download is gone, so its positions cannot be read.")
                 return
-            dem = self.unpack(archive, self.cfg.demos_dir)
+            dem = None
             try:
+                dem = self.unpack(archive, self.cfg.demos_dir)
                 self.analyses.positions(checksum, dem, self.cfg.logs_dir / f"demo-{demo['id']}-positions.log")
-            except Exception:  # noqa: BLE001 - a failure is tried again a day later
+            except Exception as exc:  # noqa: BLE001 - kept for the page, and tried again a day later
                 log.exception("demo #%s: the positions could not be worked out; trying again in a day", demo["id"])
+                self.index.set_flag(REPLAY_FAILED + checksum, str(exc)[:300] or type(exc).__name__)
                 return
             finally:
-                if Path(dem) != archive:
+                if dem is not None and Path(dem) != archive:
                     Path(dem).unlink(missing_ok=True)
         self._build_radar(checksum)
         self.index.delete_flag(REPLAY_REQUESTED + checksum)
+        self.index.delete_flag(REPLAY_FAILED + checksum)
         log.info("demo #%s: replay data ready for match %s", demo["id"], checksum)
 
     def _radar_ready(self, checksum: str) -> bool:

@@ -32,6 +32,8 @@ KEPT = ("checksum", "date", "mapName", "tickrate", "tickCount", "demoFileName", 
         "buildNumber", "networkProtocol", "maxRounds", "overtimeCount", "duration", "winner", "teamA", "teamB",
         "players", "rounds", "kills", "clutches")
 _CHECKSUM = re.compile(r"[0-9a-f]{1,16}")
+POSITIONS = "playerPositions"      # csda's array of every player's place on every frame, written with -positions
+PIECE = 1 << 20                    # characters of csda's output read at a time
 
 Data = Mapping[str, Any]
 
@@ -160,6 +162,54 @@ def stats_match(data: Data) -> stats.Match:
                                     bool(c["hasWon"]))
                        for c in data.get("clutches", ())),
     )
+
+
+def iter_array(path: Path, key: str, piece: int = PIECE) -> Iterator[dict[str, Any]]:
+    """Each object of the JSON array under `key` in `path`, read a piece at a time: only a piece of the file, and the
+    object being decoded, is in memory at any moment. Nothing is yielded when the array is absent or empty."""
+    start = re.compile(rf'"{re.escape(key)}"\s*:\s*\[')
+    decoder = json.JSONDecoder()
+    with open(path, encoding="utf-8") as handle:
+        buf = ""
+        while True:                                       # find where the array starts
+            found = start.search(buf)
+            if found:
+                buf = buf[found.end():]
+                break
+            chunk = handle.read(piece)
+            if not chunk:
+                return
+            buf = buf[-256:] + chunk                      # the key may be split across two pieces
+        pos = 0
+        while True:
+            while pos < len(buf) and buf[pos] in ", \r\n\t":
+                pos += 1
+            if pos == len(buf):                           # the piece is used up: read the next
+                chunk = handle.read(piece)
+                if not chunk:
+                    return
+                buf, pos = chunk, 0
+                continue
+            if buf[pos] == "]":
+                return
+            try:
+                record, end = decoder.raw_decode(buf, pos)
+            except json.JSONDecodeError:                  # the object runs past the piece: read on and try again
+                chunk = handle.read(piece)
+                if not chunk:
+                    raise
+                buf, pos = buf[pos:] + chunk, 0
+                continue
+            yield record
+            pos = end
+            if pos > piece:                               # drop what is decoded, so the piece stays short
+                buf, pos = buf[pos:], 0
+
+
+def _position(record: Data) -> replay.Position:
+    """One of csda's per-frame player positions, as the replay keeps it."""
+    return replay.Position(record["tick"], record["roundNumber"], _steam_id(record["steamId"]), record["x"],
+                           record["y"], record["yaw"], bool(record["isAlive"]), record["side"], record["health"])
 
 
 @contextmanager
@@ -300,7 +350,7 @@ class Analyses:
             written = output / f"{dem.stem}.json"
             if not written.is_file():
                 raise RuntimeError(f"csda wrote no positions (exit code {code}): see {log_path.name}")
-            rows = replay.sample_file(written, tickrate)
+            rows = replay.sample(map(_position, iter_array(written, POSITIONS)), tickrate)
             if not rows:
                 raise RuntimeError(f"csda gave no player positions: see {log_path.name}")
             paths.atomic_write_text(self._positions_path(checksum),

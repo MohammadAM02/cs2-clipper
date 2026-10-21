@@ -100,6 +100,7 @@ function scorecard(you) {
       `${arrow("kills")} ${arrow("deaths", true)}`, src) +
     tile("ADR", num(h.adr), arrow("adr"), src) +
     tile("HS%", pct(h.hs_pct), arrow("hs_pct", false, " pts"), src) +
+    tile("Multi-kills", multiText(h.multi_kills), "2K · 3K · 4K · 5K rounds", src) +
     tile("KAST", pct(you.kast_pct), "", "Demo") +
     tile("Opening", you.opening_win_pct === null ? "–" : pct(you.opening_win_pct),
       `${you.opening_kills}–${you.opening_deaths} duels`, "Demo") +
@@ -110,25 +111,40 @@ function scorecard(you) {
     `</div>`;
 }
 
+// Rounds with 2, 3, 4 and 5 Frags: shown as "3 · 1 · 0 · 0", and ranked by aces first, then 4Ks, 3Ks and 2Ks.
+const MULTI = ["2", "3", "4", "5"];
+const multiText = m => MULTI.map(k => num(m?.[k])).join(" · ");
+const multiRank = m => [...MULTI].reverse().reduce((rank, k) => rank * 100 + (m?.[k] ?? 0), 0);
+
+// Each column's group: "headline" is FACEIT's line when the match has it (else the demo's), "demo" is the demo's only.
 const COLUMNS = [
   {key: "name", label: "Player", get: p => p.name, text: true},
-  {key: "kills", label: "K", src: "FACEIT", get: p => p.headline.kills},
-  {key: "deaths", label: "D", src: "FACEIT", get: p => p.headline.deaths},
-  {key: "assists", label: "A", src: "FACEIT", get: p => p.headline.assists},
-  {key: "adr", label: "ADR", src: "FACEIT", get: p => p.headline.adr},
-  {key: "hs_pct", label: "HS%", src: "FACEIT", get: p => p.headline.hs_pct, show: p => pct(p.headline.hs_pct)},
-  {key: "kd", label: "K/D", src: "FACEIT", get: p => p.headline.kd},
-  {key: "kast_pct", label: "KAST", src: "Demo", get: p => p.kast_pct, show: p => pct(p.kast_pct)},
-  {key: "opening_win_pct", label: "Opening", src: "Demo", get: p => p.opening_win_pct,
+  {key: "kills", label: "K", group: "headline", get: p => p.headline.kills},
+  {key: "deaths", label: "D", group: "headline", get: p => p.headline.deaths},
+  {key: "assists", label: "A", group: "headline", get: p => p.headline.assists},
+  {key: "adr", label: "ADR", group: "headline", get: p => p.headline.adr},
+  {key: "hs_pct", label: "HS%", group: "headline", get: p => p.headline.hs_pct, show: p => pct(p.headline.hs_pct)},
+  {key: "kd", label: "K/D", group: "headline", get: p => p.headline.kd},
+  {key: "multi", label: "2K · 3K · 4K · 5K", group: "headline", get: p => multiRank(p.headline.multi_kills),
+    show: p => multiText(p.headline.multi_kills)},
+  {key: "kast_pct", label: "KAST", group: "demo", get: p => p.kast_pct, show: p => pct(p.kast_pct)},
+  {key: "opening_win_pct", label: "Opening", group: "demo", get: p => p.opening_win_pct,
     show: p => `${p.opening_kills}–${p.opening_deaths}${p.opening_win_pct === null ? "" : ` (${pct(p.opening_win_pct)})`}`},
-  {key: "trade_kills", label: "Trades", src: "Demo", get: p => p.trade_kills, show: p => `${p.trade_kills} / ${p.traded_deaths}`},
-  {key: "enemies_flashed", label: "Flashes", src: "Demo", get: p => p.enemies_flashed,
+  {key: "trade_kills", label: "Trades", group: "demo", get: p => p.trade_kills, show: p => `${p.trade_kills} / ${p.traded_deaths}`},
+  {key: "enemies_flashed", label: "Flashes", group: "demo", get: p => p.enemies_flashed,
     show: p => `${p.enemies_flashed}${p.enemy_blind_avg_s === null ? "" : ` · ${p.enemy_blind_avg_s}s`}`},
-  {key: "utility_damage", label: "Util dmg", src: "Demo", get: p => p.utility_damage},
-  {key: "clutch_wins", label: "Clutch", src: "Demo", get: p => p.clutch_wins, show: p => `${p.clutch_wins}/${p.clutch_attempts}`},
-  {key: "multi", label: "2K · 3K · 4K · 5K", src: "Demo", get: p => p.multi_kill_rounds[2] + p.multi_kill_rounds[3] * 10 + p.multi_kill_rounds[4] * 100 + p.multi_kill_rounds[5] * 1000,
-    show: p => ["2", "3", "4", "5"].map(k => p.multi_kill_rounds[k]).join(" · ")},
+  {key: "utility_damage", label: "Util dmg", group: "demo", get: p => p.utility_damage},
+  {key: "clutch_wins", label: "Clutch", group: "demo", get: p => p.clutch_wins, show: p => `${p.clutch_wins}/${p.clutch_attempts}`},
 ];
+
+// The row above the column names: what the headline columns come from in this match, then the demo's own columns.
+function groupRow() {
+  const lead = COLUMNS.filter(c => c.group === "headline").length, rest = COLUMNS.filter(c => c.group === "demo").length;
+  const sources = new Set(view.players.map(p => p.headline.source));
+  if (!sources.has("faceit")) return `<tr class="grp"><th></th><th colspan="${lead + rest}">From the demo</th></tr>`;
+  const label = sources.has("demo") ? "FACEIT's line (the demo's where FACEIT has none)" : "FACEIT's line";
+  return `<tr class="grp"><th></th><th colspan="${lead}">${label}</th><th colspan="${rest}">From the demo</th></tr>`;
+}
 
 function table() {
   const col = COLUMNS.find(c => c.key === sortKey) || COLUMNS[1];
@@ -151,8 +167,7 @@ function table() {
     }).join("");
     return `<tr class="${p.you ? "you" : ""}">${cells}</tr>`;
   }).join("");
-  const topRow = `<tr class="grp"><th></th><th colspan="6">FACEIT's line</th><th colspan="7">From the demo</th></tr>`;
-  return `<div class="wrap"><table class="tbl" aria-label="All players in this match"><thead>${topRow}<tr>${heads}</tr></thead><tbody>${body}</tbody></table></div>`;
+  return `<div class="wrap"><table class="tbl" aria-label="All players in this match"><thead>${groupRow()}<tr>${heads}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 function eventRow(e) {
@@ -202,7 +217,7 @@ function render() {
   }
   parts.push(`<div class="sechead"><h2 class="h2">All ten</h2><span class="lbl">Click a column to sort</span></div>`);
   parts.push(table());
-  parts.push(`<p class="note">FACEIT's numbers are FACEIT's, as its match page shows them. The demo's are worked out here from the events in the Demo: KAST, openings, trades, flashes, utility damage, clutches and multi-kill rounds.</p>`);
+  parts.push(`<p class="note">FACEIT's numbers are FACEIT's, as its match page shows them. The demo's are worked out here from the events in the Demo: KAST, openings, trades, flashes, utility damage and Clutches (the last player alive against two or more).</p>`);
   parts.push(`<div class="sechead"><h2 class="h2">Rounds</h2><span class="lbl">Kills link to their Reel when it has the moment</span></div>`);
   parts.push(timeline());
   body.innerHTML = parts.join("");

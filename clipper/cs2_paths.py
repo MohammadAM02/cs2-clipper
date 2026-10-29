@@ -116,3 +116,9 @@ def cfg_dir(cs2_exe: Path) -> Path:
 def console_log(cs2_exe: Path) -> Path:
     """What CS2 started with ``-condebug`` writes its console to."""
     return csgo_dir(cs2_exe) / "console.log"
+
+
+def crash_dump_dir(cs2_exe: Path) -> Path:
+    """Where CS2's crash handler writes the dump of a crash (``cs2_<date>_<time>_0_<reason>.mdmp``): cs2.exe's own
+    folder. The handler is CS2's, so Windows' crash reports never hear of the crash."""
+    return cs2_exe.parent

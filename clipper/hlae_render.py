@@ -35,6 +35,7 @@ FFMPEG_WAIT_S = 60.0            # the longest the mux waits for HLAE's FFmpeg to
 # CS2 keeps its video settings, convars and keys in this folder when the variable names one, instead of the player's
 # Steam userdata (CS:DM's `define-cfg-folder-location.ts`); HLAE's -afxDisableSteamStorage is meant to go with it.
 USRLOCAL_VARIABLE = "USRLOCALCSGO"
+CRASH_DUMPS = "cs2_*.mdmp"      # the dump CS2's crash handler writes next to cs2.exe when CS2 crashes
 
 
 def _launch(command: list[str], log: IO[str], environment: dict[str, str]) -> subprocess.Popen:
@@ -134,6 +135,31 @@ class _Console:
         return lines[-CONSOLE_TAIL_LINES:]
 
 
+class _Dumps:
+    """The dumps CS2's crash handler writes: a game that went with a dump written crashed, where one that went
+    without one just closed."""
+
+    def __init__(self, folder: Path):
+        self.folder = folder
+        self.before: frozenset[str] = frozenset()
+
+    def _names(self) -> frozenset[str]:
+        """The dumps in the folder now. A folder that cannot be read has none."""
+        try:
+            return frozenset(path.name for path in self.folder.glob(CRASH_DUMPS))
+        except OSError:
+            return frozenset()
+
+    def begin(self) -> None:
+        """A launch is about to start: the dumps there now are not its game's."""
+        self.before = self._names()
+
+    def new(self) -> Path | None:
+        """A dump written since the launch began, or None."""
+        names = sorted(self._names() - self.before)
+        return self.folder / names[0] if names else None
+
+
 @dataclass(frozen=True)
 class _Env:
     """What every launch of a Render Job shares: the PC to look at and act on, the clock, the log, and the limits."""
@@ -149,6 +175,7 @@ class _Env:
     say: Callable[[str], None]
     log: IO[str]
     console: _Console
+    dumps: _Dumps
     raw_dir: Path
     numbers: frozenset[int]             # the Sequences the plan records
     views: tuple[tuple[str, tuple[Sequence, ...]], ...]     # each view's Perspective and Sequences, in recording order
@@ -291,6 +318,10 @@ def _watch(env: _Env, game: _Launch) -> _Outcome:
             _stop(env, game, f"HLAE.exe exited with code {code}")
             return failed(f"HLAE error: HLAE.exe exited with code {code}")
         if not game.playing:
+            crash = env.dumps.new()
+            if crash is not None:
+                _stop(env, game, f"CS2 crashed before 'playing'; its crash dump is {crash}")
+                return failed(f"CS2 crashed while loading the demo (crash dump {crash.name})")
             if env.hlae_error_shown():
                 _stop(env, game, f"the '{HLAE_ERROR_TITLE}' window is open")
                 return failed(f"HLAE error: the '{HLAE_ERROR_TITLE}' window opened "
@@ -340,6 +371,7 @@ def _launch_once(env: _Env, command: list[str], number: int, total: int) -> _Out
         env.probe.kill_hooked_cs2()
         env.sleep(LEFTOVER_PAUSE_S)
     env.console.begin()
+    env.dumps.begin()
     env.say(f"launch {number} of {total}: {subprocess.list2cmdline(command)}")
     try:
         proc = env.launch(command, env.log, env.environment)
@@ -546,7 +578,8 @@ def render(
         env = _Env(
             probe=probe, should_abort=should_abort, hlae_error_shown=hlae_error_shown, launch=launch,
             environment={**os.environ, USRLOCAL_VARIABLE: str(cs2_settings_dir)}, guard=guard,
-            clock=clock, sleep=sleep, say=say, log=log_file, console=console, raw_dir=raw_dir,
+            clock=clock, sleep=sleep, say=say, log=log_file, console=console,
+            dumps=_Dumps(cs2_paths.crash_dump_dir(cs2_exe)), raw_dir=raw_dir,
             numbers=frozenset(sequence.number for sequence in all_sequences),
             views=tuple((perspective, tuple(sequences)) for perspective, sequences in planned), progress=report,
             stall_seconds=stall_seconds, launch_timeout_seconds=launch_timeout_seconds, poll_seconds=poll_seconds,

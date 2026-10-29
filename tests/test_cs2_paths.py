@@ -101,6 +101,11 @@ def test_cfg_files_and_the_console_log_live_in_the_csgo_folder():
     assert cs2_paths.console_log(CS2) == csgo / "console.log"
 
 
+def test_crash_dumps_are_written_next_to_the_executable():
+    assert cs2_paths.crash_dump_dir(CS2) == Path(
+        r"D:\SteamLibrary\steamapps\common\Counter-Strike Global Offensive\game\bin\win64")
+
+
 def test_every_path_entry_of_libraryfolders_vdf_is_a_library():
     assert cs2_paths.parse_library_folders(LIBRARY_FOLDERS) == [
         Path(r"C:\Program Files (x86)\Steam"),

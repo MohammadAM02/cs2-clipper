@@ -34,6 +34,7 @@ INPUTS = RenderInputs(
 )
 CLIP_1 = "sequence-1-tick-19744-to-20328.mp4"
 CLIP_2 = "sequence-2-tick-75744-to-76128.mp4"
+DUMP = "cs2_2026_1024_144756_0_accessviolation.mdmp"     # how CS2's crash handler names the dump of a crash
 
 
 class HlaeProc:
@@ -64,6 +65,7 @@ class World:
         self.console = self.csgo / "console.log"
         self.cfg_dir = self.csgo / "cfg"
         self.cs2_settings = tmp_path / "app-data" / "cs2-settings"
+        self.dumps = self.cs2_exe.parent        # where CS2's crash handler writes the dump of a crash
         self.raw_dir = req.outputs[req.perspectives[0]] / "raw"       # the first view's folder holds the raw recordings
         self.now = 1000.0
         self.steam = True
@@ -188,6 +190,12 @@ class World:
     do_late_cs2_up = do_cs2_up
 
     def do_cs2_down(self) -> None:
+        self.cs2 = False
+
+    def do_crash(self, name: str = DUMP) -> None:
+        """CS2 crashing: its crash handler writes a dump next to cs2.exe, and the game is gone."""
+        self.dumps.mkdir(parents=True, exist_ok=True)
+        (self.dumps / name).write_bytes(b"MDMP")
         self.cs2 = False
 
     def do_hlae_exits(self, code: int) -> None:
@@ -689,6 +697,36 @@ def test_half_a_line_left_by_one_launch_is_not_joined_to_the_next_launchs_first_
     result = run(world, req)
     assert result.failure.startswith("CS2 never started the demo")
     assert "marker" not in world.log()
+
+
+# --- CS2 crashing -------------------------------------------------------------------------------------
+
+
+def test_a_game_that_crashes_before_it_plays_ends_the_job_without_a_new_launch(world, req):
+    world.scripts = [[(2, "hlae_exits", 0), (4, "cs2_up"), (10, "crash")], game()]
+    result = run(world, req)
+    assert (result.ok, result.aborted) == (False, False)
+    assert result.failure == f"CS2 crashed while loading the demo (crash dump {DUMP})"
+    assert len(world.launches) == 1
+    assert str(world.dumps / DUMP) in world.log()
+    assert_clean(world)
+
+
+def test_a_crash_dump_from_before_the_launch_is_not_this_games(world, req):
+    world.dumps.mkdir(parents=True)
+    (world.dumps / "cs2_2026_1023_150346_0_accessviolation.mdmp").write_bytes(b"MDMP")     # an earlier crash
+    world.scripts = [[(4, "cs2_up"), (10, "cs2_down")], game()]
+    result = run(world, req)
+    assert result.ok and len(world.launches) == 2
+    assert "intervention: CS2 closed before 'playing'" in world.log()
+
+
+def test_a_game_that_crashes_before_it_is_seen_running_is_not_waited_for(world, req):
+    world.scripts = [[(2, "crash")], game()]
+    result = run(world, req)
+    assert result.failure == f"CS2 crashed while loading the demo (crash dump {DUMP})"
+    assert len(world.launches) == 1
+    assert world.now - world.launched_at[0] < 60.0        # not the launch timeout
 
 
 # --- HLAE's own errors --------------------------------------------------------------------------------

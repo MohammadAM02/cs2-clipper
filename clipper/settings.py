@@ -26,7 +26,7 @@ STORED_SECRET = "faceit_client_secret_protected"
 SECRETS = {KEY_FIELD: STORED_KEY, SECRET_FIELD: STORED_SECRET}   # write-only name -> stored blob
 
 _APP_DATA_FIELDS = frozenset({"index_path", "logs_dir", "tools_dir", "analyses_dir",       # in the app data folder
-                              "cs2_settings_dir"})
+                              "cs2_settings_dir", "radar_dir"})
 _FOLDER_FIELDS = frozenset({"data_root", "downloads_dir"})
 
 

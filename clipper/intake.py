@@ -21,6 +21,14 @@ FACEIT_DEMO = re.compile(
     re.IGNORECASE,
 )
 PARTIAL_SUFFIXES = (".crdownload", ".part", ".tmp")
+FACEIT_MATCH = re.compile(
+    r"^(1-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})-\d+-\d+\.dem", re.IGNORECASE)
+
+
+def faceit_match_id(file_name: str) -> str | None:
+    """The FACEIT match a Demo's file name is for (`<match id>-<n>-<n>.dem.zst`), or None for a name that is not one."""
+    found = FACEIT_MATCH.match(file_name)
+    return found.group(1) if found else None
 
 
 @dataclass

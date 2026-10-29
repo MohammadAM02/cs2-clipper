@@ -140,7 +140,7 @@ function matchBlock(m) {
     </button>
     <div class="collapse"><div>
       ${rows.length ? rows.join("") : '<p class="empty" style="padding:16px 22px">No Highlights of this kind in this match.</p>'}
-      ${PC ? `<div class="mfoot">${renderButtons(m)}<button class="ghost" data-open="${esc(m.checksum)}">${ICON.folder}Open folder</button></div>` : ""}
+      ${PC ? `<div class="mfoot"><a class="ghost" href="/stats?match=${esc(m.checksum)}">Stats</a>${renderButtons(m)}<button class="ghost" data-open="${esc(m.checksum)}">${ICON.folder}Open folder</button></div>` : ""}
     </div></div>
   </section>`;
 }
@@ -356,8 +356,13 @@ document.addEventListener("click", async e => {
 
 (async () => {
   await Promise.all([load(), PC && loadVolume()]);      // a Reel asked for by ?play= starts at the kept level
-  const wanted = new URLSearchParams(location.search).get("play");
-  if (wanted && playById(wanted, true)) history.replaceState(null, "", location.pathname);
+  const asked = new URLSearchParams(location.search), wanted = asked.get("play"), at = Number(asked.get("t"));
+  if (wanted && playById(wanted, true)) {
+    // A link from the Stats page (?play=<id>&t=<seconds>) starts the Reel at that moment, once it has loaded.
+    const video = document.getElementById("player-video");
+    if (at > 0) video.addEventListener("loadedmetadata", () => { video.currentTime = at; }, {once: true});
+    history.replaceState(null, "", location.pathname);
+  }
 })();
 every(5000, load, 30000);
 </script>

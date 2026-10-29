@@ -43,6 +43,20 @@ class FakeFetch:
         return answer(url) if callable(answer) else answer
 
 
+def test_match_lines_are_keyed_by_steamid64_through_the_roster():
+    """FACEIT's stats name players by FACEIT id; the match's roster gives each one's SteamID64. A FACEIT player with
+    no SteamID64 on the roster has no line keyed by one."""
+    details = {"teams": {
+        "faction1": {"roster": [{"player_id": "p-1", "game_player_id": 76561198000000001, "nickname": "one"}]},
+        "faction2": {"roster": [{"player_id": "p-9", "game_player_id": "76561198000000009", "nickname": "nine"},
+                                {"player_id": "p-x", "nickname": "no steam id"}]}}}
+    fetch = FakeFetch({f"/matches/{MATCH_ID}": details, f"/matches/{MATCH_ID}/stats": STATS})
+    lines = FaceitClient(lambda: "key", fetch=fetch).match_lines(MATCH_ID)
+    assert set(lines) == {"76561198000000001", "76561198000000009"}
+    assert lines["76561198000000001"]["stats"]["Kills"] == "24"
+    assert lines["76561198000000009"]["stats"]["Kills"] == "20"       # p-9's line, joined through the roster
+
+
 def test_player_gives_the_ids_match_alerts_need():
     fetch = FakeFetch({"/players": {"player_id": "p-1", "nickname": "someone",
                                     "games": {"cs2": {"game_player_id": SUBJECT}}}})

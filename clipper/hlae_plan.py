@@ -44,6 +44,8 @@ from clipper.model import Break
 ENTRY = "cs2clipper"        # CS2 starts with `+exec cs2clipper`; every other cfg file is named after it
 AGAIN = f"{ENTRY}_again"    # a second view: the demo starts again, as this cfg does it
 SECOND_GO = f"{ENTRY}_go2"  # and plays from its first tick, as `cs2clipper_go` does for the first view
+RESUME = f"{ENTRY}_resume"              # resumes the demo as it starts (RESUME_TICK)
+SECOND_RESUME = f"{ENTRY}_resume2"      # and as it starts again for a second view
 
 # CS:DM's builders (build-players-event-sequences.ts): Sequences closer than this merge, and a Frag with
 # another this close after it carries on into it.
@@ -55,6 +57,11 @@ MIN_BREAK_S = 10.0     # a Break cut down to less than this, around the Sequence
 # the first ticks after it loads a demo. A Sequence is approached PREROLL_S before its first tick; the demo
 # is seeked to there only when that skips SEEK_MIN_S or more (the game never goes back), else it plays on.
 FIRST_TICK = 96
+# The one exception: the demo is resumed at RESUME_TICK. Since CS2 1.41.9.2 (22 Oct 2026) a demo whose match starts
+# paused, as FACEIT's do, sits on its first tick, and a few seconds later CS2 skips back one tick, to before the
+# demo's first full packet, and crashes (engine2.dll, a read of address -1). HLAE runs a tick 0 command as the demo
+# loads, so the demo plays on before that; `demo_resume` changes nothing for a demo that is not paused.
+RESUME_TICK = 0
 PREROLL_S = 2.0
 SEEK_MIN_S = 5.0
 PREPARE_S = 0.25        # after landing: the recording is set up this late, so the game is steady by then
@@ -326,8 +333,9 @@ def script(
     (`SECOND_GO`) and records `second_pass` the way it records `sequences`. So a Sequence of the second pass may start
     before the last of the first pass ends, as the demo is back at its beginning.
 
-    CS2 starts with `+exec cs2clipper`, which plays the Demo and schedules `cs2clipper_go` for tick 96 (`playing`).
-    That sends the pinned settings and runs the first Sequence's cfg. Each Sequence's cfg schedules its own steps with
+    CS2 starts with `+exec cs2clipper`, which plays the Demo, schedules `cs2clipper_resume` for tick 0 to take it out
+    of a pause it may start in (`RESUME_TICK`) and `cs2clipper_go` for tick 96 (`playing`). That sends the pinned
+    settings and runs the first Sequence's cfg. Each Sequence's cfg schedules its own steps with
     `mirv_cmd addAtTick`, every step a cfg of its own, and seeks to its approach when that is worth it: set the
     recording up (`ready`), aim the camera, start (`recording`), change the camera, end (`done`) and hand over to the
     next Sequence's cfg, or, after the last of a pass, to `AGAIN` when a second pass follows, or else quit (`quit`).
@@ -355,10 +363,12 @@ def script(
         f"{ENTRY}.cfg": _cfg(
             "mirv_cmd clear",
             "mirv_cmd enabled 1",
+            f"mirv_cmd addAtTick {RESUME_TICK} exec {RESUME}",
             f"mirv_cmd addAtTick {FIRST_TICK} exec {ENTRY}_go",
             "demo_ui_mode 0",       # CS2 shows its playback bar unless this comes before the demo plays
             f'playdemo "{demo}"',
         ),
+        f"{RESUME}.cfg": _cfg("demo_resume"),
         f"{ENTRY}_go.cfg": _cfg(
             *_pinned_lines(settings),
             f"exec {_stem(sequences[0])}",
@@ -366,13 +376,15 @@ def script(
     }
     passes = [sequences]
     if second:
-        files[f"{AGAIN}.cfg"] = _cfg(       # the entry cfg's lines, with the second view's go
+        files[f"{AGAIN}.cfg"] = _cfg(       # the entry cfg's lines, with the second view's resume and go
             "mirv_cmd clear",
             "mirv_cmd enabled 1",
+            f"mirv_cmd addAtTick {RESUME_TICK} exec {SECOND_RESUME}",
             f"mirv_cmd addAtTick {FIRST_TICK} exec {SECOND_GO}",
             "demo_ui_mode 0",       # as the entry cfg has it: the playback bar goes before the demo plays
             f'playdemo "{demo}"',
         )
+        files[f"{SECOND_RESUME}.cfg"] = _cfg("demo_resume")
         files[f"{SECOND_GO}.cfg"] = _cfg(*_pinned_lines(settings), f"exec {_stem(second[0])}")
         passes.append(second)
     for index, pass_sequences in enumerate(passes):

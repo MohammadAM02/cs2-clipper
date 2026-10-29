@@ -315,7 +315,7 @@ def two_sequences():
 def test_the_script_is_a_set_of_cfg_files_named_after_the_app():
     files = plan_script(two_sequences())
     assert sorted(files) == [
-        "cs2clipper.cfg", "cs2clipper_go.cfg",
+        "cs2clipper.cfg", "cs2clipper_go.cfg", "cs2clipper_resume.cfg",
         "cs2clipper_s1.cfg", "cs2clipper_s1_aim.cfg", "cs2clipper_s1_end.cfg", "cs2clipper_s1_next.cfg",
         "cs2clipper_s1_prepare.cfg", "cs2clipper_s1_start.cfg",
         "cs2clipper_s2.cfg", "cs2clipper_s2_aim.cfg", "cs2clipper_s2_end.cfg", "cs2clipper_s2_prepare.cfg",
@@ -328,10 +328,19 @@ def test_the_entry_cfg_starts_the_demo_and_schedules_the_first_step():
     assert cfg_lines(plan_script(two_sequences()), "cs2clipper") == [
         "mirv_cmd clear",
         "mirv_cmd enabled 1",
+        "mirv_cmd addAtTick 0 exec cs2clipper_resume",
         "mirv_cmd addAtTick 96 exec cs2clipper_go",
         "demo_ui_mode 0",       # before the playback starts, or CS2 shows its playback bar
         r'playdemo "C:\Users\Some One\Demos\match 1.dem"',      # the path as it is, spaces and all
     ]
+
+
+def test_the_demo_is_resumed_at_tick_0_before_cs2_can_skip_back_to_before_its_first_tick():
+    # Since CS2 1.41.9.2 a demo whose match starts paused, as FACEIT's do, sits on its first tick, and a few seconds
+    # later CS2 skips back a tick, to before the demo's first full packet, and crashes. Resumed at once, it plays on.
+    files = plan_script(two_sequences())
+    assert steps(files, "cs2clipper")[0] == (0, "cs2clipper_resume")
+    assert cfg_lines(files, "cs2clipper_resume") == ["demo_resume"]
 
 
 def test_the_go_cfg_sends_the_pinned_settings_once_and_hands_over_to_the_first_sequence():
@@ -741,10 +750,18 @@ def test_the_again_cfg_starts_the_demo_again_and_schedules_the_second_go_for_its
     assert cfg_lines(files, "cs2clipper_again") == [
         "mirv_cmd clear",
         "mirv_cmd enabled 1",                                   # as the entry cfg has it, rather than trust it lasts
+        "mirv_cmd addAtTick 0 exec cs2clipper_resume2",
         "mirv_cmd addAtTick 96 exec cs2clipper_go2",
         "demo_ui_mode 0",
         r'playdemo "C:\Users\Some One\Demos\match 1.dem"',      # the path the entry cfg plays, as it is
     ]
+
+
+def test_the_demo_starting_again_is_resumed_at_tick_0_too():
+    files = passes_script([Sequence(1, 10000, 12000, ((10000, SUBJECT),))],
+                          [Sequence(2, 3000, 4000, ((3000, SUBJECT),))])
+    assert steps(files, "cs2clipper_again")[0] == (0, "cs2clipper_resume2")
+    assert cfg_lines(files, "cs2clipper_resume2") == ["demo_resume"]
 
 
 def test_the_go2_cfg_sends_the_pinned_settings_again_and_hands_over_to_the_second_pass():
@@ -774,7 +791,7 @@ def test_each_pass_is_checked_as_a_plan_of_its_own():
 def test_a_second_pass_of_nothing_is_the_plan_of_one_view():
     assert passes_script(two_sequences(), []) == plan_script(two_sequences())
     files = plan_script(two_sequences())
-    assert not any(name.startswith(("cs2clipper_again", "cs2clipper_go2")) for name in files)
+    assert not any(name.startswith(("cs2clipper_again", "cs2clipper_go2", "cs2clipper_resume2")) for name in files)
 
 
 # Whatever the plan, it stays within what HLAE and CS2 do reliably.
@@ -802,7 +819,7 @@ ALLOWED_COMMANDS = {
     "tv_listen_voice_indices", "tv_listen_voice_indices_h", "spec_show_xray", "mp_display_kill_assists",
     "mirv_replace_name", "spec_mode", "spec_player",
     # what the plan adds to drive it
-    "mirv_cmd", "exec", "demo_gototick", "demo_ui_mode", "playdemo", "quit",
+    "mirv_cmd", "exec", "demo_gototick", "demo_resume", "demo_ui_mode", "playdemo", "quit",
 }
 
 

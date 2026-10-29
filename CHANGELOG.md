@@ -3,6 +3,25 @@
 What changed in each release of CS2 Clipper. The release workflow publishes a version's section as the notes of
 its GitHub Release, and the app shows those notes on the Status page when it offers that version.
 
+## 0.10.0
+
+### Renders work again, and every match gets its stats
+
+- **CS2 no longer crashes when a render starts.** Since CS2's update of 22 October, CS2 crashed a few seconds into
+  every FACEIT demo, so each render failed with "CS2 never started the demo". The clipper now gets the demo playing
+  the moment it loads, which keeps CS2 clear of the crash. If rendering stopped because renders kept failing, resume
+  it on the Status page, and send a failed Demo back through with Retry.
+- **A crash says so.** When CS2 crashes while it loads a demo, the render stops straight away and its log names the
+  crash dump, instead of trying twice more and saying the demo never started.
+- **Stats for every match.** Each match on the Reels page has a Stats button: K/D/A, ADR, HS%, KAST, opening kills,
+  trades, flashes, utility damage, clutches and 2K–5K rounds for all ten players, with FACEIT's own numbers first. The
+  scorecard has arrows against your last 20 matches, the table sorts by any column, and the round timeline links each
+  kill to its place in your Reels.
+- **Replay a round.** Replay this round, on a match's stats, draws the round on the map's radar with a kill feed. It is
+  built when you ask for it, while CS2 and FACEIT AC are closed.
+- Matches analyzed before this version get their stats in the background, newest first, while CS2 and FACEIT AC are
+  both closed. Analysis now waits while FACEIT AC runs, as it already did for CS2.
+
 ## 0.9.0
 
 ### Quieter Reels, and a new look: Press Box

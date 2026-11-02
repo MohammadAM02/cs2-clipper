@@ -3,6 +3,26 @@
 What changed in each release of CS2 Clipper. The release workflow publishes a version's section as the notes of
 its GitHub Release, and the app shows those notes on the Status page when it offers that version.
 
+## 0.11.0
+
+### A new look: the 16-bit Press Box
+
+- **The whole app is pixel art now.** Titles, buttons and tabs are set in Silkscreen and everything you read in Pixelify
+  Sans. Panels have notched corners, shadows are hard steps, the icons are drawn pixel by pixel, and nothing is rounded,
+  rotated or blurred. Things move in steps, like a 16-bit game.
+- **A night round plays behind every page.** A Terrorist plants the bomb, an SAS Counter-Terrorist defuses it, Nugget
+  pecks about and a camera on a tripod records. The setting follows the map being rendered: a hill village for
+  Inferno, desert for Dust2 and Mirage, jungle ruins for Ancient, a power plant for Nuke, a rail yard for Train, snow
+  for Office, a river for Anubis and Overpass, and the rooftop for Vertigo and anything else. The page you open next
+  keeps the same setting and picks the round up where it was. The scene rests while the window isn't in front, and
+  holds still when Windows asks for less motion.
+- **Status films the round on its monitor**, beside the rundown, with the lower third and the recording light. The
+  first run opens on the rooftop, with the three steps below it.
+- **Nugget is pixel art too**, and he moves one pixel at a time.
+- The Highlights carousel shows the scene in the match's setting until a Reel's frame is ready.
+- Text is set in Silkscreen and Pixelify Sans, which ship with the app under the SIL Open Font License and replace
+  Bangers, Barlow and Barlow Condensed.
+
 ## 0.10.0
 
 ### Renders work again, and every match gets its stats

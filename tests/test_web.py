@@ -1807,14 +1807,14 @@ def test_check_for_demos_says_why_not_with_409(tmp_path):
     assert (response.status_code, response.get_json()) == (409, {"error": "Match alerts are off"})
 
 
-# --- Nugget and the Press Box look: nugget.js, Bangers, and Barlow in its two widths ------------------------
+# --- Nugget and the 16-bit Press Box look: nugget.js, pixelscene.js, Silkscreen and Pixelify Sans ----------------
 
-FONT_FILES = ("Bangers.woff2", "Barlow-Regular.woff2", "Barlow-Medium.woff2", "Barlow-SemiBold.woff2", "Barlow-Bold.woff2",
-              "BarlowCondensed-SemiBold.woff2", "BarlowCondensed-Bold.woff2", "BarlowCondensed-ExtraBold.woff2")
+FONT_FILES = ("Silkscreen-Regular.woff2", "Silkscreen-Bold.woff2", "PixelifySans-Regular.woff2",
+              "PixelifySans-Medium.woff2", "PixelifySans-SemiBold.woff2", "PixelifySans-Bold.woff2")
 
 
-def test_nugget_and_the_fonts_are_served_to_the_pc_and_the_phone_like_the_shared_files(client):
-    for path, mimetype in (("/nugget.js", "text/javascript"),
+def test_nugget_the_scene_and_the_fonts_are_served_to_the_pc_and_the_phone_like_the_shared_files(client):
+    for path, mimetype in (("/nugget.js", "text/javascript"), ("/pixelscene.js", "text/javascript"),
                            *((f"/fonts/{name}", "font/woff2") for name in FONT_FILES)):
         response = pc_get(client, path)
         assert (response.status_code, response.mimetype) == (200, mimetype), path
@@ -1829,8 +1829,8 @@ def test_every_font_the_css_loads_is_served(client):
 
 
 def test_only_the_fonts_come_out_of_the_fonts_folder(client):
-    for path in ("/fonts/Bangers-OFL.txt", "/fonts/Barlow-OFL.txt", "/fonts/BarlowCondensed-OFL.txt",
-                 "/fonts/HankenGrotesk.woff2", "/fonts/Saira.woff2"):
+    for path in ("/fonts/Silkscreen-OFL.txt", "/fonts/PixelifySans-OFL.txt", "/fonts/Bangers.woff2",
+                 "/fonts/Barlow-Regular.woff2", "/fonts/HankenGrotesk.woff2", "/fonts/Saira.woff2"):
         assert pc_get(client, path).status_code == 404, path
 
 
@@ -1840,9 +1840,16 @@ def test_every_page_loads_nugget_after_the_shared_script(client):
         assert html.index('src="/app.js"') < html.index('src="/nugget.js"'), page
 
 
-def test_the_exe_carries_nugget_and_the_fonts():
-    for name in ("nugget.js", *(f"fonts/{font}" for font in FONT_FILES)):
+def test_the_exe_carries_nugget_the_scene_and_the_fonts():
+    for name in ("nugget.js", "pixelscene.js", *(f"fonts/{font}" for font in FONT_FILES)):
         assert name in PAGE_FILES, name
+
+
+def test_every_page_loads_the_scene_after_the_shared_script(client):
+    # the scene is every page's backdrop, and Status's monitor and the carousels draw it too
+    for page in ("/status", "/demos", "/reels", "/settings"):
+        html = pc_get(client, page).get_data(as_text=True)
+        assert html.index('src="/app.js"') < html.index('src="/pixelscene.js"'), page
 
 
 # --- every route Tasks 10-14 added is PC-only: a foreign Host is refused on all of them -------------

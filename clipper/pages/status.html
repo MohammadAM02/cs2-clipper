@@ -10,15 +10,16 @@
 <body>
 <script src="/app.js"></script>
 <script src="/nugget.js"></script>
+<script src="/pixelscene.js"></script>
 <script src="/touches.js" defer></script>
 <script>renderNav("/status");</script>
 <main>
   <section class="onboard rise" id="onboard" aria-labelledby="h-onboard" hidden>
-    <div class="ob-head">
-      <span data-nugget="rendering"></span>
-      <div class="say">
+    <div class="ob-hero">
+      <canvas id="ob-scene" aria-hidden="true"></canvas>
+      <div class="ob-head">
         <h1 id="h-onboard" class="title">Set up in one go</h1>
-        <p class="lead promise"><b>Zero FPS cost.</b> CS2 Clipper does nothing while CS2 is open, and never opens CS2
+        <p class="lead promise"><b>Zero FPS cost</b> CS2 Clipper does nothing while CS2 is open, and never opens CS2
           while FACEIT AC runs. It records your Highlights later, from the match's demo.</p>
       </div>
     </div>
@@ -61,7 +62,7 @@
   <div id="home">
   <section class="stage rise" aria-label="Now">
     <div class="art" id="art">
-      <div id="scene"></div>
+      <canvas id="scene" class="scene-art" aria-hidden="true"></canvas>
       <h1 id="greet" class="cap">Status</h1>
       <div class="cap" id="elapsed" aria-hidden="true"></div>
       <span class="sfx" id="sfx" aria-hidden="true"></span>
@@ -140,8 +141,8 @@
       <h2 id="h-log" class="cap" style="margin-right:10px">Activity log</h2>
       <span id="log-filters" role="group" aria-label="Show" style="display:flex;gap:8px"></span>
       <span class="spacer"></span>
-      <button class="chip" id="copy-log" disabled><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy</button>
-      <button class="chip on" id="follow" aria-pressed="true"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg>Follow new lines</button>
+      <button class="chip" id="copy-log" disabled><svg width="16" height="16" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="M0 0h4v1h-4zM0 1h1v1h-1zM3 1h1v1h-1zM0 2h1v1h-1zM3 2h4v1h-4zM0 3h4v1h-4zM6 3h1v1h-1zM3 4h1v1h-1zM6 4h1v1h-1zM3 5h1v1h-1zM6 5h1v1h-1zM3 6h4v1h-4z"/></svg>Copy</button>
+      <button class="chip on" id="follow" aria-pressed="true"><svg width="16" height="16" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="M3 0h2v1h-2zM3 1h2v1h-2zM3 2h2v1h-2zM3 3h2v1h-2zM0 4h1v1h-1zM3 4h2v1h-2zM7 4h1v1h-1zM1 5h6v1h-6zM2 6h4v1h-4zM3 7h2v1h-2z"/></svg>Follow new lines</button>
     </div>
     <div id="log" role="log" aria-label="Log"></div>
   </section>
@@ -210,14 +211,17 @@ function progressLine(p) {
   return `${sequence} · ${left}`;
 }
 
-// --- Nugget: the rooftop he films from, what he says, and the sound it makes --------------------------------
-// His mood comes from what the app is doing; an Ace (touches.js says so with `clipper:ace`) has him crowing a while.
+// --- the monitor: the pixel scene, what Nugget says, and the sound it makes ------------------------------------
+// The scene plays in the setting of the map being rendered (the last Demo's when nothing renders), and rests while
+// the window is not in front. Nugget's mood comes from what the app is doing; an Ace (touches.js says so with
+// `clipper:ace`) has him crowing a while.
 const READING = ["spotted", "unpacked", "analyzed", "scored"];
 const SFX = {rendering: ["REC!", "#FF5500"], idle: ["zzz…", "#F2EFEA"], paused: ["HOLD!", "#F2EFEA"], problem: null,
   ace: ["POW!", "#FF5500"]};
 let stageKey = "", aceUntil = 0, aceNews = null;
-NUGGET.follow(document.getElementById("art"), [0.29, 0.52]);
-const nightNow = () => { const h = new Date().getHours(); return h >= 20 || h < 6; };
+const stage = PIXELSCENE.mount(document.getElementById("scene"), {map: backdropMap(), start: loopStart(), pauseOnBlur: true, lift: 64,
+  host: document.getElementById("art")});     // `lift`: the ground the lower third covers is extra ground
+const stageMap = data => (data.rendering && data.rendering.map) || (data.demos.find(d => d.map) || {}).map || "rooftop";
 
 function nuggetMood(data) {
   if (Date.now() < aceUntil) return "ace";
@@ -263,15 +267,13 @@ const restingCaption = (data, mood) => mood === "ace" ? "In your Reels now" : mo
   : data.paused_by === "you" ? "Paused" : "Standing by";
 
 function renderStage(data) {
-  const mood = nuggetMood(data), night = mood === "idle" && nightNow();
+  const mood = nuggetMood(data);
   const sfx = mood === "idle" && data.paused_by === "you" ? "paused" : mood;
-  const key = `${mood}|${night}|${sfx}`;
   document.getElementById("art").dataset.mood = mood;       // the lower third's recording light (app.css)
-  if (key !== stageKey) {
-    stageKey = key;
-    const scene = document.getElementById("scene");
-    scene.innerHTML = NUGGET.scene(mood, night);
-    scene.firstElementChild.classList.add("in");
+  stage.setMap(stageMap(data));
+  setBackdrop(stageMap(data));
+  if (sfx !== stageKey) {
+    stageKey = sfx;
     document.getElementById("sfx").innerHTML = SFX[sfx] ? NUGGET.burst(...SFX[sfx]) : "";
   }
   document.getElementById("greet").textContent = captionOf(data, mood);
@@ -486,7 +488,7 @@ function renderSlides(matches) {
   const slides = best.map(h => {
     const play = h.player ?? h.enemy, type = String(h.type).toUpperCase();
     const tags = reasonTags(h);
-    return {key: `${h.match.checksum}-${h.round}`, type, tab: `${type === "ACE" ? "Ace" : type}, ${h.match.map}`, thumb: play,
+    return {key: `${h.match.checksum}-${h.round}`, type, tab: `${type === "ACE" ? "Ace" : type}, ${h.match.map}`, thumb: play, map: h.match.map,
       meta: `${h.match.map}, ${dateLabel(h.match.played_at)}, round ${h.round}`,
       title: `${type === "ACE" ? "Ace" : type} in round ${h.round}`,
       sub: tags.length ? tags.join(", ") + "." : h.player === null ? "From the Enemy POV."
@@ -644,7 +646,7 @@ async function loadUpdate() {
 }
 
 // --- the first run: one screen, three things -------------------------------------------------------------------
-let onboardWas = null, canPick = !!window.pywebview?.api?.pick_folder;
+let onboardWas = null, obScene = null, canPick = !!window.pywebview?.api?.pick_folder;
 addEventListener("pywebviewready", () => { canPick = !!window.pywebview?.api?.pick_folder; });
 
 function renderOnboard(ob, setup) {
@@ -653,6 +655,9 @@ function renderOnboard(ob, setup) {
   document.getElementById("home").hidden = first;
   if (onboardWas === true && !first) toast(`${ICON.check}<span>You're set. Play a FACEIT match; its Highlights land in Reels.</span>`, 5000);
   onboardWas = first;
+  // the banner's scene plays only while the first-run screen is up
+  if (first && !obScene) obScene = PIXELSCENE.mount(document.getElementById("ob-scene"), {map: "rooftop", start: loopStart(), pauseOnBlur: true});
+  if (!first && obScene) { obScene.destroy(); obScene = null; }
   if (!first) return;
   const tick = (id, ok) => { const el = document.getElementById(id); el.hidden = !ok; el.innerHTML = ok ? ICON.check : ""; };
   document.getElementById("ob-who").classList.toggle("done", ob.steamid);

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CS2 Clipper · Rooftop</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#0D0A08}
+  canvas{display:block;image-rendering:crisp-edges;image-rendering:pixelated;cursor:pointer}
+</style>
+</head>
+<body>
+<canvas id="screen" role="img" aria-label="Pixel-art animation: at night, a Terrorist plants the bomb, then an SAS Counter-Terrorist defuses it, while Nugget the chicken pecks about. Click or press T / C to switch sides, B to change the setting."></canvas>
+<script src="pixelscene.js"></script>
+<script>
+// The pixel scene on its own, full window: a preview of pixelscene.js away from the app.
+// Click or press T / C to switch sides, B to change the setting. #ct and a setting's name (#ct-jungle), or
+// ?side=ct&map=jungle, pick them at start; a demo's map name works too (?map=de_inferno). ?t=21.5 freezes at 21.5 s.
+"use strict";
+(() => {
+  const q = new URLSearchParams(location.search), tags = location.hash.slice(1).toLowerCase().split("-");
+  const map = q.get("map") || tags.find(t => PIXELSCENE.themeFor(t) === t || /^(de|cs)_/.test(t)) || "rooftop";
+  const t = q.has("t") ? Math.max(0, parseFloat(q.get("t")) || 0) : null;
+  const side = q.get("side") === "ct" || tags.includes("ct") ? "ct" : "t";
+  const canvas = document.getElementById("screen");
+  const scene = PIXELSCENE.mount(canvas, {map, side, t, fit: "window"});
+  canvas.addEventListener("pointerdown", () => scene.setSide(scene.side() ^ 1));
+  addEventListener("keydown", e => {
+    if (e.key === "t" || e.key === "T") scene.setSide(0);
+    else if (e.key === "c" || e.key === "C") scene.setSide(1);
+    else if (e.key === "b" || e.key === "B") scene.nextTheme();
+  });
+})();
+</script>
+</body>
+</html>

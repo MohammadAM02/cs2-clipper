@@ -10,6 +10,7 @@
 <body>
 <script src="/app.js"></script>
 <script src="/nugget.js"></script>
+<script src="/pixelscene.js"></script>
 <script src="/touches.js" defer></script>
 <script>renderNav("/reels");</script>
 <main>
@@ -159,7 +160,7 @@ function renderSlides() {
   document.getElementById("hero").hidden = !best.length;
   carousel.set(best.map(h => {
     const type = typeOf(h), name = type === "ACE" ? "Ace" : type, tags = reasonTags(h);
-    return {key: `${h.match.checksum}-${h.round}`, type, tab: `${name}, ${h.match.map}`, thumb: h.player ?? h.enemy,
+    return {key: `${h.match.checksum}-${h.round}`, type, tab: `${name}, ${h.match.map}`, thumb: h.player ?? h.enemy, map: h.match.map,
       meta: `${h.match.map}, ${dateLabel(h.match.played_at)}, ${h.match.result === "win" ? "won" : h.match.result === "loss" ? "lost" : ""} ${h.match.score}`,
       title: `${name} in round ${h.round}`, sub: tags.length ? tags.join(", ") + "." : "",
       acts: [...(h.player !== null ? [{label: "Watch", primary: true, play: h.player}] : []),

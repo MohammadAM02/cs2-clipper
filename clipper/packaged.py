@@ -20,9 +20,9 @@ import psutil
 Check = tuple[str, Callable[[], object]]
 
 PAGE_FILES = ("status.html", "demos.html", "reels.html", "settings.html", "app.css", "app.js", "touches.css",
-              "touches.js", "nugget.js", "fonts/Bangers.woff2", "fonts/Barlow-Regular.woff2", "fonts/Barlow-Medium.woff2",
-              "fonts/Barlow-SemiBold.woff2", "fonts/Barlow-Bold.woff2", "fonts/BarlowCondensed-SemiBold.woff2",
-              "fonts/BarlowCondensed-Bold.woff2", "fonts/BarlowCondensed-ExtraBold.woff2")
+              "touches.js", "nugget.js", "pixelscene.js", "fonts/Silkscreen-Regular.woff2", "fonts/Silkscreen-Bold.woff2",
+              "fonts/PixelifySans-Regular.woff2", "fonts/PixelifySans-Medium.woff2", "fonts/PixelifySans-SemiBold.woff2",
+              "fonts/PixelifySans-Bold.woff2")
 
 
 def frozen() -> bool:

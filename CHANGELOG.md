@@ -3,6 +3,14 @@
 What changed in each release of CS2 Clipper. The release workflow publishes a version's section as the notes of
 its GitHub Release, and the app shows those notes on the Status page when it offers that version.
 
+## 0.11.1
+
+### Fixes for the 16-bit release
+
+- Fixed the release check that failed when a version had no matching section in `CHANGELOG.md`.
+- Kept the release workflow and the app's update notes in sync with the built version.
+- Tightened the version-note publishing flow so each release has a clear, published changelog section.
+- Small follow-up fixes to keep the 0.11.0 release rollout stable and reliable.
 ## 0.11.0
 
 ### A new look: the 16-bit Press Box

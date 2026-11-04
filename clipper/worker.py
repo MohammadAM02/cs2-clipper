@@ -29,7 +29,7 @@ from clipper.index import Index
 from clipper.join import JoinError, assign_clips
 from clipper.model import Break, MatchInfo, RoundFacts
 from clipper.render import RenderProgress, RenderRequest, RenderResult
-from clipper.scoring import score_match, select
+from clipper.scoring import score_match
 from clipper.state import AppState, Rendering, view_name, views_label
 
 log = logging.getLogger(__name__)
@@ -48,6 +48,27 @@ SNOOZE_MINUTES = 60                # the heads-up toast's Not now
 STUCK_TOAST_SECONDS = 120.0        # how long a Gate held only by what the player can fix waits before a toast says so
 # What the player can fix themselves, and how a toast asks them to.
 _FIXES = {FACEIT_REASON: "close FACEIT AC", STEAM_REASON: "open Steam"}
+PICKS_FLAG = "picks"               # set once the index has moved from the top N to your picks (spec: Pick your rounds)
+READY_FLAG = "ready_to_pick:"      # + a Demo's id: its "ready to pick" toast went out
+
+
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}" + ("" if n == 1 else "s")
+
+
+def _talk(labels) -> str:
+    """"the talk at halftime and OT 1": where a match's Breaks are, as a toast says it."""
+    places = ["halftime" if label == "HALFTIME" else label.replace(" HALF", " half") for label in labels]
+    return "the talk at " + " and ".join(places)
+
+
+def _what(highlights: int, break_labels) -> str:
+    """What a launch records, as its heads-up says it: "2 Highlights and the talk at halftime"."""
+    if not break_labels:
+        return _count(highlights, "Highlight")
+    if not highlights:
+        return _talk(break_labels).capitalize()
+    return f"{_count(highlights, 'Highlight')} and {_talk(break_labels)}"
 
 
 class Skip(Exception):
@@ -323,6 +344,7 @@ class Worker:
         try:
             if not self._pruned_at_start:
                 self._pruned_at_start = True
+                self._move_to_picks()
                 self._prune_done_matches()
                 rename_old_reels(self.index, self.cfg)
             for path in self.services.intake.ready():
@@ -370,6 +392,29 @@ class Worker:
                 self.state.set_waiting(self._waiting_reasons)
             else:
                 self.state.set_idle()
+
+    def _move_to_picks(self) -> None:
+        """Once, on the first start of a version with picks: every match is scored again from its kept analysis (no
+        csda run), which marks what is worth clipping and keeps what is picked; and what the top N picked and never
+        recorded is picked no more, unless its Demo is rendering or joined, which then finishes as it is (spec: Pick
+        your rounds, Upgrading)."""
+        if self.index.get_flag(PICKS_FLAG) == "1":
+            return
+        scored = 0
+        for checksum in self.index.scored_matches():
+            if not self.services.facts.has(checksum):
+                continue
+            try:
+                facts = self.services.facts.round_facts(checksum, self.cfg.subject_steamid)
+            except Exception:  # noqa: BLE001 - one match's analysis must not stop the move
+                log.exception("match %s could not be scored again", checksum)
+                continue
+            self.index.save_highlights(checksum, score_match(facts))
+            scored += 1
+        unpicked = self.index.unpick_unrecorded()
+        self.index.set_flag(PICKS_FLAG, "1")
+        log.info("moved to picks: %s scored again, %s never recorded and picked no more",
+                 _count(scored, "match"), _count(unpicked, "round"))
 
     def _prune_done_matches(self) -> None:
         """On the first tick of each Worker: matches finished before their raw Clips were pruned give them up now.
@@ -457,12 +502,13 @@ class Worker:
             raise GiveUp(f"analyzing the Demo again gave match {again}, not {checksum}")
 
     def _score(self, demo) -> None:
+        """Every round with a Frag becomes a Highlight, marked when it is worth clipping; nothing is picked here (spec:
+        Pick your rounds). A match worth clipping has its Breaks found too, to pick with its rounds."""
         self._ensure_analysis(demo)
-        facts =self.services.facts.round_facts(demo["match_checksum"], self.cfg.subject_steamid)
+        facts = self.services.facts.round_facts(demo["match_checksum"], self.cfg.subject_steamid)
         highlights = score_match(facts)
-        chosen = select(highlights, self.cfg.top_n)
-        self.index.save_highlights(demo["match_checksum"], highlights, {h.round for h in chosen})
-        if chosen:                                    # a Break is recorded with the Highlights, never by itself
+        self.index.save_highlights(demo["match_checksum"], highlights)
+        if any(h.worthy for h in highlights):         # a Break is listed with a match worth clipping, never by itself
             self._find_breaks(demo)
         self.index.advance(demo["id"], "scored")
 
@@ -480,13 +526,42 @@ class Worker:
         self.index.save_breaks(demo["match_checksum"], talking(windows(inputs.rounds, inputs.max_rounds), ticks))
 
     def _queue_renders(self, demo) -> None:
-        if not self.index.selected_highlights(demo["match_checksum"]):
-            self._finish(demo)                        # no Frags: nothing to render
+        """A Demo with picks to record goes on to render them; one with none is done and waits on the Reels page, its
+        match ready to pick."""
+        views = [perspective for perspective in self.cfg.perspectives_to_render
+                 if self._lacks(demo["match_checksum"], perspective)]
+        if not views:
+            self._ready_to_pick(demo)
+            self._settle(demo)
             return
-        for perspective in self.cfg.perspectives_to_render:
+        for perspective in views:
             if self.index.latest_render(demo["id"], perspective) is None:
                 self.index.queue_render(demo["id"], perspective, attempt=1)
         self.index.advance(demo["id"], "rendering")
+
+    def _lacks(self, checksum: str, perspective: str) -> bool:
+        """Whether something picked has neither a Reel nor recorded Clips of `perspective`: what its launch records.
+        A Break is recorded in your view only."""
+        return bool(self.index.highlights_to_record(checksum, perspective)) or (
+            perspective == "player" and bool(self.index.breaks_to_record(checksum)))
+
+    def _ready_to_pick(self, demo) -> None:
+        """Says once per Demo that its match waits for you to pick, with Pick rounds, which opens Reels at the match:
+        how many rounds are worth clipping, and where there is talk to pick. Nothing when there is nothing to pick."""
+        checksum = demo["match_checksum"]
+        flag = f"{READY_FLAG}{demo['id']}"
+        if not checksum or self.index.get_flag(flag) is not None:
+            return
+        rounds = [row for row in self.index.pick_rows(checksum) if row["worthy"] and not row["selected"]]
+        talk = ([row["label"] for row in self.index.breaks(checksum)]
+                if "player" in self.cfg.perspectives_to_render else [])
+        if not rounds and not talk:
+            return
+        self.index.set_flag(flag, "1")
+        match = self.index.match(checksum)
+        also = f", and {_talk(talk)}" if talk else ""
+        self.services.notify(f"{match['map']} is ready to pick", f"{_count(len(rounds), 'round')} worth clipping{also}.",
+                             actions=(("Pick rounds", links.to_page(f"/reels?match={checksum}")),))
 
     # --- step 5: rendering -----------------------------------------------------------------------
 
@@ -502,25 +577,22 @@ class Worker:
         if demo["dem_path"] is None or not Path(demo["dem_path"]).is_file():
             self._unpack_again(demo)                  # the Demo is back for a view: `_finish` took its .dem
             return
-        asked = self.index.asked_renders(demo["id"])
-        jobs = []                                     # the Render Jobs of the views not done yet, player first
+        jobs = []                                     # the Render Jobs of the views with something to record, player first
         for perspective in self._wanted(demo):
             job = self.index.latest_render(demo["id"], perspective)
-            if job is None:
-                self.index.queue_render(demo["id"], perspective, attempt=1)
-                job = self.index.latest_render(demo["id"], perspective)
-            if job["state"] == "done":
-                continue
-            if job["state"] == "running":             # the app stopped in the middle of this render
+            if job is not None and job["state"] == "running":     # the app stopped in the middle of this render
                 self.index.finish_render(job["id"], "failed", "interrupted: the app stopped mid-render")
                 job = self.index.latest_render(demo["id"], perspective)
-            if job["state"] == "failed":
+            if not self._lacks(demo["match_checksum"], perspective):
+                continue                              # every pick has this view, or is recorded and waits to be joined
+            if job is None or job["state"] == "done":   # picked since this view last recorded
+                self.index.queue_render(demo["id"], perspective, attempt=1)
+                job = self.index.latest_render(demo["id"], perspective)
+            elif job["state"] == "failed":
                 if job["attempt"] >= MAX_RENDER_ATTEMPTS:
-                    if perspective in asked or self._shipped(demo):   # the Demo keeps the Reels it has
-                        self._drop_asks(demo, (perspective,),
-                                        f"it failed {job['attempt']} times, last with: {job['failure']}")
-                        return
-                    raise GiveUp(f"{perspective} render failed {job['attempt']} times: {job['failure']}")
+                    self._give_back(demo, (perspective,),
+                                    f"it failed {job['attempt']} times, last with: {job['failure']}")
+                    return
                 self.index.queue_render(demo["id"], perspective, attempt=job["attempt"] + 1)
                 job = self.index.latest_render(demo["id"], perspective)
             elif job["state"] == "aborted":            # FACEIT AC appeared: go again, not counted
@@ -554,35 +626,43 @@ class Worker:
         return set(filter(None, (self.index.get_flag(f"shipped:{demo['id']}") or "").split(",")))
 
     def _lacks_reels(self, demo, perspective: str) -> bool:
-        """Whether `perspective` is recorded for `demo` but some selected Highlight has no Reel of it yet."""
+        """Whether `perspective` is recorded for `demo` and has Clips of a picked Highlight that has no Reel of it
+        yet."""
         job = self.index.latest_render(demo["id"], perspective)
         return job is not None and job["state"] == "done" and any(
-            not self.index.has_reel(highlight["id"], perspective)
+            not self.index.has_reel(highlight["id"], perspective) and self.index.clips_for(highlight["id"], perspective)
             for highlight in self.index.selected_highlights(demo["match_checksum"]))
 
     def _unpack_again(self, demo) -> None:
         """Unpack the download the Demo kept, again, once its .dem is gone: one step per tick. With no download
-        left, a Demo asked for a view drops its asks (`_drop_asks`); any other Demo fails."""
+        left, the Demo gives its picks back (`_give_back`)."""
         archive = Path(demo["archive_path"])
         if not archive.is_file():
-            asked = self.index.asked_renders(demo["id"])
-            if asked:
-                self._drop_asks(demo, asked, "its download is gone")
-                return
-            raise GiveUp("its download is gone")
+            self._give_back(demo, self._wanted(demo), "its download is gone")
+            return
         dem = self.services.unpack(archive, self.cfg.demos_dir)
         self.index.advance(demo["id"], "rendering", dem_path=dem)
 
-    def _drop_asks(self, demo, perspectives, why: str) -> None:
-        """The views the Demo was asked for cannot be rendered (`why`): says so, forgets the asks, and finishes the
-        Demo as it was, done with the Reels it has. It stays done rather than failed, so its match keeps its Reels."""
-        match = self.index.match(demo["match_checksum"])
-        for perspective in perspectives:
-            self.services.notify(FAILED_TITLES[perspective], f"{match['map']}: {why}. The match keeps its Reels.")
-        log.warning("demo #%s (%s): not rendering %s, so the Demo stays done without it: %s",
-                    demo["id"], match["map"], " and ".join(perspectives), why)
+    def _give_back(self, demo, perspectives, why: str) -> None:
+        """`perspectives` cannot be recorded (`why`): what was recorded becomes Reels, the picks with no Reel in any
+        view are given back (their tick boxes come back on the Reels page), a toast says so, and the Demo is done with
+        the Reels it has, `why` kept for the Reels page. It stays done rather than failed, so its match keeps its
+        Reels, and ticking the rounds again is the retry (spec: Pick your rounds, The worker)."""
+        checksum = demo["match_checksum"]
+        self._join(demo)
+        given = self.index.give_back(checksum)
+        match = self.index.match(checksum)
+        if given:
+            self.services.notify("Couldn't record your picks",
+                                 f"{_count(given, 'pick')} from {match['map']} couldn't be recorded: {why}. "
+                                 f"Tick {'it' if given == 1 else 'them'} again to try again.")
+        else:
+            for perspective in perspectives:
+                self.services.notify(FAILED_TITLES[perspective], f"{match['map']}: {why}. The match keeps its Reels.")
+        log.warning("demo #%s (%s): not recording %s, so the Demo is done without it (%s given back): %s",
+                    demo["id"], match["map"], " and ".join(perspectives), _count(given, "pick"), why)
         self.index.clear_asked_renders(demo["id"])
-        self._settle(demo)
+        self._settle(demo, last_error=why)
 
     def _try_render(self, demo, jobs) -> None:
         """One CS2 launch for `jobs`: a view, or both views of the Demo, which share one heads-up and one log."""
@@ -593,8 +673,12 @@ class Worker:
         if not self._gate_is_clear():
             return
         self._ensure_analysis(demo)
-        highlights = self.index.selected_highlights(demo["match_checksum"])
-        match = self.index.match(demo["match_checksum"])
+        checksum = demo["match_checksum"]
+        views = [job["perspective"] for job in jobs]
+        highlights = sorted({h["id"]: h for view in views for h in self.index.highlights_to_record(checksum, view)}
+                            .values(), key=lambda h: h["round"])           # what each view still lacks
+        breaks = self._breaks(demo) if "player" in views else ()
+        match = self.index.match(checksum)
         perspective = "both" if len(jobs) == 2 else jobs[0]["perspective"]
         if self._back_to_back(demo["id"]):
             if self._gives_way(demo["id"]) or not self._gate_is_clear():
@@ -604,8 +688,9 @@ class Worker:
         else:
             self.services.notify(
                 "Rendering highlights",
-                f"{len(highlights)} Highlights from {match['map']} ({views_label(perspective)}). "
-                f"CS2 opens in {self.cfg.heads_up_seconds:g} s — please don't start it yourself.",
+                f"{_what(len(highlights), [found.label for found in breaks])} from {match['map']} "
+                f"({views_label(perspective)}). CS2 opens in {self.cfg.heads_up_seconds:g} s — please don't start it "
+                f"yourself.",
                 actions=((f"Not now ({SNOOZE_MINUTES // 60} h)", links.to_snooze(SNOOZE_MINUTES)),),
             )
             if not self._gate_stays_clear(self.cfg.heads_up_seconds, demo["id"]):
@@ -631,7 +716,7 @@ class Worker:
             width=self.cfg.video_size[0],
             height=self.cfg.video_size[1],
             checksum=demo["match_checksum"],
-            breaks=self._breaks(demo) if any(job["perspective"] == "player" for job in jobs) else (),
+            breaks=breaks,
         )
         try:
             result = self.services.render(
@@ -651,7 +736,7 @@ class Worker:
         self._last_render = (demo["id"], self.services.clock())   # CS2 has just closed
         failed = False
         for job in jobs:
-            failure = self._save_clips(demo, highlights, job, result)
+            failure = self._save_clips(demo, highlights, job, result, breaks)
             if failure is None:
                 self.index.finish_render(job["id"], "done")
                 continue
@@ -672,9 +757,11 @@ class Worker:
                 f" then resume rendering from the tray or the Status page.",
             )
 
-    def _save_clips(self, demo, highlights, job, result: RenderResult) -> str | None:
+    def _save_clips(self, demo, highlights, job, result: RenderResult, breaks=()) -> str | None:
         """Keeps the Clips `result` gives for `job`'s view, each under its Highlight. Returns why the view failed,
-        or None when its Clips are kept. A view the launch did not record fails with the launch's reason."""
+        or None when its Clips are kept. A view the launch did not record fails with the launch's reason. A Break of
+        `breaks` your view did not record (`hlae_plan.add_breaks` had no room for it beside the rounds) is given back,
+        so it can be picked again rather than asked for in every launch."""
         if job["perspective"] not in result.clips:
             return result.failure or f"no Clips of the {job['perspective']} view"
         try:
@@ -687,15 +774,20 @@ class Worker:
             for clip in clips:
                 self.index.add_clip(job["id"], ids[number], clip, self.cfg.store_path(clip.path))
         if job["perspective"] == "player":            # a Break is recorded in your view only
-            breaks = {row["after_round"]: row["id"] for row in self.index.breaks(demo["match_checksum"])}
+            rows = {row["after_round"]: row["id"] for row in self.index.breaks(demo["match_checksum"])}
+            recorded = set()
             for found, clip in result.breaks:
-                if found.after_round in breaks:
-                    self.index.add_clip(job["id"], breaks[found.after_round], clip, self.cfg.store_path(clip.path))
+                if found.after_round in rows:
+                    self.index.add_clip(job["id"], rows[found.after_round], clip, self.cfg.store_path(clip.path))
+                    recorded.add(found.after_round)
+            self.index.unpick_breaks(demo["match_checksum"],
+                                     [found.after_round for found in breaks if found.after_round not in recorded])
         return None
 
     def _breaks(self, demo) -> tuple[Break, ...]:
+        """The picked Breaks your view has not recorded yet."""
         return tuple(Break(row["after_round"], row["start_tick"], row["end_tick"], row["label"])
-                     for row in self.index.breaks(demo["match_checksum"]))
+                     for row in self.index.breaks_to_record(demo["match_checksum"]))
 
     def _back_to_back(self, demo_id: int) -> bool:
         """True when the last render not aborted was of this same Demo and ended less than BACK_TO_BACK_SECONDS
@@ -774,6 +866,8 @@ class Worker:
                     continue
                 clips = [self.cfg.load_path(row["path"])
                          for row in self.index.clips_for(highlight["id"], perspective)]
+                if not clips:
+                    continue                          # picked after this view last recorded, and not recorded since
                 out = reel_path(self.index, self.cfg, demo["match_checksum"], highlight["round"], highlight["type"],
                                 perspective)
                 duration = self.services.join(clips, out)
@@ -810,8 +904,9 @@ class Worker:
         match = self.index.match(demo["match_checksum"])
         count = len(self.index.selected_highlights(demo["match_checksum"]))
         later = " The Enemy POV records next." if more_to_come else ""
-        self.services.notify("Highlights ready", f"{count} Highlights from {match['map']} are ready.{later}",
-                             actions=self._watch(demo["match_checksum"], perspective))
+        self.services.notify("Highlights ready",
+                             f"{_count(count, 'Highlight')} from {match['map']} {'is' if count == 1 else 'are'} "
+                             f"ready.{later}", actions=self._watch(demo["match_checksum"], perspective))
 
     def _notify_ready(self, demo, perspectives) -> None:
         """Says each of `perspectives` is ready, once it has Reels: how many Highlights have them."""
@@ -821,7 +916,8 @@ class Worker:
             count = sum(self.index.has_reel(highlight["id"], perspective) for highlight in highlights)
             if count:
                 self.services.notify(READY_TITLES[perspective],
-                                     f"{count} Highlights from {match['map']} now have {view_name(perspective)}.",
+                                     f"{_count(count, 'Highlight')} from {match['map']} now "
+                                     f"{'has' if count == 1 else 'have'} {view_name(perspective)}.",
                                      actions=self._watch(demo["match_checksum"], perspective))
 
     def _watch(self, checksum: str, perspective: str) -> tuple[tuple[str, str], ...]:
@@ -832,14 +928,15 @@ class Worker:
             return ()
         return (("Watch", links.to_page(f"/reels?play={reel}")), ("Show in folder", links.to_reveal(reel)))
 
-    def _settle(self, demo) -> None:
+    def _settle(self, demo, last_error: str | None = None) -> None:
         """The Demo is done: its unpacked .dem goes (the compressed download stays), and its match's raw Clips go
-        once every Demo of the match is done. Shared by a finished Demo and one whose asks were dropped."""
+        once every Demo of the match is done. Shared by a finished Demo, one with nothing picked yet, and one that gave
+        its picks back, which keeps why as its `last_error`."""
         dem, archive = demo["dem_path"], demo["archive_path"]
         if dem and Path(dem) != Path(archive):
             Path(dem).unlink(missing_ok=True)         # the compressed download stays
         self.index.delete_flag(f"shipped:{demo['id']}")
-        self.index.advance(demo["id"], "done")
+        self.index.advance(demo["id"], "done", **({} if last_error is None else {"last_error": last_error}))
         if demo["match_checksum"]:
             prune_renders(self.index, self.cfg, demo["match_checksum"])   # the Reels are made: the raw Clips go
 

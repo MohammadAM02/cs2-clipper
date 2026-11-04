@@ -17,7 +17,7 @@ from clipper.config import REPO_ROOT, Config
 from clipper.gate import Gate, GateStatus
 from clipper.index import Index
 from clipper.procs import SystemProbe
-from clipper.scoring import score_match, select
+from clipper.scoring import score_match
 from clipper.settings import SettingsStore
 from clipper.worker import PERSPECTIVES
 
@@ -90,12 +90,12 @@ def cmd_highlights(cfg: Config, index: Index, key: str) -> int:
         print(f"the app has no analysis of match {checksum}")
         return 1
     highlights = score_match(facts)
-    chosen = {h.round for h in select(highlights, cfg.top_n)}
+    picked = {row["round"] for row in index.selected_highlights(checksum)}
     print(f"{'round':>6} {'type':<5} {'score':>5}  reasons")
     for h in highlights:
-        mark = "*" if h.round in chosen else " "
+        mark = "*" if h.round in picked else "+" if h.worthy else " "
         print(f"{h.round:>5}{mark} {h.type:<5} {h.score:>5}  {', '.join(h.reasons)}")
-    print(f"* = in the top {cfg.top_n}")
+    print("+ = worth clipping, * = picked")
     return 0
 
 

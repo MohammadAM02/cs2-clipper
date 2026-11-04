@@ -15,7 +15,8 @@ from clipper.backfill import DONE, StatsBackfill
 from clipper.config import Config
 from clipper.index import Index
 from clipper.intake import faceit_match_id
-from tests.csda_json import CHECKSUM, DEMO_NAME, match
+from clipper.scoring import score_match
+from tests.csda_json import CHECKSUM, DEMO_NAME, ENEMY, SUBJECT, match
 
 T0 = datetime(2026, 10, 16, 12, 0, tzinfo=timezone.utc)
 MATCH_ID_OF_DEMO = DEMO_NAME.rsplit("-", 2)[0]        # the FACEIT match id a demo's file name starts with
@@ -35,6 +36,7 @@ class FakeCsda:
     def __init__(self):
         self.calls = 0
         self.fail = False
+        self.data = match()
 
     def __call__(self, command, log_path):
         self.calls += 1
@@ -43,7 +45,7 @@ class FakeCsda:
             raise RuntimeError("csda crashed")
         demo = Path(command[command.index("-demo-path") + 1])
         out = Path(command[command.index("-output") + 1])
-        (out / f"{demo.stem}.json").write_text(json.dumps(match()), encoding="utf-8")
+        (out / f"{demo.stem}.json").write_text(json.dumps(self.data), encoding="utf-8")
         return 0
 
 
@@ -150,3 +152,50 @@ def test_the_faceit_match_id_is_read_from_a_demo_file_name():
     assert faceit_match_id(f"{DEMO_NAME}.dem.zst") == MATCH_ID_OF_DEMO
     assert faceit_match_id("1-00000000-0000-4000-8000-0000000000aa-1-1.dem") == MATCH_ID_OF_DEMO
     assert faceit_match_id("my-demo.dem.zst") is None
+
+
+# --- the hits a low HP is worked out from (spec: Pick your rounds, HP at a Frag) -----------------------
+
+def _analyzed_before_hits_were_kept(world):
+    """The match as the app kept it before it kept hits: its analysis, its stats and its FACEIT line, all there."""
+    old = match()
+    del old["damages"]
+    world.cfg.analyses_dir.mkdir(parents=True, exist_ok=True)
+    (world.cfg.analyses_dir / f"{CHECKSUM}.json").write_text(json.dumps(analysis.trim(old)), encoding="utf-8")
+    (world.cfg.analyses_dir / f"{CHECKSUM}.stats.json").write_text("{}", encoding="utf-8")
+    world.index.set_flag(f"faceit_stats:{CHECKSUM}", DONE)
+    world.index.save_highlights(CHECKSUM, score_match(world.analyses.round_facts(CHECKSUM, SUBJECT)))
+    world.index.mark_picked(CHECKSUM, {3})
+
+
+def test_a_match_analyzed_before_hits_were_kept_is_analyzed_again_and_scored_again_keeping_its_picks(world):
+    _analyzed_before_hits_were_kept(world)
+    world.csda.data = match(damages=[{"tick": 2900, "roundNumber": 1, "victimSteamId": int(SUBJECT),
+                                      "healthDamage": 85, "attackerSteamId": int(ENEMY), "weaponName": "AK-47"}])
+    world.backfill.tick(lambda: True)
+    assert world.csda.calls == 1
+    assert world.analyses.has_hits(CHECKSUM)
+    rows = {row["round"]: row for row in world.index.pick_rows(CHECKSUM)}
+    assert json.loads(rows[1]["reasons"]) == ["2k", "no-scope", "through smoke", "15 HP"]
+    assert rows[3]["selected"] == 1
+    assert not (world.cfg.demos_dir / f"{DEMO_NAME}.dem").exists()
+    world.backfill.tick(lambda: True)
+    assert world.csda.calls == 1                      # once
+
+
+def test_a_match_with_its_hits_is_not_analyzed_again(world):
+    _analyzed_before_hits_were_kept(world)
+    (world.cfg.analyses_dir / f"{CHECKSUM}.json").write_text(json.dumps(analysis.trim(match())), encoding="utf-8")
+    world.backfill.tick(lambda: True)
+    assert world.csda.calls == 0
+
+
+def test_hits_that_could_not_be_worked_out_wait_a_day(world):
+    _analyzed_before_hits_were_kept(world)
+    world.csda.fail = True
+    world.backfill.tick(lambda: True)
+    world.backfill.tick(lambda: True)
+    assert world.csda.calls == 1
+    world.clock.now += timedelta(days=1)
+    world.backfill.tick(lambda: True)
+    assert world.csda.calls == 2

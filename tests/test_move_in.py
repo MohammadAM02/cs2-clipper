@@ -31,7 +31,7 @@ def _full_fake_repo(tmp_path: Path) -> Path:
     home/, which is not taken."""
     repo = tmp_path / "repo"
     _write(repo / "clipper.toml",
-           'top_n = 3\npoll_seconds = 5.0\nindex_path = "C:/old/index.sqlite"\n')
+           'top_n = 3\npadding_before_s = 3.0\npoll_seconds = 5.0\nindex_path = "C:/old/index.sqlite"\n')
     _write(repo / ".env", 'FACEIT_NICKNAME=someplayer\nFACEIT_API_KEY="a-real-faceit-key"\n')
     index_path = repo / "data" / "clipper.sqlite"
     index_path.parent.mkdir(parents=True)
@@ -86,7 +86,8 @@ def test_every_item_is_copied(tmp_path):
     assert sorted(path.name for path in data_dir.iterdir()) == ["clipper.sqlite", "settings.json"]
 
     values = _read_settings(data_dir)
-    assert values["top_n"] == 3                    # changed from the default: written
+    assert values["padding_before_s"] == 3.0       # changed from the default: written
+    assert "top_n" not in values                    # retired when you started picking rounds: dropped
     assert "poll_seconds" not in values             # equal to the new default: not written
     assert "index_path" not in values               # old-only key: dropped
     assert values["faceit_nickname"] == "someplayer"

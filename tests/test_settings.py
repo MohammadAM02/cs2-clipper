@@ -81,7 +81,7 @@ def test_defaults_have_no_steamid_and_no_clips_folder():
 def test_defaults_match_configs_own_defaults():
     values = defaults()
     cfg = Config()
-    assert values["top_n"] == cfg.top_n == 5
+    assert values["kill_feed_seconds"] == cfg.kill_feed_seconds == 5.0
     assert values["page_port"] == cfg.page_port == 8765
     assert values["aspect_ratio"] == "16:9"
     assert values["perspectives"] == cfg.perspectives == "both"
@@ -109,10 +109,10 @@ def test_json_values_matches_defaults_minus_the_secret_blobs():
 
 
 def test_json_values_reflects_the_given_configs_effective_values(tmp_path):
-    cfg = Config(top_n=9, hlae_exe="C:/HLAE/hlae.exe", data_root=tmp_path,
+    cfg = Config(kill_feed_seconds=9.0, hlae_exe="C:/HLAE/hlae.exe", data_root=tmp_path,
                  faceit_api_key_protected=protect.protect("a-key"))
     values = json_values(cfg)
-    assert values["top_n"] == 9
+    assert values["kill_feed_seconds"] == 9.0
     assert values["hlae_exe"] == "C:/HLAE/hlae.exe"
     assert values["data_root"] == str(tmp_path)
     assert STORED_KEY not in values
@@ -161,23 +161,23 @@ def test_a_json_array_instead_of_an_object_falls_back_to_defaults(tmp_path):
 
 def test_known_values_are_applied(tmp_path):
     path = tmp_path / "settings.json"
-    path.write_text(json.dumps({"top_n": 10, "subject_steamid": "76561198000000001"}), encoding="utf-8")
+    path.write_text(json.dumps({"kill_feed_seconds": 10, "subject_steamid": "76561198000000001"}), encoding="utf-8")
 
     loaded = load(path)
 
-    assert loaded.config.top_n == 10
+    assert loaded.config.kill_feed_seconds == 10
     assert loaded.config.subject_steamid == "76561198000000001"
     assert loaded.warnings == ()
 
 
 def test_retired_settings_are_ignored_without_a_warning(tmp_path):
     path = tmp_path / "settings.json"
-    path.write_text(json.dumps({"renderer": "hlae", "pg_bin": "C:/pg/bin", "pg_data": "C:/pg/data", "top_n": 10}),
-                    encoding="utf-8")
+    path.write_text(json.dumps({"renderer": "hlae", "pg_bin": "C:/pg/bin", "pg_data": "C:/pg/data", "top_n": 10,
+                                "kill_feed_seconds": 10}), encoding="utf-8")   # top_n: before you picked rounds
 
     loaded = load(path)
 
-    assert loaded.config == Config(top_n=10)
+    assert loaded.config == Config(kill_feed_seconds=10)
     assert loaded.warnings == ()
 
 
@@ -212,22 +212,22 @@ def test_unknown_keys_are_ignored_without_a_warning(tmp_path):
 
 def test_a_bad_hand_edited_value_falls_back_and_warns_with_its_label(tmp_path):
     path = tmp_path / "settings.json"
-    path.write_text(json.dumps({"top_n": 999}), encoding="utf-8")
+    path.write_text(json.dumps({"kill_feed_seconds": 999}), encoding="utf-8")
 
     loaded = load(path)
 
-    assert loaded.config.top_n == 5
+    assert loaded.config.kill_feed_seconds == 5.0
     assert len(loaded.warnings) == 1
-    assert "Highlights per match" in loaded.warnings[0]
+    assert "Kill feed time (s)" in loaded.warnings[0]
 
 
 def test_several_bad_values_each_warn_and_the_rest_still_load(tmp_path):
     path = tmp_path / "settings.json"
-    path.write_text(json.dumps({"top_n": 999, "aspect_ratio": "21:9", "page_port": 42}), encoding="utf-8")
+    path.write_text(json.dumps({"kill_feed_seconds": 999, "aspect_ratio": "21:9", "page_port": 42}), encoding="utf-8")
 
     loaded = load(path)
 
-    assert (loaded.config.top_n, loaded.config.aspect_ratio, loaded.config.page_port) == (5, "16:9", 8765)
+    assert (loaded.config.kill_feed_seconds, loaded.config.aspect_ratio, loaded.config.page_port) == (5.0, "16:9", 8765)
     assert len(loaded.warnings) == 3
 
 
@@ -281,7 +281,6 @@ def test_the_stored_protected_key_loads_as_is_and_a_corrupt_one_falls_back(tmp_p
     ("keyboard_shortcuts", False),
     ("hlae_exe", ""),
     ("hlae_exe", "C:/HLAE/hlae.exe"),
-    ("top_n", 25),
     ("padding_before_s", 4),
     ("padding_before_s", 4.5),
     ("match_alerts", False),
@@ -311,8 +310,8 @@ def test_valid_values_pass(name, value):
     ("calm_mode", 1),
     ("hlae_exe", 1),
     ("ffmpeg", ""),
-    ("top_n", 0),
-    ("top_n", 5.0),
+    ("page_port", 1023),
+    ("page_port", 8765.0),
     ("padding_before_s", -1),
     ("padding_before_s", "4"),
     ("match_alerts", 1),
@@ -324,8 +323,8 @@ def test_invalid_values_fail(name, value):
 
 
 def test_error_messages_are_short_and_say_whats_allowed():
-    errors = validate({"top_n": 500}, check_exists=False)
-    assert errors["top_n"] == "must be a whole number from 1 to 50"
+    errors = validate({"page_port": 80}, check_exists=False)
+    assert errors["page_port"] == "must be a whole number from 1024 to 65535"
     errors = validate({"aspect_ratio": "21:9"}, check_exists=False)
     assert errors["aspect_ratio"] == "must be one of 16:9, 4:3, 4:3-hd, 4:3-stretched"
     errors = validate({"perspectives": "neither"}, check_exists=False)
@@ -381,15 +380,15 @@ def test_an_unknown_name_is_reported():
 def test_only_changed_values_are_written(tmp_path):
     path = tmp_path / "settings.json"
 
-    assert save(path, {"top_n": 10}) == {}
-    assert read_raw(path) == {"top_n": 10}
+    assert save(path, {"kill_feed_seconds": 10}) == {}
+    assert read_raw(path) == {"kill_feed_seconds": 10}
 
 
 def test_a_value_set_back_to_its_default_disappears_from_the_file(tmp_path):
     path = tmp_path / "settings.json"
-    save(path, {"top_n": 10})
+    save(path, {"kill_feed_seconds": 10})
 
-    assert save(path, {"top_n": 5}) == {}
+    assert save(path, {"kill_feed_seconds": 5}) == {}
 
     assert read_raw(path) == {}
 
@@ -444,17 +443,17 @@ def test_unknown_keys_already_in_the_file_are_kept(tmp_path):
     path = tmp_path / "settings.json"
     path.write_text(json.dumps({"a_future_setting": "x"}), encoding="utf-8")
 
-    assert save(path, {"top_n": 10}) == {}
+    assert save(path, {"kill_feed_seconds": 10}) == {}
 
-    assert read_raw(path) == {"a_future_setting": "x", "top_n": 10}
+    assert read_raw(path) == {"a_future_setting": "x", "kill_feed_seconds": 10}
 
 
 def test_one_message_per_bad_field_and_nothing_is_written(tmp_path):
     path = tmp_path / "settings.json"
 
-    errors = save(path, {"top_n": 999, "aspect_ratio": "21:9"})
+    errors = save(path, {"kill_feed_seconds": 999, "aspect_ratio": "21:9"})
 
-    assert set(errors) == {"top_n", "aspect_ratio"}
+    assert set(errors) == {"kill_feed_seconds", "aspect_ratio"}
     assert not path.exists()
 
 
@@ -480,7 +479,7 @@ def test_folders_are_checked_for_existence_on_save(tmp_path):
 def test_save_is_atomic_and_leaves_no_tmp_file(tmp_path):
     path = tmp_path / "settings.json"
 
-    save(path, {"top_n": 10})
+    assert save(path, {"kill_feed_seconds": 10}) == {}
 
     assert not path.with_name(path.name + ".tmp").exists()
 
@@ -558,19 +557,19 @@ def test_the_store_reloads_after_the_file_changes_on_disk(tmp_path):
     store = SettingsStore(path)
     store.current()
 
-    path.write_text(json.dumps({"top_n": 12, "note": "make this write a different size"}), encoding="utf-8")
+    path.write_text(json.dumps({"kill_feed_seconds": 12, "note": "make this write a different size"}), encoding="utf-8")
 
-    assert store.current().config.top_n == 12
+    assert store.current().config.kill_feed_seconds == 12
 
 
 def test_the_store_reloads_after_its_own_save(tmp_path):
     path = tmp_path / "settings.json"
     store = SettingsStore(path)
-    assert store.current().config.top_n == 5
+    assert store.current().config.kill_feed_seconds == 5.0
 
-    assert store.save({"top_n": 9}) == {}
+    assert store.save({"kill_feed_seconds": 9}) == {}
 
-    assert store.current().config.top_n == 9
+    assert store.current().config.kill_feed_seconds == 9
 
 
 def test_the_store_does_not_reload_when_nothing_changed(tmp_path):

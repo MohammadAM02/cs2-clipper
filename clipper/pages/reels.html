@@ -26,16 +26,17 @@
   <div class="emptybig rise" id="empty" hidden>
     <span data-nugget-full="idle"></span>
     <h2>No Reels yet</h2>
-    <p>Grab a Demo with a 3K or better and Nugget films its Highlights. They land here once they're rendered.</p>
+    <p>Grab a Demo and its rounds worth clipping show up here. Tick the ones you want and Nugget films them.</p>
     <a class="primary" href="/demos">Demos to grab</a>
   </div>
 </main>
 <script>
-// Reels (spec: Pages -> Reels): every match's Highlights. A click on a Highlight plays it from your view in a
-// player that opens under it; the player switches to the Enemy POV, and shares: Copy file (paste it into Discord),
-// an export that fits Discord, a 9:16 one, and Show in folder. A match's Breaks (the talk at halftime and around
-// each overtime, both teams' voices) sit between its rounds and play the same way.
-const HEIGHT = {ACE: 36, "5K": 36, "4K": 30, "3K": 24, "2K": 18};
+// Reels (spec: Pages -> Reels; Pick your rounds): every match's rounds worth clipping. A click on a clipped one plays
+// it from your view in a player that opens under it; the player switches to the Enemy POV, and shares: Copy file
+// (paste it into Discord), an export that fits Discord, a 9:16 one, and Show in folder. On the PC a round not clipped
+// yet has a tick box, and Clip records the ticked ones. A match's Breaks (the talk at halftime and around each
+// overtime, both teams' voices) sit between its rounds, and are ticked and played the same way.
+const HEIGHT = {ACE: 36, "5K": 36, "4K": 30, "3K": 24, "2K": 18, "1K": 12};
 // The two views a Reel can be rendered from: the words of its button and of the toasts about it.
 const VIEWS = {
   player: {ask: "Render your view", busy: "Rendering your view…", name: "Your view"},
@@ -47,9 +48,17 @@ let filter = "all";
 const closed = new Set(JSON.parse(sessionStorage.getItem("closed") || "[]"));
 const carousel = Carousel(document.getElementById("hero"), {onPlay: id => playById(id, true)});
 
-const typeOf = h => String(h.type).toUpperCase();
+const typeOf = h => { const type = String(h.type).toUpperCase(); return type === "FRAG" ? "1K" : type; };
 // On a phone (or any other device) the page only watches and downloads: everything else is the PC's.
 const PC = onThisPC();
+// What is ticked and not clipped yet, by match: "r:7" is round 7, "b:12" the Break after round 12. Kept here, not in
+// the cards, which a reload rebuilds whenever they change.
+const ticked = new Map();
+const tickedOf = checksum => ticked.get(checksum) || new Set();
+const clipped = row => row.state === "clipped";
+const open = row => row.state === "open";
+const shownRows = rows => PC ? rows || [] : (rows || []).filter(clipped);   // a phone lists what it can watch
+const listed = m => shownRows(m.highlights).length + shownRows(m.breaks).length > 0;
 if (!PC) {
   const b = document.getElementById("brand");
   b.hidden = false;
@@ -67,27 +76,68 @@ function rounds(score) {
   return Math.max(1, parts.reduce((a, b) => a + b, 0));
 }
 
-// One Highlight: the whole row plays it, from your view when it has one. What the hover scrub flicks through
-// (touches.js) is the same Reel.
-function highlightRow(h) {
+// A clipped row's mark, on the PC, where a row not clipped yet has its tick box: so the rows line up.
+const doneMark = () => PC ? `<span class="mk done" title="Clipped">${ICON.check}</span>` : "";
+
+// One Highlight: a clipped one's whole row plays it, from your view when it has one. What the hover scrub flicks
+// through (touches.js) is the same Reel. One not clipped yet is a row to tick (`pickRow`).
+function highlightRow(h, m) {
   const tags = reasonTags(h).map(t => `<span class="tag">${esc(t)}</span>`).join("");
+  if (!clipped(h)) return pickRow(m, `r:${+h.round}`, `Round ${+h.round}`, typeOf(h), tags, h.state);
   const first = h.player ?? h.enemy, secs = h.player !== null ? h.player_s : h.enemy_s;
   const views = [h.player !== null ? "Your view" : "", h.enemy !== null ? "Enemy POV" : ""].filter(Boolean).join(" · ");
   return `<div class="hl" data-round="${+h.round}" data-player="${h.player ?? ""}" data-enemy="${h.enemy ?? ""}"${first !== null ? ` data-scrub="${+first}" data-secs="${+secs || 0}"` : ""}>
-    <span class="rd">Round ${+h.round}</span>${hitBurst(typeOf(h))}
+    ${doneMark()}<span class="rd">Round ${+h.round}</span>${hitBurst(typeOf(h))}
     <span class="tags">${tags}<span class="views">${esc(views)}</span></span>
     <button class="pov play" data-reel="${first}" aria-label="Play round ${+h.round}">${ICON.play}Play</button>
   </div>`;
 }
 
 // One Break: a row like a Highlight's, with your view only. CSS writes its label in capitals, as it does "Round 8".
-function breakRow(b) {
+function breakRow(b, m) {
   const name = b.label === "HALFTIME" ? "Halftime" : b.label.replace(" HALF", " half");
+  if (!clipped(b)) return pickRow(m, `b:${+b.after_round}`, name, "TALK", '<span class="tag">Both teams\' voices</span>', b.state);
   return `<div class="hl" data-after="${+b.after_round}" data-player="${+b.reel}" data-enemy="" data-scrub="${+b.reel}" data-secs="${+b.secs || 0}">
-    <span class="rd">${esc(name)}</span>${hitBurst("TALK")}
+    ${doneMark()}<span class="rd">${esc(name)}</span>${hitBurst("TALK")}
     <span class="tags"><span class="tag">Both teams' voices</span><span class="views">Your view</span></span>
     <button class="pov play" data-reel="${+b.reel}" aria-label="Play the talk at ${esc(name.toLowerCase())}">${ICON.play}Play</button>
   </div>`;
+}
+
+// A round or Break not clipped yet (PC only): open, it is a tick box (the whole row ticks it); picked, it says it is
+// queued or recording. `key` is what Clip sends: "r:<round>" or "b:<the round a Break follows>".
+function pickRow(m, key, label, burst, tags, state) {
+  const can = state === "open" && !m.pick_refusal, on = can && tickedOf(m.checksum).has(key);
+  const mark = state === "queued" ? `<span class="mk wait" title="Queued">${ICON.dash}</span>`
+    : state === "recording" ? '<span class="mk" title="Recording"><span class="dot live"></span></span>'
+    : can ? `<span class="mk box${on ? " on" : ""}">${on ? ICON.check : ""}</span>` : '<span class="mk"></span>';
+  const status = state === "queued" ? "Queued" : state === "recording" ? "Recording…" : "";
+  return `<div class="hl pick${on ? " ticked" : ""}"${can ? ` data-pick="${key}" role="checkbox" aria-checked="${on}" tabindex="0"` : ""}>
+    ${mark}<span class="rd">${esc(label)}</span>${hitBurst(burst)}
+    <span class="tags">${tags}</span><span class="views">${status}</span>
+  </div>`;
+}
+
+// What Clip records, as its button says it: "Clip 3 rounds", "Clip 2 rounds and the talk", "Clip the talk".
+function clipLabel(keys) {
+  const rounds = [...keys].filter(k => k.startsWith("r:")).length, talk = [...keys].some(k => k.startsWith("b:"));
+  if (!rounds && !talk) return "Clip rounds";
+  return "Clip " + [rounds ? plural(rounds, "round") : "", talk ? "the talk" : ""].filter(Boolean).join(" and ");
+}
+
+// The footer's picking line (PC only): how many are ticked of those open, when picks record, and Clip; or why
+// picks can't record now. Above it, why the last picks were given back, when they were.
+function pickFoot(m) {
+  if (!PC) return "";
+  const failed = m.recording_failed
+    ? `<p class="pickfail">${ICON.info}<span>Couldn't record your picks: ${esc(m.recording_failed)}. Tick them again to try again.</span></p>` : "";
+  const openRows = [...m.highlights, ...(m.breaks || [])].filter(open).length;
+  if (!openRows) return failed;
+  if (m.pick_refusal) return `${failed}<div class="pickfoot"><span class="warn">${esc(m.pick_refusal)}</span></div>`;
+  const keys = tickedOf(m.checksum);
+  return `${failed}<div class="pickfoot"><span class="pickn">${keys.size} of ${openRows} ticked</span>
+    <span class="help">${esc(m.pick_hint)}</span><span class="spacer"></span><span class="pickerr" role="alert"></span>
+    <button class="primary sm" type="button" data-clip>${clipLabel(keys)}</button></div>`;
 }
 
 // The player under a Highlight: the video, the views it has, and the ways to share the one playing.
@@ -121,33 +171,39 @@ function renderButtons(m) {
 }
 
 function matchBlock(m) {
-  const rows = [...m.highlights.filter(keep).map(h => [h.round, highlightRow(h)]),        // each Break after its round
-    ...(filter === "all" ? m.breaks || [] : []).map(b => [b.after_round + 0.5, breakRow(b)])]
+  const hs = shownRows(m.highlights), bs = shownRows(m.breaks);
+  const rows = [...hs.filter(keep).map(h => [h.round, highlightRow(h, m)]),          // each Break after its round
+    ...(filter === "all" ? bs : []).map(b => [b.after_round + 0.5, breakRow(b, m)])]
     .sort((a, b) => a[0] - b[0]).map(([, html]) => html);
   const byRound = {};
-  m.highlights.forEach(h => { byRound[h.round] = h; });
+  hs.forEach(h => { byRound[h.round] = h; });
   const cells = Array.from({length: rounds(m.score)}, (_, i) => {
     const h = byRound[i + 1];
-    return h ? `<span class="cell ${keep(h) ? "on" : "dim"}" style="height:${HEIGHT[typeOf(h)] || 18}px" title="Round ${i + 1}"></span>` : '<span class="cell"></span>';
+    return h ? `<span class="cell ${keep(h) && clipped(h) ? "on" : "dim"}" style="height:${HEIGHT[typeOf(h)] || 18}px" title="Round ${i + 1}"></span>` : '<span class="cell"></span>';
   }).join("");
-  const won = m.result === "win";
-  return `<section class="mcard${closed.has(m.checksum) ? "" : " open"}" data-checksum="${esc(m.checksum)}" aria-label="${esc(m.map)}, ${dateLabel(m.played_at)}">
+  const won = m.result === "win", ready = PC && m.ready && !m.pick_refusal, clips = hs.filter(clipped).length;
+  const sub = clips ? plural(clips, "Highlight") : `${plural(hs.filter(open).length, "round")} worth clipping`;
+  const folder = clips || bs.some(clipped)
+    ? `<button class="ghost" data-open="${esc(m.checksum)}">${ICON.folder}Open folder</button>` : "";
+  return `<section class="mcard${PC ? " picking" : ""}${closed.has(m.checksum) ? "" : " open"}" data-checksum="${esc(m.checksum)}" aria-label="${esc(m.map)}, ${dateLabel(m.played_at)}">
     <button class="mhead" data-toggle aria-expanded="${!closed.has(m.checksum)}">
       ${maptile(m.map, "width:54px;height:54px;font-size:21px")}
-      <span class="nm"><b>${esc(m.map)}</b><small>${dateLabel(m.played_at)}, ${plural(m.highlights.length, "Highlight")}</small></span>
+      <span class="nm"><b>${esc(m.map)}</b><small>${dateLabel(m.played_at)}, ${sub}</small></span>
+      ${ready ? '<span class="readypill">Ready to pick</span>' : ""}
       <span class="sc" style="color:${won ? "#F2EFEA" : "#8F857A"}"><b>${esc(m.score)}</b><small>${esc(resultLabel(m.result))}</small></span>
       <span class="strip-w" aria-hidden="true"><span class="rstrip">${cells}</span><span class="ends"><span>Round 1</span><span>Round ${rounds(m.score)}</span></span></span>
       ${ICON.chev}
     </button>
     <div class="collapse"><div>
       ${rows.length ? rows.join("") : '<p class="empty" style="padding:16px 22px">No Highlights of this kind in this match.</p>'}
-      ${PC ? `<div class="mfoot"><a class="ghost" href="/stats?match=${esc(m.checksum)}">Stats</a>${renderButtons(m)}<button class="ghost" data-open="${esc(m.checksum)}">${ICON.folder}Open folder</button></div>` : ""}
+      ${pickFoot(m)}
+      ${PC ? `<div class="mfoot"><a class="ghost" href="/stats?match=${esc(m.checksum)}">Stats</a>${renderButtons(m)}${folder}</div>` : ""}
     </div></div>
   </section>`;
 }
 
 function renderFilters() {
-  const all = data.flatMap(m => m.highlights);
+  const all = data.flatMap(m => shownRows(m.highlights));
   const defs = [["all", "All"], ["ACE", "Aces"], ["4K", "4K"], ["3K", "3K"], ["2K", "2K"], ["hs", "All headshots"]];
   document.getElementById("filters").innerHTML = defs.map(([id, label]) => {
     const n = all.filter(h => id === "all" || (id === "hs" ? (h.reasons || []).some(r => /all headshots/i.test(r)) : typeOf(h) === id)).length;
@@ -169,17 +225,23 @@ function renderSlides() {
 }
 
 function render() {
-  const all = data.flatMap(m => m.highlights);
-  document.getElementById("sum").textContent = data.length
-    ? `${plural(all.length, "Highlight")} from ${plural(data.length, "match", "matches")}. Click one to watch it and share it.`
-    : "No Reels yet. Finished Demos show up here.";
-  const mood = data.length ? "ace" : "idle";
+  const visible = data.filter(listed);
+  const clips = visible.flatMap(m => m.highlights.filter(clipped));
+  const withClips = visible.filter(m => m.highlights.some(clipped)).length;
+  const ready = PC ? visible.filter(m => m.ready && !m.pick_refusal).length : 0;
+  const readyLine = `${plural(ready, "match", "matches")} ready to pick`;
+  document.getElementById("sum").textContent = clips.length
+    ? `${plural(clips.length, "Highlight")} from ${plural(withClips, "match", "matches")}. `
+      + (ready ? `${readyLine}.` : "Click one to watch it and share it.")
+    : ready ? `${readyLine}: tick the rounds you want, then Clip.` : "No Reels yet. Finished Demos show up here.";
+  const mood = visible.length ? "ace" : "idle";
   if (mood !== sumMood) { sumMood = mood; document.getElementById("sum-nugget").innerHTML = NUGGET.head(mood); }
-  document.getElementById("mhead").hidden = !data.length;
-  document.getElementById("empty").hidden = data.length > 0;
+  document.getElementById("mhead").hidden = !visible.length;
+  document.getElementById("empty").hidden = visible.length > 0;
   renderFilters();
   renderSlides();
-  sync(document.getElementById("matches"), data.filter(m => filter === "all" || m.highlights.some(keep)), m => m.checksum, matchBlock);
+  sync(document.getElementById("matches"), visible.filter(m => filter === "all" || shownRows(m.highlights).some(keep)),
+       m => m.checksum, matchBlock);
 }
 
 // A render replaces the changed matches, and the player sits inside one: never while a Reel plays or is shared.
@@ -229,6 +291,60 @@ async function askRender(button) {
   try { message = (await response.json()).error; } catch (e) { /* a 404 has no body */ }
   button.disabled = false;
   toast(`${ICON.info}<span>${esc(message || "Couldn't queue it. Try again.")}</span>`);
+  await load();
+}
+
+// Ticks a round or Break not clipped yet, or unticks it, here and in `ticked`: the card stays as it is (a Reel may be
+// playing in it), and its footer's count and Clip follow.
+function togglePick(row) {
+  const card = row.closest(".mcard"), checksum = card.dataset.checksum, key = row.dataset.pick;
+  const keys = new Set(tickedOf(checksum));
+  if (keys.has(key)) keys.delete(key); else keys.add(key);
+  if (keys.size) ticked.set(checksum, keys); else ticked.delete(checksum);
+  const on = keys.has(key), mark = row.querySelector(".mk");
+  row.classList.toggle("ticked", on);
+  row.setAttribute("aria-checked", on);
+  mark.classList.toggle("on", on);
+  mark.innerHTML = on ? ICON.check : "";
+  const m = data.find(item => item.checksum === checksum);
+  const count = card.querySelector(".pickn");
+  if (count && m) count.textContent = `${keys.size} of ${[...m.highlights, ...(m.breaks || [])].filter(open).length} ticked`;
+  const button = card.querySelector("[data-clip]");
+  if (button) button.textContent = clipLabel(keys);
+  const error = card.querySelector(".pickerr");
+  if (error) error.textContent = "";
+}
+
+// Clip: asks the server to record what is ticked in the match (spec: Pick your rounds, Endpoints). On 202 the ticks go
+// and the page reloads, the rows reading as queued. With nothing ticked it says so and sends nothing; on anything else
+// the server's words go in a toast.
+async function clip(button) {
+  const card = button.closest(".mcard"), checksum = card.dataset.checksum, keys = tickedOf(checksum);
+  if (!keys.size) { card.querySelector(".pickerr").textContent = "Tick at least one round first."; return; }
+  const of = prefix => [...keys].filter(k => k.startsWith(prefix)).map(k => +k.slice(2));
+  button.disabled = true;
+  let response;
+  try {
+    response = await api(`api/reels/${checksum}/pick`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({rounds: of("r:"), breaks: of("b:")}),
+    });
+  } catch (e) {
+    button.disabled = false;
+    toast(`${ICON.info}<span>Couldn't reach CS2 Clipper. Is it running?</span>`);
+    return;
+  }
+  if (response.status === 202) {
+    ticked.delete(checksum);
+    const what = clipLabel(keys).replace("Clip ", "");
+    toast(`${ICON.check}<span>${esc(what.charAt(0).toUpperCase() + what.slice(1))} queued. CS2 records ${keys.size === 1 ? "it" : "them"} after a heads-up.</span>`);
+    await load();
+    return;
+  }
+  let message = "";
+  try { message = (await response.json()).error; } catch (e) { /* a 404 has no body */ }
+  button.disabled = false;
+  toast(`${ICON.info}<span>${esc(message || "Couldn't queue them. Try again.")}</span>`);
   await load();
 }
 
@@ -347,12 +463,20 @@ document.addEventListener("click", async e => {
   }
   const renderButton = e.target.closest("button[data-render]");
   if (renderButton && !renderButton.disabled) { await askRender(renderButton); return; }
+  const clipButton = e.target.closest("button[data-clip]");
+  if (clipButton && !clipButton.disabled) { await clip(clipButton); return; }
+  const pick = e.target.closest(".hl[data-pick]");
+  if (pick) { togglePick(pick); return; }
   const shareButton = e.target.closest("button[data-share]");
   if (shareButton && !shareButton.disabled) { await shareReel(shareButton); return; }
   const view = e.target.closest("button[data-view]");
   if (view) { const row = view.closest(".player").previousElementSibling; showReel(row, row.dataset[view.dataset.view]); return; }
   const row = e.target.closest(".hl");
   if (row && row.dataset.scrub) showReel(row, row.querySelector(".pov").dataset.reel);
+});
+document.addEventListener("keydown", e => {        // a row to tick is a checkbox: Space or Enter ticks it
+  const pick = e.target.closest && e.target.closest(".hl[data-pick]");
+  if (pick && (e.key === " " || e.key === "Enter")) { e.preventDefault(); togglePick(pick); }
 });
 
 (async () => {
@@ -364,6 +488,15 @@ document.addEventListener("click", async e => {
     if (at > 0) video.addEventListener("loadedmetadata", () => { video.currentTime = at; }, {once: true});
     history.replaceState(null, "", location.pathname);
   }
+  // A "ready to pick" toast's Pick rounds (?match=<checksum>) opens the page at that match.
+  const pickIn = asked.get("match");
+  const card = pickIn && [...document.querySelectorAll(".mcard")].find(c => c.dataset.checksum === pickIn);
+  if (card) {
+    if (!card.classList.contains("open")) toggle(card);
+    card.classList.add("changed");
+    setTimeout(() => card.scrollIntoView({behavior: "smooth", block: "start"}), 120);
+  }
+  if (pickIn) history.replaceState(null, "", location.pathname);
 })();
 every(5000, load, 30000);
 </script>

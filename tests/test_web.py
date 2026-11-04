@@ -26,7 +26,7 @@ from clipper.faceit import FaceitError
 from clipper.faceit_oauth import OAuthError
 from clipper.footprint import Usage
 from clipper.index import Index
-from clipper.model import Break, FaceitStats, Highlight, MatchInfo
+from clipper.model import Break, ClipFile, FaceitStats, Highlight, MatchInfo
 from clipper.packaged import PAGE_FILES
 from clipper.render import RenderProgress
 from clipper.settings import FIELDS, KEY_FIELD, SECRET_FIELD, STORED_KEY, Loaded, SettingsStore
@@ -393,7 +393,7 @@ def test_api_status_shape_and_values(tmp_path, index):
     snapshot = Snapshot(problems=(), paused_by=None, rendering=Rendering("de_mirage", "player", 1790000000.0),
                         quitting=None, pages_off=None)
     checks = [Check("HLAE", True, "2.192.6 (latest)"), Check("csda", False, "not installed", "run Setup")]
-    app = app_for(tmp_path, snapshot=lambda: snapshot, warnings=lambda: ("settings.json: top_n bad",),
+    app = app_for(tmp_path, snapshot=lambda: snapshot, warnings=lambda: ("settings.json: kill_feed_seconds bad",),
                  checks=lambda: checks)
     data = pc_get(app.test_client(), "/api/status").get_json()
 
@@ -401,7 +401,7 @@ def test_api_status_shape_and_values(tmp_path, index):
     assert data["rendering"] == {"map": "Mirage", "perspective": "player", "started_at": 1790000000.0, "progress": None}
     assert (data["paused_by"], data["quitting"], data["pages_off"]) == (None, None, None)
     assert data["problems"] == []
-    assert data["warnings"] == ["settings.json: top_n bad"]
+    assert data["warnings"] == ["settings.json: kill_feed_seconds bad"]
     assert data["checks"] == [
         {"name": "HLAE", "ok": True, "detail": "2.192.6 (latest)", "hint": ""},
         {"name": "csda", "ok": False, "detail": "not installed", "hint": "run Setup"},
@@ -421,7 +421,8 @@ def test_the_eta_counts_each_view_left_at_the_pace_of_the_last_renders(index):
                                team_score=13, opponent_score=5))
     hls = [Highlight(round=r, type="3K", score=30, reasons=("3k",), frag_ticks=(1,), round_start_tick=0,
                      round_end_tick=10) for r in (3, 7)]
-    index.save_highlights(MATCH_CHECKSUM, hls, {3, 7})
+    index.save_highlights(MATCH_CHECKSUM, hls)
+    index.mark_picked(MATCH_CHECKSUM, {3, 7})
     index.advance(demo_id, "rendering", match_checksum=MATCH_CHECKSUM)
     for perspective in ("player", "enemy"):
         index.queue_render(demo_id, perspective, attempt=1)
@@ -430,6 +431,8 @@ def test_the_eta_counts_each_view_left_at_the_pace_of_the_last_renders(index):
 
     done = index.latest_render(demo_id, "player")["id"]
     index.start_render(done, Path("E:/out"), Path("E:/log.txt"))
+    for n, highlight in enumerate(index.selected_highlights(MATCH_CHECKSUM), start=1):    # it recorded both
+        index.add_clip(done, highlight["id"], ClipFile(n, n * 100, n * 100 + 50, Path(f"E:/s{n}.mp4"), 4.0), f"s{n}.mp4")
     index._db.execute("UPDATE render_jobs SET state = 'done', started_at = ?, finished_at = ? WHERE id = ?",
                       ("2026-10-13T10:00:00+00:00", "2026-10-13T10:01:40+00:00", done))
     [demo] = status_demos(index)
@@ -439,6 +442,23 @@ def test_the_eta_counts_each_view_left_at_the_pace_of_the_last_renders(index):
     index.start_render(enemy, Path("E:/out"), Path("E:/log.txt"))
     [demo] = status_demos(index, running_left=70.0)
     assert demo["eta_s"] == 70                        # what the render itself says is left
+
+
+def test_the_eta_counts_only_what_each_view_still_lacks(index):
+    """Round 3 has both views; round 7, picked later, is all that is left to record."""
+    demo_id = _add_demo(index)
+    index.save_match(MatchInfo(checksum=MATCH_CHECKSUM, map_name="de_mirage", played_at=NOW,
+                               team_score=13, opponent_score=5))
+    index.save_highlights(MATCH_CHECKSUM, [Highlight(round=r, type="3K", score=30, reasons=("3k",), frag_ticks=(1,),
+                                                     round_start_tick=0, round_end_tick=10, worthy=True)
+                                           for r in (3, 7)])
+    index.mark_picked(MATCH_CHECKSUM, {3})
+    for perspective in ("player", "enemy"):
+        index.save_reel(index.selected_highlights(MATCH_CHECKSUM)[0]["id"], perspective, f"E:/{perspective}.mp4", 9.0)
+    index.advance(demo_id, "done", match_checksum=MATCH_CHECKSUM)
+    index.pick(MATCH_CHECKSUM, [7], [], ("player", "enemy"))
+    [demo] = status_demos(index)
+    assert demo["eta_s"] == 2 * 45                    # one Highlight in each of two views
 
 
 def test_api_status_demos_are_filtered_to_unfinished_and_ordered_newest_first(tmp_path, index):
@@ -806,7 +826,8 @@ def _reels_index(index, match: MatchInfo = REEL_MATCH) -> int:
     index.advance(demo_id, "done", match_checksum=match.checksum)
     hl = Highlight(round=8, type="4K", score=40, reasons=("4k",), frag_ticks=(100,),
                    round_start_tick=0, round_end_tick=5000)
-    index.save_highlights(match.checksum, [hl], {8})
+    index.save_highlights(match.checksum, [hl])
+    index.mark_picked(match.checksum, {8})
     return index.selected_highlights(match.checksum)[0]["id"]
 
 
@@ -846,8 +867,9 @@ def test_api_reels_lists_a_matchs_breaks_apart_from_its_highlights(tmp_path, ind
     match = pc_get(app_for(tmp_path).test_client(), "/api/reels").get_json()[0]
 
     assert [h["round"] for h in match["highlights"]] == [8]
-    assert [(b["label"], b["after_round"], b["secs"]) for b in match["breaks"]] == [("HALFTIME", 12, 35.0)]
-    assert isinstance(match["breaks"][0]["reel"], int)
+    assert [(b["label"], b["after_round"], b["secs"], b["state"]) for b in match["breaks"]] == [
+        ("HALFTIME", 12, 35.0, "clipped"), ("OT 1", 24, None, "open")]     # every Break, to pick
+    assert isinstance(match["breaks"][0]["reel"], int) and match["breaks"][1]["reel"] is None
 
 def test_a_phone_watches_reels_the_page_and_its_list(client):
     assert phone_get(client, "/api/reels").status_code == 200
@@ -877,7 +899,7 @@ def test_a_phone_does_nothing_else_with_reels(tmp_path, index):
     client = app_for(tmp_path).test_client()
     for route in (f"/api/reels/{reel_id}/copy", f"/api/reels/{reel_id}/reveal", f"/api/reels/{reel_id}/export",
                   f"/api/reels/{REEL_MATCH.checksum}/render", f"/api/reels/{REEL_MATCH.checksum}/open-folder",
-                  "/api/reels/open-folder"):
+                  f"/api/reels/{REEL_MATCH.checksum}/pick", "/api/reels/open-folder"):
         assert phone_post(client, route, headers=MARKED, json={}).status_code == 403, route
 
 
@@ -999,7 +1021,8 @@ def _finished_match(tmp_path, index, *, views=("player",), state="done", downloa
     index.advance(demo_id, state, match_checksum=REEL_MATCH.checksum)
     hl = Highlight(round=8, type="4K", score=40, reasons=("4k",), frag_ticks=(100,),
                    round_start_tick=0, round_end_tick=5000)
-    index.save_highlights(REEL_MATCH.checksum, [hl], {8})
+    index.save_highlights(REEL_MATCH.checksum, [hl])
+    index.mark_picked(REEL_MATCH.checksum, {8})
     highlight_id = index.selected_highlights(REEL_MATCH.checksum)[0]["id"]
     for perspective in views:
         index.save_reel(highlight_id, perspective, tmp_path / f"r8-{perspective}.mp4", 12.5)
@@ -1375,7 +1398,7 @@ def test_api_settings_get_shape_and_field_order(tmp_path):
     assert advanced == ["faceit_oauth_client_id", "faceit_redirect_uri", "faceit_api_key", "faceit_client_secret",
                         "ffmpeg", "ffprobe", "hlae_exe", "stall_seconds", "launch_timeout_seconds", "page_port",
                         "poll_seconds"]
-    assert data["values"]["top_n"] == 5
+    assert data["values"]["kill_feed_seconds"] == 5.0
     assert "faceit_api_key_protected" not in data["values"]
     assert data["secrets_set"] == {"faceit_api_key": False, "faceit_client_secret": False}
     assert data["warnings"] == []
@@ -1414,21 +1437,21 @@ def test_api_settings_get_says_which_secret_is_saved_each_on_its_own(tmp_path, s
 def test_put_settings_saves_a_change_and_the_file_holds_only_that_value(tmp_path):
     app, _store = _settings_app(tmp_path)
 
-    response = pc_put(app.test_client(), "/api/settings", headers=MARKED, json={"top_n": 9})
+    response = pc_put(app.test_client(), "/api/settings", headers=MARKED, json={"kill_feed_seconds": 9})
 
     assert response.status_code == 200
     assert response.get_json() == {"saved": True, "restart_needed": False}
-    assert json.loads((tmp_path / "settings.json").read_text(encoding="utf-8")) == {"top_n": 9}
+    assert json.loads((tmp_path / "settings.json").read_text(encoding="utf-8")) == {"kill_feed_seconds": 9}
 
 
 def test_put_settings_with_bad_fields_is_400_with_one_message_each_and_nothing_written(tmp_path):
     app, _store = _settings_app(tmp_path)
 
     response = pc_put(app.test_client(), "/api/settings", headers=MARKED,
-                      json={"top_n": 999, "aspect_ratio": "21:9"})
+                      json={"kill_feed_seconds": 999, "aspect_ratio": "21:9"})
 
     assert response.status_code == 400
-    assert set(response.get_json()["errors"]) == {"top_n", "aspect_ratio"}
+    assert set(response.get_json()["errors"]) == {"kill_feed_seconds", "aspect_ratio"}
     assert not (tmp_path / "settings.json").exists()
 
 
@@ -1476,8 +1499,8 @@ def test_put_settings_refuses_a_phone_and_needs_the_marker(tmp_path):
     app, _store = _settings_app(tmp_path)
     client = app.test_client()
 
-    assert pc_put(client, "/api/settings", json={"top_n": 9}).status_code == 403
-    assert phone_put(client, "/api/settings", headers=MARKED, json={"top_n": 9}).status_code == 403
+    assert pc_put(client, "/api/settings", json={"kill_feed_seconds": 9}).status_code == 403
+    assert phone_put(client, "/api/settings", headers=MARKED, json={"kill_feed_seconds": 9}).status_code == 403
 
 
 def test_put_a_bad_key_is_400_and_neither_the_typed_value_nor_the_stored_blob_comes_back(tmp_path):
@@ -1503,7 +1526,7 @@ def test_put_a_blank_key_keeps_the_stored_one(tmp_path):
     blob = _stored_blob(tmp_path)
     client = app.test_client()
 
-    response = pc_put(client, "/api/settings", headers=MARKED, json={KEY_FIELD: "", "top_n": 9})
+    response = pc_put(client, "/api/settings", headers=MARKED, json={KEY_FIELD: "", "kill_feed_seconds": 9})
 
     assert response.status_code == 200
     assert pc_get(client, "/api/settings").get_json()["secrets_set"]["faceit_api_key"] is True
@@ -1512,15 +1535,15 @@ def test_put_a_blank_key_keeps_the_stored_one(tmp_path):
 
 def test_put_bad_fields_leave_an_existing_settings_file_byte_for_byte_unchanged(tmp_path):
     app, store = _settings_app(tmp_path)
-    assert store.save({"top_n": 9, "faceit_nickname": "someone"}) == {}
+    assert store.save({"kill_feed_seconds": 9, "faceit_nickname": "someone"}) == {}
     path = tmp_path / "settings.json"
     before = path.read_bytes()
 
     response = pc_put(app.test_client(), "/api/settings", headers=MARKED,
-                      json={"top_n": 999, "aspect_ratio": "21:9", "faceit_nickname": "changed"})
+                      json={"kill_feed_seconds": 999, "aspect_ratio": "21:9", "faceit_nickname": "changed"})
 
     assert response.status_code == 400
-    assert set(response.get_json()["errors"]) == {"top_n", "aspect_ratio"}   # the good field is not saved either
+    assert set(response.get_json()["errors"]) == {"kill_feed_seconds", "aspect_ratio"}   # the good field is not saved either
     assert path.read_bytes() == before
 
 
@@ -1695,8 +1718,8 @@ def test_week_shows_a_grabbed_match_once_with_its_demos_state_and_demos_of_its_o
     own = _add_demo(index, name="dropped-in.dem.zst", sha="d" * 64)
     index.advance(own, "done", match_checksum="d0d0")
     index.save_highlights("d0d0", [Highlight(round=r, type=t, score=50, reasons=(), frag_ticks=(r,),
-                                             round_start_tick=0, round_end_tick=9) for r, t in ((4, "ACE"), (9, "3K"))],
-                          {4, 9})
+                                             round_start_tick=0, round_end_tick=9) for r, t in ((4, "ACE"), (9, "3K"))])
+    index.mark_picked("d0d0", {4, 9})
 
     rows = pc_get(app_for(tmp_path).test_client(), "/api/week").get_json()["rows"]
 
@@ -1986,3 +2009,174 @@ def test_sharing_is_pc_only_and_needs_the_marker(tmp_path):
     client, reel_id, _ = _share_app(tmp_path)
     assert pc_post(client, f"/api/reels/{reel_id}/copy").status_code == 403
     assert phone_post(client, f"/api/reels/{reel_id}/copy", headers=MARKED).status_code == 403
+
+
+# --- picking your rounds (spec: Pick your rounds, The Reels page and Endpoints) -----------------------
+
+def _ready_match(tmp_path, index, *, state="done", download=True) -> int:
+    """REEL_MATCH scored with nothing picked: round 3 (a 3K) and round 7 (a Desert Eagle Frag) are worth clipping,
+    round 9 (a plain Frag) is not. Its Demo is in `state`, its download kept when `download`. Returns the Demo's id."""
+    index.save_match(REEL_MATCH)
+    archive = tmp_path / "demos" / "1-pick.dem.zst"
+    if download:
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_bytes(b"x")
+    demo_id = index.add_demo("1-pick.dem.zst", "e" * 64, archive)
+    index.advance(demo_id, state, match_checksum=REEL_MATCH.checksum)
+    index.save_highlights(REEL_MATCH.checksum, [
+        Highlight(3, "3K", 40, ("3k",), (100,), 0, 5000, worthy=True),
+        Highlight(7, "FRAG", 5, ("frag", "deagle"), (6000,), 5000, 9000, worthy=True),
+        Highlight(9, "FRAG", 5, ("frag",), (10000,), 9000, 12000)])
+    return demo_id
+
+
+def _pick(client, body, **kw):
+    return pc_post(client, f"/api/reels/{REEL_MATCH.checksum}/pick", headers=MARKED, json=body, **kw)
+
+
+def test_api_reels_lists_a_match_ready_to_pick_with_its_rounds_worth_clipping(tmp_path, index):
+    _ready_match(tmp_path, index)
+    match = _the_match(app_for(tmp_path).test_client())
+    assert [(h["round"], h["type"], h["reasons"], h["state"], h["player"]) for h in match["highlights"]] == [
+        (3, "3K", ["3k"], "open", None), (7, "FRAG", ["frag", "deagle"], "open", None)]
+    assert (match["ready"], match["pick_refusal"], match["recording_failed"]) == (True, None, None)
+    assert match["pick_hint"] == "Records once CS2 and FACEIT AC are closed."
+
+
+def test_api_reels_rows_say_whether_they_are_queued_recording_or_clipped(tmp_path, index):
+    demo_id = _ready_match(tmp_path, index)
+    index.mark_picked(REEL_MATCH.checksum, {3})
+    index.save_reel(index.selected_highlights(REEL_MATCH.checksum)[0]["id"], "player", tmp_path / "r3.mp4", 9.0)
+    index.pick(REEL_MATCH.checksum, [7], [], ("player",))
+    client = app_for(tmp_path).test_client()
+    assert [(h["round"], h["state"]) for h in _the_match(client)["highlights"]] == [(3, "clipped"), (7, "queued")]
+    assert _the_match(client)["ready"] is False
+    index.start_render(index.latest_render(demo_id, "player")["id"], tmp_path / "out", tmp_path / "log.txt")
+    assert [(h["round"], h["state"]) for h in _the_match(client)["highlights"]] == [(3, "clipped"), (7, "recording")]
+
+
+def test_talk_is_offered_to_pick_only_while_your_view_is_rendered(tmp_path, index):
+    _ready_match(tmp_path, index)
+    index.save_breaks(REEL_MATCH.checksum, [Break(12, 70000, 72240, "HALFTIME")])
+    assert [b["label"] for b in _the_match(app_for(tmp_path).test_client())["breaks"]] == ["HALFTIME"]
+    enemy_only = app_for(tmp_path, load_settings=lambda: Loaded(Config(perspectives="enemy"), ())).test_client()
+    assert _the_match(enemy_only)["breaks"] == []
+
+
+@pytest.mark.parametrize(("setting", "paused", "hint"), [
+    ("idle", False, "Records once the PC is idle."),
+    ("overnight", False, "Records overnight."),
+    ("anytime", True, "Rendering is paused: resume it on Status."),
+])
+def test_the_pick_hint_follows_when_renders_may_start(tmp_path, index, setting, paused, hint):
+    _ready_match(tmp_path, index)
+    if paused:
+        index.pause("you")
+    client = app_for(tmp_path, load_settings=lambda: Loaded(Config(render_when=setting), ())).test_client()
+    assert _the_match(client)["pick_hint"] == hint
+
+
+def test_a_match_whose_download_is_gone_says_its_rounds_cannot_be_recorded(tmp_path, index):
+    _ready_match(tmp_path, index, download=False)
+    assert _the_match(app_for(tmp_path).test_client())["pick_refusal"] == (
+        "This Demo's download is gone, so its rounds can't be recorded.")
+
+
+def test_a_match_that_gave_its_picks_back_says_why(tmp_path, index):
+    demo_id = _ready_match(tmp_path, index)
+    index.advance(demo_id, "done", last_error="it failed 3 times, last with: stalled")
+    assert _the_match(app_for(tmp_path).test_client())["recording_failed"] == "it failed 3 times, last with: stalled"
+
+
+def test_a_match_with_nothing_worth_clipping_is_not_listed(tmp_path, index):
+    _ready_match(tmp_path, index)
+    index.save_highlights(REEL_MATCH.checksum, [Highlight(3, "3K", 40, ("3k",), (100,), 0, 5000, worthy=False),
+                                                Highlight(7, "FRAG", 5, ("frag",), (6000,), 5000, 9000)])
+    assert pc_get(app_for(tmp_path).test_client(), "/api/reels").get_json() == []
+
+
+def test_picking_rounds_marks_them_and_sends_a_done_demo_back_to_render(tmp_path, index):
+    demo_id = _ready_match(tmp_path, index)
+    response = _pick(app_for(tmp_path).test_client(), {"rounds": [3, 7]})
+    assert response.status_code == 202
+    assert response.get_json() == {"queued": {"rounds": [3, 7], "breaks": []}}
+    assert [row["round"] for row in index.selected_highlights(REEL_MATCH.checksum)] == [3, 7]
+    assert index.demo(demo_id)["state"] == "rendering"
+
+
+def test_picking_talk_marks_the_break(tmp_path, index):
+    _ready_match(tmp_path, index)
+    index.save_breaks(REEL_MATCH.checksum, [Break(12, 70000, 72240, "HALFTIME")])
+    response = _pick(app_for(tmp_path).test_client(), {"breaks": [12]})
+    assert response.get_json() == {"queued": {"rounds": [], "breaks": [12]}}
+    assert [b["picked"] for b in index.pick_breaks(REEL_MATCH.checksum)] == [1]
+
+
+@pytest.mark.parametrize("body", [
+    {"data": "not json", "content_type": "application/json"},
+    {"json": {}},
+    {"json": {"rounds": [], "breaks": []}},
+    {"json": {"rounds": ["3"]}},
+    {"json": {"rounds": [True]}},
+    {"json": {"rounds": 3}},
+    {"json": {"rounds": [3], "breaks": [0]}},
+    {"json": [3]},
+    {"json": {"rounds": [9]}},                  # a plain Frag: not worth clipping
+    {"json": {"rounds": [4]}},                  # no Highlight at all
+    {"json": {"breaks": [12]}},                 # no Break after round 12
+])
+def test_a_bad_pick_is_400_and_picks_nothing(tmp_path, index, body):
+    demo_id = _ready_match(tmp_path, index)
+    response = pc_post(app_for(tmp_path).test_client(), f"/api/reels/{REEL_MATCH.checksum}/pick", headers=MARKED,
+                       **body)
+    assert response.status_code == 400
+    assert "error" in response.get_json()
+    assert index.selected_highlights(REEL_MATCH.checksum) == []
+    assert index.demo(demo_id)["state"] == "done"
+
+
+def test_talk_cannot_be_picked_while_your_view_is_not_rendered(tmp_path, index):
+    _ready_match(tmp_path, index)
+    index.save_breaks(REEL_MATCH.checksum, [Break(12, 70000, 72240, "HALFTIME")])
+    client = app_for(tmp_path, load_settings=lambda: Loaded(Config(perspectives="enemy"), ())).test_client()
+    assert _pick(client, {"breaks": [12]}).status_code == 400
+
+
+def test_picking_in_a_match_the_app_does_not_know_is_404(tmp_path, index):
+    assert _pick(app_for(tmp_path).test_client(), {"rounds": [3]}).status_code == 404
+
+
+def test_a_pick_whose_download_is_gone_is_409_and_says_why(tmp_path, index):
+    _ready_match(tmp_path, index, download=False)
+    response = _pick(app_for(tmp_path).test_client(), {"rounds": [3]})
+    assert response.status_code == 409
+    assert response.get_json() == {"error": "This Demo's download is gone, so its rounds can't be recorded."}
+    assert index.selected_highlights(REEL_MATCH.checksum) == []
+
+
+def test_a_pick_in_a_failed_demo_is_409_and_says_to_retry_it(tmp_path, index):
+    demo_id = _ready_match(tmp_path, index)
+    index.fail(demo_id, "rendering: CS2 never started the demo")
+    response = _pick(app_for(tmp_path).test_client(), {"rounds": [3]})
+    assert response.status_code == 409
+    assert response.get_json() == {"error": "This Demo failed: rendering: CS2 never started the demo. "
+                                            "Retry it on Status."}
+
+
+def test_picking_is_pc_only_and_needs_the_marker(tmp_path, index):
+    _ready_match(tmp_path, index)
+    client = app_for(tmp_path).test_client()
+    assert pc_post(client, f"/api/reels/{REEL_MATCH.checksum}/pick", json={"rounds": [3]}).status_code == 403
+    assert phone_post(client, f"/api/reels/{REEL_MATCH.checksum}/pick", headers=MARKED,
+                      json={"rounds": [3]}).status_code == 403
+    assert index.selected_highlights(REEL_MATCH.checksum) == []
+
+
+def test_the_other_view_is_offered_while_a_picked_round_lacks_it(tmp_path, index):
+    """Round 8 has both views; round 3, picked later while only your view rendered, lacks the Enemy POV."""
+    _finished_match(tmp_path, index, views=("player", "enemy"))
+    index.save_highlights(REEL_MATCH.checksum, [Highlight(3, "3K", 40, ("3k",), (100,), 0, 5000, worthy=True)])
+    index.mark_picked(REEL_MATCH.checksum, {3})
+    three = next(h["id"] for h in index.selected_highlights(REEL_MATCH.checksum) if h["round"] == 3)
+    index.save_reel(three, "player", tmp_path / "r3-player.mp4", 9.0)
+    assert _the_match(app_for(tmp_path).test_client())["can_render"] == ["enemy"]

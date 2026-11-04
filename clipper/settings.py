@@ -77,7 +77,6 @@ FIELDS: tuple[Field, ...] = (
     Field("kill_feed_seconds", "HUD", "Kill feed time (s)", "number", minimum=1, maximum=30,
           help="How long each kill stays in the kill feed."),
     Field("player_voices", "HUD", "Player voices", "bool", help="Voice chat from the Demo is in each Clip's sound."),
-    Field("top_n", "Rendering", "Highlights per match", "int", minimum=1, maximum=50),
     Field("render_when", "Rendering", "Start renders", "choice", choices=RENDER_WHEN),
     Field("encoder", "Rendering", "Encoder", "choice", choices=ENCODERS),
     Field("stall_seconds", "Rendering", "Stall timeout (s)", "number", minimum=30, maximum=3600, advanced=True),

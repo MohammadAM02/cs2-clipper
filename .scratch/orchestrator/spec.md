@@ -16,7 +16,7 @@ per-match input.
 | --- | --- |
 | Intake | Watch the user's **Downloads** folder for FACEIT Demo files |
 | When to render | **As soon as the Gate is clear**: CS2 closed, FACEIT AC not running, enough free disk space |
-| What to render | The **top 5 Highlights by Score** per Demo, each in both Perspectives |
+| What to render | ~~The **top 5 Highlights by Score** per Demo~~ The Highlights you pick, each in the views Settings renders (since 2026-11-04: `.scratch/pick-rounds/spec.md`) |
 | Run model | A **background app** started at sign-in by Task Scheduler |
 | Who picks Sequences | **The app** (`hlae_plan.build_sequences`), from the selected rounds |
 | Output unit | One **Reel per Highlight per Perspective**: that Highlight's Clips joined in Sequence order |
@@ -45,7 +45,7 @@ reboot resumes where it stopped.
 | 1 | `spotted` | A finished FACEIT Demo is moved from Downloads into `demos\` |
 | 2 | `unpacked` | `.zst` / `.gz` → `.dem`; the file must start with `PBDEMS2` |
 | 3 | `analyzed` | csda reads the `.dem`; what the app uses is kept as `analyses\<checksum>.json` (ADR 0002) |
-| 4 | `scored` | Every round with a subject Frag becomes a Highlight with a Score; the top 5 are marked `selected` |
+| 4 | `scored` | Every round with a subject Frag becomes a Highlight with a Score, marked when it is worth clipping; nothing is picked here (`.scratch/pick-rounds/spec.md`) |
 | 5 | `rendering` | Two Render Jobs: `player`, then `enemy`, each waiting for the Gate |
 | 6 | `joined` | One Reel per selected Highlight per Perspective |
 | 7 | `done` | The unpacked `.dem` is deleted; a notification says the Reels are ready |
@@ -157,7 +157,8 @@ Initial rule table:
 | Through smoke (2+ Frags) | +5 |
 | Blind Frag (2+ Frags) | +10 |
 
-Selection: the top 5 by Score, ties broken by the earlier round. Round outcome does not affect the
+Selection: you pick, since 2026-11-04 (`.scratch/pick-rounds/spec.md`); until then, the top 5 by Score, ties
+broken by the earlier round. Round outcome does not affect the
 Score yet (an open question). Clutch rules (proposed: 1v3 = 60, 1v4 = 80, 1v5 = 100) are added
 once the analysis's clutches are validated; the facts and rule table have room for them.
 

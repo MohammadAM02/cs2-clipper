@@ -391,6 +391,16 @@ def test_a_break_is_recorded_with_the_player_view_and_comes_back_apart_from_its_
     assert (req.outputs["player"] / BREAK_CLIP).is_file()
 
 
+def test_a_request_of_a_break_alone_records_the_break_and_no_round(world, req):
+    """A picked Break with no round picked: no rounds means none, not every round (spec: Pick your rounds)."""
+    world.scripts = [game((1,))]
+    result = run(world, replace(req, rounds=(), breaks=(HALFTIME,)))
+    assert result.ok
+    assert result.clips["player"] == ()
+    assert [(found, clip.path.name) for found, clip in result.breaks] == [
+        (HALFTIME, "sequence-1-tick-80000-to-82240.mp4")]
+
+
 def test_the_enemy_view_records_no_break(world, both):
     world.scripts = [two_views_game(first=(1, 2, 3), second=(4, 5))]
     result = run(world, replace(both, breaks=(HALFTIME,)))

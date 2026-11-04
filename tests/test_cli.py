@@ -70,7 +70,7 @@ def test_retry_sends_a_failed_demo_back(index, tmp_path):
 
 def analyzed(tmp_path) -> Config:
     """Settings whose analyses folder holds tests.csda_json's match, as the app keeps it."""
-    cfg = Config(analyses_dir=tmp_path / "analyses", subject_steamid=csda_json.SUBJECT, top_n=1)
+    cfg = Config(analyses_dir=tmp_path / "analyses", subject_steamid=csda_json.SUBJECT)
     cfg.analyses_dir.mkdir()
     (cfg.analyses_dir / f"{csda_json.CHECKSUM}.json").write_text(
         json.dumps(analysis.trim(csda_json.match())), encoding="utf-8")
@@ -78,23 +78,24 @@ def analyzed(tmp_path) -> Config:
 
 
 def printed_rounds(out: str) -> list[str]:
-    """The round column of each Highlight line: the round, marked "*" when it is chosen."""
+    """The round column of each Highlight line: the round, marked "+" when it is worth clipping and "*" once picked."""
     return [line.split()[0] for line in out.splitlines()[1:-1]]
 
 
 def test_highlights_scores_an_analyzed_demo(index, tmp_path, capsys):
+    """Round 1 (two Frags) and round 3 (a knife Frag in a Clutch) are both worth clipping; round 3 is picked."""
     cfg = analyzed(tmp_path)
     demo_id = index.add_demo("1-a.dem.zst", "a" * 64, tmp_path / "1-a.dem.zst")
     index.advance(demo_id, "analyzed", match_checksum=csda_json.CHECKSUM)
-    scored = score_match(analysis.round_facts(csda_json.match(), csda_json.SUBJECT))
-    best = max(scored, key=lambda h: h.score)
+    index.save_highlights(csda_json.CHECKSUM, score_match(analysis.round_facts(csda_json.match(), csda_json.SUBJECT)))
+    index.mark_picked(csda_json.CHECKSUM, {3})
 
     assert cmd_highlights(cfg, index, str(demo_id)) == 0
 
     out = capsys.readouterr().out
     assert out.splitlines()[0].split() == ["round", "type", "score", "reasons"]
-    assert printed_rounds(out) == [f"{h.round}{'*' if h is best else ''}" for h in scored]
-    assert out.splitlines()[-1] == "* = in the top 1"
+    assert printed_rounds(out) == ["1+", "3*"]
+    assert out.splitlines()[-1] == "+ = worth clipping, * = picked"
 
 
 def test_highlights_takes_a_match_checksum_too(index, tmp_path, capsys):

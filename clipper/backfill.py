@@ -13,10 +13,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from clipper import radar
-from clipper.analysis import Analyses
+from clipper.analysis import Analyses, MissingAnalysis
 from clipper.config import Config
 from clipper.index import Index
 from clipper.intake import faceit_match_id
+from clipper.scoring import score_match
 
 REPLAY_REQUESTED = "replay_requested:"
 REPLAY_FAILED = "replay_failed:"          # why the last try at a match's replay failed, for the page to show
@@ -57,11 +58,13 @@ class StatsBackfill:
         self.faceit_stats = faceit_stats          # (checksum, FACEIT match id) -> whether the line was added
         self.now = now
         self.radar_source = radar_source          # CS2's game\csgo folder, or None when CS2 is not installed
-        self._complete: set[str] = set()          # matches whose stats and FACEIT line are settled this run
+        self._complete: set[str] = set()          # matches whose stats, hits and FACEIT line are settled this run
+        self._hits: dict[str, bool] = {}          # whether each match's kept analysis has its hits, read once a run
 
     def tick(self, clear: Callable[[], bool]) -> None:
-        """Works on one match, if one needs it: a replay asked for, then its stats, then FACEIT's line. `clear` says
-        whether CS2 and FACEIT AC are both closed; it is asked only once there is something to do."""
+        """Works on one match, if one needs it: a replay asked for, then its stats, then its hits (an analysis made
+        before the app kept them), then FACEIT's line. `clear` says whether CS2 and FACEIT AC are both closed; it is
+        asked only once there is something to do."""
         if self._replay_work(clear):
             return
         for demo in self._finished_demos():
@@ -70,11 +73,16 @@ class StatsBackfill:
                 continue
             if not self.analyses.has_stats(checksum):
                 if self._due("stats_tried", checksum) and clear():
-                    self._work_out(demo)
+                    self._work_out(demo, "stats_tried")
                     return
                 continue
+            if not self._has_hits(checksum) and self._due("hits_tried", checksum):
+                if clear():
+                    self._work_out(demo, "hits_tried")
+                return
             if self._faceit_settled(demo, checksum):
-                self._complete.add(checksum)
+                if self._has_hits(checksum):
+                    self._complete.add(checksum)
                 continue
             if self.faceit_stats is not None and self._due("faceit_tried", checksum) and clear():
                 self.add_faceit(demo, checksum)
@@ -110,19 +118,30 @@ class StatsBackfill:
         return (self.index.get_flag(f"faceit_stats:{checksum}") == DONE
                 or faceit_match_id(Path(demo["archive_path"]).name) is None)
 
-    def _work_out(self, demo) -> None:
-        """Unpacks the Demo's download, analyzes it (which keeps its stats), and removes what it unpacked."""
+    def _has_hits(self, checksum: str) -> bool:
+        if checksum not in self._hits:
+            try:
+                self._hits[checksum] = self.analyses.has_hits(checksum)
+            except MissingAnalysis:
+                self._hits[checksum] = False
+        return self._hits[checksum]
+
+    def _work_out(self, demo, tried: str) -> None:
+        """Unpacks the Demo's download, analyzes it again (which keeps its stats and hits), removes what it unpacked,
+        and scores the match again, keeping its picks: no toast, as nothing new is ready. `tried` is the flag that
+        says when, so a failure waits a day."""
         checksum = demo["match_checksum"]
-        self._mark("stats_tried", checksum)
+        self._mark(tried, checksum)
+        self._hits.pop(checksum, None)
         archive = Path(demo["archive_path"])
         if not archive.is_file():
-            log.warning("demo #%s: its download is gone, so its match keeps no stats", demo["id"])
+            log.warning("demo #%s: its download is gone, so its match cannot be analyzed again", demo["id"])
             return
         dem = self.unpack(archive, self.cfg.demos_dir)
         try:
             again = self.analyses.analyze(dem, self.cfg.logs_dir / f"demo-{demo['id']}-stats.log")
         except Exception:  # noqa: BLE001 - a failure is tried again a day later
-            log.exception("demo #%s: the stats could not be worked out; trying again in a day", demo["id"])
+            log.exception("demo #%s: the match could not be analyzed again; trying again in a day", demo["id"])
             return
         finally:
             if Path(dem) != archive:
@@ -130,7 +149,9 @@ class StatsBackfill:
         if again != checksum:
             log.warning("demo #%s: its analysis is match %s, not %s", demo["id"], again, checksum)
             return
-        log.info("demo #%s: stats worked out for match %s", demo["id"], checksum)
+        self.index.save_highlights(checksum, score_match(self.analyses.round_facts(checksum, self.cfg.subject_steamid)))
+        log.info("demo #%s: match %s analyzed again: its stats and hits worked out, its rounds scored again",
+                 demo["id"], checksum)
         self.add_faceit(demo, checksum)
 
     def _due(self, name: str, checksum: str) -> bool:

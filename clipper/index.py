@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS highlights (
     round_start_tick INTEGER NOT NULL,
     round_end_tick   INTEGER NOT NULL,
     selected         INTEGER NOT NULL DEFAULT 0,
+    worthy           INTEGER NOT NULL DEFAULT 0,
+    break_picked     INTEGER NOT NULL DEFAULT 0,
     UNIQUE (match_checksum, round)
 );
 CREATE TABLE IF NOT EXISTS render_jobs (
@@ -108,8 +110,20 @@ CREATE TABLE IF NOT EXISTS app_state (
     value TEXT NOT NULL
 );
 """
+# Columns added to a table since it was first made: an index made before them gets them when it is next opened.
+# `highlights.selected` is a Highlight you picked (builds before picks read it as the top N); `break_picked` is a
+# Break you picked, kept apart so those builds never list a Break as a Highlight (spec: Pick your rounds).
+ADDED_COLUMNS = {"highlights": (("worthy", "INTEGER NOT NULL DEFAULT 0"),
+                                ("break_picked", "INTEGER NOT NULL DEFAULT 0"))}
 
 _DEMO_FIELDS = frozenset({"dem_path", "match_checksum", "last_error"})
+_NO_CLIPS_OF_VIEW = (" AND NOT EXISTS (SELECT 1 FROM reels r WHERE r.highlight_id = h.id AND r.perspective = ?)"
+                     " AND NOT EXISTS (SELECT 1 FROM clips c JOIN render_jobs j ON j.id = c.render_job_id"
+                     " WHERE c.highlight_id = h.id AND j.perspective = ? AND j.state = 'done')")
+
+
+class PickRefused(Exception):
+    """Picks cannot be recorded now; the message says why in plain words (spec: Pick your rounds, Refusals)."""
 
 
 def _now() -> str:
@@ -127,6 +141,22 @@ class Index:
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA foreign_keys = ON")
         self._db.executescript(SCHEMA)
+        self._add_columns()
+
+    def _add_columns(self) -> None:
+        """Gives an index made before them the columns added since (ADDED_COLUMNS). One transaction, so the worker and
+        the web server opening the same index at once never both add one."""
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            for table, columns in ADDED_COLUMNS.items():
+                have = {row["name"] for row in self._all(f"PRAGMA table_info({table})")}
+                for name, declaration in columns:
+                    if name not in have:
+                        self._db.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
+        except BaseException:
+            self._db.execute("ROLLBACK")
+            raise
+        self._db.execute("COMMIT")
 
     def close(self) -> None:
         self._db.close()
@@ -290,29 +320,144 @@ class Index:
         """Every match but `checksum`, most recently played first."""
         return self._all("SELECT * FROM matches WHERE checksum != ? ORDER BY played_at DESC", (checksum,))
 
-    def save_highlights(self, checksum: str, highlights: Iterable[Highlight], selected_rounds: set[int]) -> None:
+    def save_highlights(self, checksum: str, highlights: Iterable[Highlight]) -> None:
+        """A Highlight saved again (its match scored again) is updated in place and keeps whether you picked it."""
         for h in highlights:
             self._db.execute(
                 "INSERT INTO highlights (match_checksum, round, type, score, reasons, frag_ticks,"
-                " round_start_tick, round_end_tick, selected) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " round_start_tick, round_end_tick, worthy) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT (match_checksum, round) DO UPDATE SET type = excluded.type,"
                 " score = excluded.score, reasons = excluded.reasons, frag_ticks = excluded.frag_ticks,"
                 " round_start_tick = excluded.round_start_tick, round_end_tick = excluded.round_end_tick,"
-                " selected = excluded.selected",
+                " worthy = excluded.worthy",
                 (checksum, h.round, h.type, h.score, json.dumps(list(h.reasons)),
-                 json.dumps(list(h.frag_ticks)), h.round_start_tick, h.round_end_tick,
-                 int(h.round in selected_rounds)),
+                 json.dumps(list(h.frag_ticks)), h.round_start_tick, h.round_end_tick, int(h.worthy)),
             )
 
+    def scored_matches(self) -> list[str]:
+        """The checksum of every match with a Highlight."""
+        return [row["match_checksum"] for row in self._all(
+            "SELECT DISTINCT match_checksum FROM highlights WHERE round > 0 ORDER BY match_checksum")]
+
     def selected_highlights(self, checksum: str) -> list[sqlite3.Row]:
+        """The Highlights of the match you picked, in round order."""
         return self._all(
-            "SELECT * FROM highlights WHERE match_checksum = ? AND selected = 1 ORDER BY round", (checksum,)
+            "SELECT * FROM highlights WHERE match_checksum = ? AND selected = 1 AND round > 0 ORDER BY round",
+            (checksum,)
         )
+
+    def mark_picked(self, checksum: str, rounds: Iterable[int] = (), breaks: Iterable[int] = ()) -> None:
+        """Marks the match's Highlights of `rounds`, and its Breaks after `breaks`, picked, as they are."""
+        for number in rounds:
+            self._db.execute("UPDATE highlights SET selected = 1 WHERE match_checksum = ? AND round = ? AND round > 0",
+                             (checksum, number))
+        for after in breaks:
+            self._db.execute("UPDATE highlights SET break_picked = 1 WHERE match_checksum = ? AND round = ?",
+                             (checksum, -after))
+
+    def pick(self, checksum: str, rounds: Iterable[int], breaks: Iterable[int],
+             views: Iterable[str]) -> tuple[list[int], list[int]]:
+        """Picks the match's Highlights of `rounds`, each worth clipping, and its Breaks after `breaks`; what is picked
+        already is left as it is. A done Demo goes back to rendering with a fresh Render Job for each of `views` that
+        lacks something picked (a Break counts for your view only); one on its way is left to the worker. One
+        transaction, as in `ask_render`. Returns the rounds and the Breaks newly picked. ValueError for a round that
+        is no Highlight of the match worth clipping, or a Break it does not have; PickRefused when the match has no
+        Demo or its Demo failed (spec: Pick your rounds, The index)."""
+        rounds, breaks = sorted(set(rounds)), sorted(set(breaks))
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            demo = self.demo_of_match(checksum)
+            if demo is None:
+                raise PickRefused("This match has no Demo.")
+            if demo["state"] == "failed":
+                raise PickRefused(f"This Demo failed: {demo['last_error']}. Retry it on Status.")
+            rows = {row["round"]: row for row in self._all(
+                "SELECT round, worthy, selected, break_picked FROM highlights WHERE match_checksum = ?", (checksum,))}
+            for number in rounds:
+                row = rows.get(number) if number > 0 else None
+                if row is None or not (row["worthy"] or row["selected"]):
+                    raise ValueError(f"round {number} is no Highlight of this match worth clipping")
+            for after in breaks:
+                if after <= 0 or -after not in rows:
+                    raise ValueError(f"this match has no Break after round {after}")
+            new_rounds = [number for number in rounds if not rows[number]["selected"]]
+            new_breaks = [after for after in breaks if not rows[-after]["break_picked"]]
+            self.mark_picked(checksum, new_rounds, new_breaks)
+            if demo["state"] == "done":
+                lacking = [view for view in views if self.highlights_to_record(checksum, view)
+                           or (view == "player" and self.breaks_to_record(checksum))]
+                for view in lacking:
+                    latest = self.latest_render(demo["id"], view)
+                    if latest is None or latest["state"] != "queued":
+                        self.queue_render(demo["id"], view, attempt=1)
+                if lacking:
+                    self.advance(demo["id"], "rendering", last_error=None)
+        except BaseException:
+            self._db.execute("ROLLBACK")
+            raise
+        self._db.execute("COMMIT")
+        return new_rounds, new_breaks
+
+    def highlights_to_record(self, checksum: str, perspective: str) -> list[sqlite3.Row]:
+        """The picked Highlights that `perspective` has neither a Reel nor recorded Clips of, in round order: what a
+        render of that view records."""
+        return self._all(
+            "SELECT h.* FROM highlights h WHERE h.match_checksum = ? AND h.round > 0 AND h.selected = 1"
+            + _NO_CLIPS_OF_VIEW + " ORDER BY h.round",
+            (checksum, perspective, perspective),
+        )
+
+    def breaks_to_record(self, checksum: str) -> list[sqlite3.Row]:
+        """The picked Breaks with neither a Reel nor recorded Clips (of your view, the one they are recorded in), in
+        round order, like `breaks`."""
+        return self._all(
+            "SELECT h.id, -h.round AS after_round, h.type AS label, h.round_start_tick AS start_tick,"
+            " h.round_end_tick AS end_tick FROM highlights h"
+            " WHERE h.match_checksum = ? AND h.round < 0 AND h.break_picked = 1"
+            + _NO_CLIPS_OF_VIEW + " ORDER BY h.round DESC",
+            (checksum, "player", "player"),
+        )
+
+    def give_back(self, checksum: str) -> int:
+        """Unpicks the match's picked Highlights and Breaks that have no Reel in any view: their recording could not be
+        made, so their tick boxes come back. How many."""
+        cursor = self._db.execute(
+            "UPDATE highlights SET selected = 0, break_picked = 0"
+            " WHERE match_checksum = ? AND (selected = 1 OR break_picked = 1)"
+            " AND NOT EXISTS (SELECT 1 FROM reels r WHERE r.highlight_id = highlights.id)",
+            (checksum,),
+        )
+        return cursor.rowcount
+
+    def unpick_breaks(self, checksum: str, breaks: Iterable[int]) -> None:
+        """The match's Breaks after `breaks` are picked no more."""
+        for after in breaks:
+            self._db.execute("UPDATE highlights SET break_picked = 0 WHERE match_checksum = ? AND round = ?",
+                             (checksum, -after))
+
+    def unpick_unrecorded(self) -> int:
+        """The move to picks, once: what the top N picked and never recorded is picked no more, unless its Demo is
+        rendering or joined, which then finishes as it is. How many."""
+        cursor = self._db.execute(
+            "UPDATE highlights SET selected = 0 WHERE selected = 1 AND round > 0"
+            " AND NOT EXISTS (SELECT 1 FROM reels r WHERE r.highlight_id = highlights.id)"
+            " AND NOT EXISTS (SELECT 1 FROM demos d WHERE d.match_checksum = highlights.match_checksum"
+            " AND d.state IN ('rendering', 'joined'))"
+        )
+        return cursor.rowcount
+
+    def lacks_reel(self, checksum: str, perspective: str) -> bool:
+        """Whether a picked Highlight of the match has no Reel of `perspective`."""
+        return self._one(
+            "SELECT 1 FROM highlights h WHERE h.match_checksum = ? AND h.round > 0 AND h.selected = 1"
+            " AND NOT EXISTS (SELECT 1 FROM reels r WHERE r.highlight_id = h.id AND r.perspective = ?)",
+            (checksum, perspective),
+        ) is not None
 
     # Breaks live in the highlights table, so their Clips and Reels are like any others: the Reels page plays, copies
     # and exports them by Reel id. A Break is the row of round -N, N the round it follows, with its label as the type,
-    # and it is never selected. The table keeps one row per round number, and builds of the app that know nothing of
-    # Breaks share this database: they list selected rows only.
+    # and it is never selected: a Break you pick is marked in `break_picked`. The table keeps one row per round number,
+    # and builds of the app that know nothing of Breaks, or of picks, share this database: they list selected rows only.
 
     def save_breaks(self, checksum: str, breaks: Iterable[Break]) -> None:
         """Saved again, a Break is updated in place."""
@@ -330,16 +475,6 @@ class Index:
         return self._all(
             "SELECT id, -round AS after_round, type AS label, round_start_tick AS start_tick,"
             " round_end_tick AS end_tick FROM highlights WHERE match_checksum = ? AND round < 0 ORDER BY round DESC",
-            (checksum,),
-        )
-
-    def match_breaks(self, checksum: str) -> list[sqlite3.Row]:
-        """The match's Breaks that have their Reel (a Break has your view only), in round order, each with the round
-        it follows, its label, and its Reel's id and length in seconds."""
-        return self._all(
-            "SELECT -h.round AS after_round, h.type AS label, r.id AS reel_id, r.duration_s"
-            " FROM highlights h JOIN reels r ON r.highlight_id = h.id AND r.perspective = 'player'"
-            " WHERE h.match_checksum = ? AND h.round < 0 ORDER BY h.round DESC",
             (checksum,),
         )
 
@@ -457,18 +592,6 @@ class Index:
         )
         return row[0]
 
-    def reel_matches(self) -> list[sqlite3.Row]:
-        """Every match with at least one Reel on a selected Highlight -- what `match_reels` lists -- whatever
-        its Demo's state: a match stays on the Reels page while its other view renders. Newest played first
-        (spec: Pages, Reels)."""
-        return self._all(
-            "SELECT m.checksum, m.map, m.played_at, m.team_score, m.opponent_score, m.result"
-            " FROM matches m"
-            " WHERE EXISTS (SELECT 1 FROM highlights h JOIN reels r ON r.highlight_id = h.id"
-            " WHERE h.match_checksum = m.checksum AND h.selected = 1)"
-            " ORDER BY m.played_at DESC"
-        )
-
     def match_reels(self, checksum: str) -> list[sqlite3.Row]:
         """That match's selected Highlights that have a Reel, in round order, with each
         Perspective's Reel id and length in seconds (NULL when that Perspective has none)."""
@@ -483,13 +606,60 @@ class Index:
             (checksum,),
         )
 
+    def pick_matches(self) -> list[sqlite3.Row]:
+        """The matches the Reels page lists, newest played first: each with a Reel, or with a Demo and something to pick
+        (a Highlight worth clipping, or a Break). A match whose Demo was deleted before it had a Reel is not listed
+        (spec: Pick your rounds, The Reels page)."""
+        return self._all(
+            "SELECT m.checksum, m.map, m.played_at, m.team_score, m.opponent_score, m.result FROM matches m"
+            " WHERE EXISTS (SELECT 1 FROM highlights h JOIN reels r ON r.highlight_id = h.id"
+            " WHERE h.match_checksum = m.checksum)"
+            " OR (EXISTS (SELECT 1 FROM demos d WHERE d.match_checksum = m.checksum)"
+            " AND EXISTS (SELECT 1 FROM highlights h WHERE h.match_checksum = m.checksum"
+            " AND (h.round < 0 OR h.worthy = 1 OR h.selected = 1)))"
+            " ORDER BY m.played_at DESC"
+        )
+
+    def pick_rows(self, checksum: str) -> list[sqlite3.Row]:
+        """The match's Highlights the Reels page lists, in round order: those worth clipping, and those picked (what
+        the old top N picked may not be). Each with whether it is worth clipping and picked, and each view's Reel id
+        and length in seconds (NULL without one)."""
+        return self._all(
+            "SELECT h.id AS highlight_id, h.round, h.type, h.reasons, h.worthy, h.selected,"
+            " pr.id AS player_reel_id, er.id AS enemy_reel_id, pr.duration_s AS player_s, er.duration_s AS enemy_s"
+            " FROM highlights h"
+            " LEFT JOIN reels pr ON pr.highlight_id = h.id AND pr.perspective = 'player'"
+            " LEFT JOIN reels er ON er.highlight_id = h.id AND er.perspective = 'enemy'"
+            " WHERE h.match_checksum = ? AND h.round > 0 AND (h.worthy = 1 OR h.selected = 1) ORDER BY h.round",
+            (checksum,),
+        )
+
+    def pick_breaks(self, checksum: str) -> list[sqlite3.Row]:
+        """The match's Breaks, in round order: each with the round it follows, its label, whether it is picked, and its
+        Reel's (your view's) id and length in seconds, NULL without one."""
+        return self._all(
+            "SELECT h.id, -h.round AS after_round, h.type AS label, h.break_picked AS picked, r.id AS reel_id,"
+            " r.duration_s FROM highlights h LEFT JOIN reels r ON r.highlight_id = h.id AND r.perspective = 'player'"
+            " WHERE h.match_checksum = ? AND h.round < 0 ORDER BY h.round DESC",
+            (checksum,),
+        )
+
+    def recorded_by(self, job_id: int) -> int:
+        """How many Highlights the Render Job has Clips of (a Break is no Highlight)."""
+        return self._one(
+            "SELECT COUNT(DISTINCT c.highlight_id) FROM clips c JOIN highlights h ON h.id = c.highlight_id"
+            " WHERE c.render_job_id = ? AND h.round > 0",
+            (job_id,),
+        )[0]
+
     def render_seconds(self, last: int = 10) -> list[tuple[float, int]]:
         """The last `last` finished Render Jobs as (seconds from start to finish, Highlights recorded): what an
-        estimate of the next render's length goes on."""
+        estimate of the next render's length goes on. A Job counts the Highlights it has Clips of, as a later pick
+        records only what it adds."""
         rows = self._all(
-            "SELECT j.started_at, j.finished_at, (SELECT count(*) FROM highlights h"
-            " WHERE h.match_checksum = d.match_checksum AND h.selected = 1) AS highlights"
-            " FROM render_jobs j JOIN demos d ON d.id = j.demo_id"
+            "SELECT j.started_at, j.finished_at, (SELECT COUNT(DISTINCT c.highlight_id) FROM clips c"
+            " JOIN highlights h ON h.id = c.highlight_id WHERE c.render_job_id = j.id AND h.round > 0) AS highlights"
+            " FROM render_jobs j"
             " WHERE j.state = 'done' AND j.started_at IS NOT NULL AND j.finished_at IS NOT NULL"
             " ORDER BY j.id DESC LIMIT ?",
             (last,),

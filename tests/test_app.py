@@ -414,7 +414,7 @@ def test_a_changed_setting_rebuilds_the_worker(world):
     assert len(world.build.calls) == 1
     first_worker = world.build.workers[0]
 
-    assert world.store.save({"top_n": 7}) == {}
+    assert world.store.save({"kill_feed_seconds": 7}) == {}
     world.app.step(world.index)
     assert len(world.build.calls) == 2
     assert world.build.workers[-1] is not first_worker
@@ -1446,7 +1446,8 @@ def _a_reel(world, path: str = "library/videos/abc/r9-player.mp4") -> int:
     world.index.save_match(MatchInfo(checksum="abc", map_name="de_mirage", played_at=datetime(2026, 10, 12,
                                      tzinfo=timezone.utc), team_score=13, opponent_score=9))
     world.index.save_highlights("abc", [Highlight(round=9, type="ACE", score=90, reasons=("ace",), frag_ticks=(1,),
-                                                  round_start_tick=0, round_end_tick=10)], {9})
+                                                  round_start_tick=0, round_end_tick=10)])
+    world.index.mark_picked("abc", {9})
     world.index.save_reel(world.index.selected_highlights("abc")[0]["id"], "player", path, 12.0)
     return world.index.match_reels("abc")[0]["player_reel_id"]
 

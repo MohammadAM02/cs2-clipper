@@ -56,7 +56,6 @@ class Config:
     ffmpeg: str = "ffmpeg"
     ffprobe: str = "ffprobe"
     hlae_exe: str = ""              # blank: the HLAE Setup installs
-    top_n: int = 5
     padding_before_s: float = 4.0
     padding_after_s: float = 2.0
     stall_seconds: float = 180.0

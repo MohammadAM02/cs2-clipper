@@ -44,7 +44,8 @@ def write_stats(folder: Path, checksum: str, data: dict) -> None:
 def clip_round_one(index: Index, checksum: str, *, reel: bool) -> int:
     """Round 1 of `checksum` with two rendered Clips (ticks 900-1156 and 2000-2256), and a Reel if `reel`."""
     demo_id = index.add_demo(f"{checksum}.dem.zst", "0" * 64, Path(f"{checksum}.dem.zst"))
-    index.save_highlights(checksum, [Highlight(1, "3K", 30, (), (900,), 0, 6400)], {1})
+    index.save_highlights(checksum, [Highlight(1, "3K", 30, (), (900,), 0, 6400)])
+    index.mark_picked(checksum, {1})
     highlight_id = index.selected_highlights(checksum)[0]["id"]
     job = index.queue_render(demo_id, "player", attempt=1)
     index.add_clip(job, highlight_id, ClipFile(1, 900, 1156, Path("s1.mp4"), 4.0), "s1.mp4")

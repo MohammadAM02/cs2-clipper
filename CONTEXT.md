@@ -33,8 +33,18 @@ A round won by the last surviving player of a team against two or more opponents
 _Avoid_: 1vX, save, comeback
 
 **Score**:
-The numeric rank a Highlight receives from the scoring rules; it drives selection and ordering.
+The numeric rank a Highlight receives from the scoring rules; it drives ordering. What is recorded is what you Pick.
 _Avoid_: Rating, weight, points
+
+**Worth clipping**:
+A Highlight with two or more Frags, or with one that has something to it: a Desert Eagle or knife Frag, a no-scope,
+a jump shot, a wallbang, a Frag through smoke or while flashed, one on 20 HP or less, or a won Clutch. The Reels page
+lists these to Pick.
+_Avoid_: Good round, highlight-worthy, selected
+
+**Pick**:
+A Highlight or Break the user chose to clip. Picking sends its Demo to record what each view lacks.
+_Avoid_: Selection, choice, top N
 
 **Sequence**:
 The start Tick and end Tick that define which part of a Demo becomes one Clip.
@@ -50,8 +60,8 @@ _Avoid_: Montage (that is an edit), compilation, highlight video
 
 **Break**:
 The talk between two rounds where the sides switch or an overtime starts: halftime, and the start and the half of
-each overtime. A Break someone talks in becomes one Clip of the subject's POV with every player's voice in it, both
-teams'.
+each overtime. A Break someone talks in can be picked like a Highlight, and becomes one Clip of the subject's POV
+with every player's voice in it, both teams'.
 _Avoid_: Timeout (that is a team's pause), halftime clip
 
 **Render Job**:

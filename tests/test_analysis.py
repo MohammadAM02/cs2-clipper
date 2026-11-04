@@ -8,7 +8,7 @@ import pytest
 from clipper import analysis, stats
 from clipper.hlae_plan import Kill, Player, Round
 from clipper.model import MatchInfo, RoundFacts
-from tests.csda_json import (ALLY, BRAVO, CHECKSUM, DEMO_NAME, ENEMY, MATCH, OTHER_ENEMY, SUBJECT, kill,
+from tests.csda_json import (ALLY, BRAVO, CHECKSUM, CT, DEMO_NAME, ENEMY, MATCH, OTHER_ENEMY, SUBJECT, T, kill,
                              match, player, round_)
 
 NOBODY = "76561190000000099"
@@ -40,12 +40,56 @@ def test_match_info_is_none_when_the_subjects_team_is_neither_team():
 
 
 def test_round_facts_are_the_subjects_frags_per_round():
+    """No hit on the subject in MATCH: they make every Frag on 100 HP. Round 3 is a Clutch they won against two."""
     assert analysis.round_facts(MATCH, SUBJECT) == [
         RoundFacts(round=1, frag_ticks=(3000, 3100), headshots=1, noscope_frags=1, smoke_frags=1, round_won=True,
-                   round_start_tick=1000, round_end_tick=9000),
+                   round_start_tick=1000, round_end_tick=9000, lowest_hp=100),
         RoundFacts(round=3, frag_ticks=(20000,), blind_frags=1, knife_frags=1, bot_frags=1, round_won=True,
-                   round_start_tick=18500, round_end_tick=27000),
+                   round_start_tick=18500, round_end_tick=27000, lowest_hp=100, clutch_opponents=2),
     ]
+
+
+def test_round_facts_count_desert_eagle_jump_and_wallbang_frags():
+    kills = [kill(3000, 1, SUBJECT, OTHER_ENEMY, weaponName="Desert Eagle", weaponType="pistol"),
+             kill(3100, 1, SUBJECT, ENEMY, is_killer_airborne=True, penetratedObjects=2),
+             kill(5000, 1, ENEMY, SUBJECT, killer_side=CT, victim_side=T, weaponName="Desert Eagle",
+                  is_killer_airborne=True, penetratedObjects=1)]               # the enemy's, not the subject's
+    facts = analysis.round_facts(match(kills=kills), SUBJECT)[0]
+    assert (facts.deagle_frags, facts.airborne_frags, facts.wallbang_frags) == (1, 1, 1)
+
+
+def test_the_subjects_hp_at_a_frag_is_100_less_the_damage_they_took_before_it_that_round():
+    """60 before the first Frag, 25 more before the second: 40 HP then 15. Round 2's hit is another round's."""
+    hits = [{"tick": 2500, "roundNumber": 1, "victimSteamId": int(SUBJECT), "healthDamage": 60},
+            {"tick": 3050, "roundNumber": 1, "victimSteamId": int(SUBJECT), "healthDamage": 25},
+            {"tick": 3050, "roundNumber": 1, "victimSteamId": int(ENEMY), "healthDamage": 99},
+            {"tick": 9600, "roundNumber": 2, "victimSteamId": int(SUBJECT), "healthDamage": 90}]
+    assert analysis.round_facts(match(damages=hits), SUBJECT)[0].lowest_hp == 15
+
+
+def test_a_hit_in_the_same_tick_as_the_frag_counts():
+    hits = [{"tick": 3000, "roundNumber": 1, "victimSteamId": int(SUBJECT), "healthDamage": 85}]
+    assert analysis.round_facts(match(damages=hits), SUBJECT)[0].lowest_hp == 15
+
+
+def test_a_frag_made_in_the_tick_the_subject_dies_is_on_1_hp_not_less():
+    hits = [{"tick": 3100, "roundNumber": 1, "victimSteamId": int(SUBJECT), "healthDamage": 100},
+            {"tick": 3100, "roundNumber": 1, "victimSteamId": int(SUBJECT), "healthDamage": 27}]
+    assert analysis.round_facts(match(damages=hits), SUBJECT)[0].lowest_hp == 1
+
+
+def test_an_analysis_that_kept_no_hits_has_no_hp():
+    """Every match analyzed before the app kept hits."""
+    old = match()
+    del old["damages"]
+    assert [facts.lowest_hp for facts in analysis.round_facts(old, SUBJECT)] == [None, None]
+
+
+def test_a_clutch_is_the_subjects_only_when_they_won_it():
+    clutches = [{"roundNumber": 1, "clutcherSteamId": int(SUBJECT), "opponentCount": 3, "hasWon": False},
+                {"roundNumber": 3, "clutcherSteamId": int(ALLY), "opponentCount": 2, "hasWon": True}]
+    facts = analysis.round_facts(match(clutches=clutches), SUBJECT)
+    assert [f.clutch_opponents for f in facts] == [0, 0]
 
 
 def test_team_kills_suicides_and_kills_in_a_round_without_a_row_are_not_frags():
@@ -101,10 +145,25 @@ def test_render_inputs_are_ordered_whatever_order_csda_wrote_them_in():
 
 def test_the_kept_copy_drops_what_the_app_never_reads():
     kept = analysis.trim(MATCH)
-    assert {"damages", "playerPositions", "grenadePositions", "shots"}.isdisjoint(kept)
+    assert {"playerPositions", "grenadePositions", "shots"}.isdisjoint(kept)
     for key in ("checksum", "date", "mapName", "tickrate", "tickCount", "demoFileName", "teamA", "teamB",
                 "players", "rounds", "kills", "clutches"):
         assert kept[key] == MATCH[key]
+
+
+def test_the_kept_copy_keeps_each_hit_with_only_what_hp_is_worked_out_from():
+    assert analysis.trim(MATCH)["damages"] == [
+        {"tick": 3000, "roundNumber": 1, "victimSteamId": int(ENEMY), "healthDamage": 100}]
+
+
+def test_has_hits_says_whether_the_kept_analysis_has_them(tmp_path, dem):
+    old = match()
+    del old["damages"]
+    store = analysis.Analyses(tmp_path / "analyses", tmp_path / "csda.exe", run=FakeCsda(old))
+    store.analyze(dem, tmp_path / "analyze.log")
+    assert store.has_hits(CHECKSUM) is False
+    analysis.Analyses(tmp_path / "analyses", tmp_path / "csda.exe", run=FakeCsda()).analyze(dem, tmp_path / "a.log")
+    assert store.has_hits(CHECKSUM) is True
 
 
 # --- running csda and keeping its analysis ----------------------------------------------------------------

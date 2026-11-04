@@ -137,6 +137,9 @@ paths, so notifications already sent keep working.
 
 ### Reels
 
+Since 2026-11-04 the Reels page also lists each match's rounds worth clipping to pick: see
+`.scratch/pick-rounds/spec.md`, The Reels page.
+
 - Every `done` Demo whose match has Reels, newest match first: map, date, score and result.
 - Under each, its selected Highlights in round order: round, Highlight Type and reasons, with
   **Player** and **Enemy** buttons that play that Reel in the page, and **Open folder**, which opens

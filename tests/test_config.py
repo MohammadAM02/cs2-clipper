@@ -15,7 +15,6 @@ def test_defaults_have_no_steamid_or_clips_folder():
 
 def test_defaults_match_the_spec():
     cfg = Config()
-    assert cfg.top_n == 5
     assert (cfg.padding_before_s, cfg.padding_after_s) == (4.0, 2.0)
     assert cfg.stall_seconds == 180.0
 

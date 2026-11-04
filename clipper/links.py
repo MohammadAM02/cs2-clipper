@@ -5,6 +5,7 @@ links too, so only the forms below are links at all: anything else is refused, n
 
     cs2clipper://status            (also demos, reels, settings): show that page
     cs2clipper://reels?play=12     show Reels and play Reel 12
+    cs2clipper://reels?match=1a2b  show Reels open at match 1a2b, to pick its rounds
     cs2clipper://reveal?reel=12    show Reel 12's file in Explorer
     cs2clipper://snooze?minutes=60 no render starts for an hour
 """
@@ -22,6 +23,7 @@ SCHEME = "cs2clipper"
 PAGES = ("/status", "/demos", "/reels", "/settings")   # what the window may be asked to show
 MAX_SNOOZE_MINUTES = 24 * 60
 _PLAY_PAGE = re.compile(r"/reels\?play=[0-9]{1,9}")
+_MATCH_PAGE = re.compile(r"/reels\?match=[0-9a-f]{1,16}")      # a match's checksum, as csda writes it
 _NUMBER = re.compile(r"[0-9]{1,9}")
 _KEY = rf"Software\Classes\{SCHEME}"
 
@@ -37,8 +39,9 @@ class Link:
 
 
 def valid_page(page: object) -> bool:
-    """A page the window may be asked to show: one of PAGES, or Reels playing one Reel."""
-    return isinstance(page, str) and (page in PAGES or _PLAY_PAGE.fullmatch(page) is not None)
+    """A page the window may be asked to show: one of PAGES, Reels playing one Reel, or Reels open at one match."""
+    return isinstance(page, str) and (page in PAGES or _PLAY_PAGE.fullmatch(page) is not None
+                                      or _MATCH_PAGE.fullmatch(page) is not None)
 
 
 def to_page(page: str) -> str:

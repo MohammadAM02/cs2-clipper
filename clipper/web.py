@@ -62,7 +62,7 @@ from clipper.config import Config
 from clipper.faceit import FaceitError
 from clipper.faceit_oauth import OAuthError
 from clipper.footprint import Usage
-from clipper.index import Index
+from clipper.index import Index, PickRefused
 from clipper.settings import FIELDS, SECRETS, Field, Loaded, json_values
 from clipper.state import Snapshot, summary, view_name
 
@@ -182,11 +182,11 @@ def status_demos(index: Index, now: datetime | None = None, running_left: float 
         eta = None
         if row["state"] in ("scored", "rendering") and match is not None:
             pace = pace if pace is not None else seconds_per_highlight(index)
-            count = len(index.selected_highlights(row["match_checksum"]))
             left = [job for job in jobs if job["state"] != "done"] or ([] if jobs else [None])
             eta = 0.0
-            for job in left:
-                view = count * pace
+            for job in left:                          # each view left records what it still lacks
+                view = len(index.highlights_to_record(row["match_checksum"], job["perspective"] if job else "player"))
+                view *= pace
                 if job is not None and job["state"] == "running" and running_left is not None:
                     view = running_left
                 elif job is not None and job["state"] == "running" and job["started_at"]:
@@ -256,13 +256,12 @@ def _render_options(index: Index, config: Config, checksum: str) -> tuple[list[s
         return [], {perspective: "This match has no Demo." for perspective in PERSPECTIVES}
     asked = index.asked_renders(demo["id"])
     has_highlights = bool(index.selected_highlights(checksum))
-    reels = index.match_reels(checksum)
     refusals: dict[str, str | None] = {}
     for perspective in PERSPECTIVES:
         name = view_name(perspective)
         if not has_highlights:
             refusal = "This match has no Highlights to render."
-        elif any(row[f"{perspective}_reel_id"] is not None for row in reels):
+        elif not index.lacks_reel(checksum, perspective):       # every picked Highlight has it
             refusal = f"This match already has {name}."
         elif perspective in asked:
             refusal = f"Already rendering {name}."
@@ -278,26 +277,81 @@ def _render_options(index: Index, config: Config, checksum: str) -> tuple[list[s
     return list(asked), refusals
 
 
+def _pick_refusal(demo: sqlite3.Row | None) -> str | None:
+    """Why picks of a match cannot be recorded now, in plain words, or None when they can (spec: Pick your rounds,
+    Refusals)."""
+    if demo is None:
+        return "This match has no Demo."
+    if demo["state"] == "failed":
+        return f"This Demo failed: {demo['last_error']}. Retry it on Status."
+    if not Path(demo["archive_path"]).is_file():
+        return "This Demo's download is gone, so its rounds can't be recorded."
+    return None
+
+
+def pick_hint(index: Index, config: Config) -> str:
+    """When picks record, as the Reels page's footer says it: the pause, else Settings → Start renders."""
+    if index.paused_by() is not None:
+        return "Rendering is paused: resume it on Status."
+    if config.render_when == "idle":
+        return "Records once the PC is idle."
+    if config.render_when == "overnight":
+        return "Records overnight."
+    return "Records once CS2 and FACEIT AC are closed."
+
+
+def _row_state(picked: bool, reel: int | None, recording: bool) -> str:
+    """A Reels page row's state: "clipped" with a Reel, else "queued" or "recording" once picked, else "open"."""
+    if reel is not None:
+        return "clipped"
+    if picked:
+        return "recording" if recording else "queued"
+    return "open"
+
+
 def reels_row(index: Index, match: sqlite3.Row, config: Config) -> dict:
-    """One entry of `/api/reels`: `match`'s Reels, in round order, its Breaks' Reels (your view only), and the views
-    the Reels page can render for it: `rendering` (asked for, not done yet) and `can_render` (see `_render_options`)
-    (spec: Pages, Reels)."""
+    """One entry of `/api/reels`: `match`'s Highlights worth clipping or picked, in round order, and its Breaks (your
+    view's; only while Settings records your view, unless one has its Reel), each with its `state`; whether nothing is
+    picked yet (`ready`), why picks cannot record now (`pick_refusal`), when they record (`pick_hint`), why the last
+    picks were given back (`recording_failed`); and the views the page can render for it: `rendering` (asked for,
+    not done yet) and `can_render` (see `_render_options`) (spec: Pick your rounds, The Reels page)."""
+    checksum = match["checksum"]
+    demo = index.demo_of_match(checksum)
+    recording = demo is not None and any(
+        (job := index.latest_render(demo["id"], perspective)) is not None and job["state"] == "running"
+        for perspective in PERSPECTIVES)
     highlights = [
         {"round": h["round"], "type": h["type"], "reasons": json.loads(h["reasons"]),
          "player": h["player_reel_id"], "enemy": h["enemy_reel_id"],
-         "player_s": h["player_s"], "enemy_s": h["enemy_s"]}             # how long each runs, for the hover scrub
-        for h in index.match_reels(match["checksum"])
+         "player_s": h["player_s"], "enemy_s": h["enemy_s"],             # how long each runs, for the hover scrub
+         "state": _row_state(bool(h["selected"]), h["player_reel_id"] or h["enemy_reel_id"], recording)}
+        for h in index.pick_rows(checksum)
     ]
-    rendering, refusals = _render_options(index, config, match["checksum"])
+    talk = "player" in config.perspectives_to_render
+    breaks = [{"label": b["label"], "after_round": b["after_round"], "reel": b["reel_id"], "secs": b["duration_s"],
+               "state": _row_state(bool(b["picked"]), b["reel_id"], recording)}
+              for b in index.pick_breaks(checksum) if talk or b["reel_id"] is not None]
+    rendering, refusals = _render_options(index, config, checksum)
+    gave_back = demo is not None and demo["state"] == "done" and demo["last_error"]
     return {
-        "checksum": match["checksum"], "map": map_label(match["map"]), "played_at": match["played_at"],
+        "checksum": checksum, "map": map_label(match["map"]), "played_at": match["played_at"],
         "score": f"{match['team_score']}–{match['opponent_score']}", "result": match["result"],
         "highlights": highlights,
-        "breaks": [{"label": b["label"], "after_round": b["after_round"], "reel": b["reel_id"], "secs": b["duration_s"]}
-                   for b in index.match_breaks(match["checksum"])],
+        "breaks": breaks,
+        "ready": all(row["state"] == "open" for row in highlights + breaks),
+        "pick_refusal": _pick_refusal(demo),
+        "pick_hint": pick_hint(index, config),
+        "recording_failed": demo["last_error"] if gave_back else None,
         "rendering": rendering,
         "can_render": [perspective for perspective in PERSPECTIVES if refusals[perspective] is None],
     }
+
+
+def _round_list(value: object) -> list[int] | None:
+    """A list of round numbers (whole numbers from 1), or None for anything else."""
+    if not isinstance(value, list) or any(type(item) is not int or not 1 <= item <= 999 for item in value):
+        return None
+    return value
 
 
 def reel_frame_file(video: Path, ffmpeg: str) -> Path | None:
@@ -684,7 +738,7 @@ def create_app(ctx: WebContext) -> Flask:
         config = ctx.load_settings().config
         index = Index(ctx.index_path)
         try:
-            body = [reels_row(index, match, config) for match in index.reel_matches()]
+            body = [reels_row(index, match, config) for match in index.pick_matches()]
         finally:
             index.close()
         return _no_store(jsonify(body))
@@ -910,6 +964,47 @@ def create_app(ctx: WebContext) -> Flask:
         finally:
             index.close()
         response = jsonify(queued=perspective)
+        response.status_code = 202
+        return _no_store(response)
+
+    @app.post("/api/reels/<checksum:checksum>/pick")
+    def api_reels_pick(checksum: str):
+        """202 once the match's rounds (`rounds`) and Breaks (`breaks`, by the round each follows) are picked: a done
+        Demo goes back to record what each view lacks. 400 for a body of another shape, a round not worth clipping or
+        a Break the match lacks; 404 for an unknown match; 409 says in plain words why picks cannot record now (spec:
+        Pick your rounds, Endpoints)."""
+        def bad(error: str):
+            response = jsonify(error=error)
+            response.status_code = 400
+            return _no_store(response)
+
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return bad('the body must be {"rounds": [...], "breaks": [...]}')
+        rounds, breaks = _round_list(body.get("rounds", [])), _round_list(body.get("breaks", []))
+        if rounds is None or breaks is None or not (rounds or breaks):
+            return bad('the body must be {"rounds": [...], "breaks": [...]} with a round or a Break in it')
+        config = ctx.load_settings().config
+        if breaks and "player" not in config.perspectives_to_render:
+            return bad("talk is recorded in your view, which Settings does not render")
+        index = Index(ctx.index_path)
+        try:
+            if index.match(checksum) is None:
+                return Response(status=404)
+            refusal = _pick_refusal(index.demo_of_match(checksum))
+            try:
+                if refusal is not None:
+                    raise PickRefused(refusal)
+                new_rounds, new_breaks = index.pick(checksum, rounds, breaks, config.perspectives_to_render)
+            except PickRefused as exc:
+                response = jsonify(error=str(exc))
+                response.status_code = 409
+                return _no_store(response)
+            except ValueError as exc:
+                return bad(str(exc))
+        finally:
+            index.close()
+        response = jsonify(queued={"rounds": new_rounds, "breaks": new_breaks})
         response.status_code = 202
         return _no_store(response)
 

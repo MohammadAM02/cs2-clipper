@@ -457,6 +457,24 @@ h1.title{margin:0;font:700 40px/1.1 var(--display);letter-spacing:0}
 .ptools .seg.sm button{height:34px;min-width:0;padding:0 12px;font-size:16px}
 .ptools .seg.sm button.on{background:var(--accent);color:var(--k)}
 .mfoot{display:flex;gap:12px;padding:14px 20px 18px;border-top:2px solid var(--line)}
+/* Picking your rounds (spec: Pick your rounds): on the PC every row has a mark first -- a tick box while it can be
+   picked, a dash while queued, the recording light, a check once clipped -- so the rows line up. */
+.mcard.picking .hl{grid-template-columns:24px 104px 62px minmax(0,1fr) auto}
+.hl .mk{width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;color:var(--muted)}
+.hl .mk.done{color:var(--accent2)}
+.hl .mk.box{border:2px solid var(--line2);background:var(--k);color:var(--k);clip-path:var(--notch)}
+.hl .mk.box.on{background:var(--accent);border-color:var(--accent)}
+.hl.pick{cursor:default}
+.hl.pick .hitb,.hl.pick:hover .hitb{transform:none}
+.hl[data-pick]{cursor:pointer}
+.hl[data-pick]:hover .mk.box{border-color:var(--ink)}
+.hl[data-pick]:focus-visible{outline:2px solid var(--accent);outline-offset:-4px}
+.hl.ticked{background:var(--ember);box-shadow:inset 0 2px 0 var(--emberline),inset 0 -2px 0 var(--emberline)}
+.pickfoot{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 20px;border-top:2px solid var(--line)}
+.pickfoot .pickn{font:700 16px/1 var(--ui);letter-spacing:.04em;text-transform:uppercase;font-variant-numeric:tabular-nums}
+.pickfoot .pickerr{color:var(--accent3);font-size:14px}
+.pickfail{display:flex;gap:8px;align-items:center;margin:0;padding:10px 20px;border-top:2px solid var(--line);color:var(--accent3);font-size:14px}
+.readypill{flex-shrink:0;font:400 13px/1 var(--display);letter-spacing:0;text-transform:uppercase;background:var(--accent);color:var(--k);padding:6px 8px;clip-path:var(--notch);white-space:nowrap}
 video{display:block;width:calc(100% - 40px);margin:0 20px 18px;background:#000;border:2px solid var(--ink);animation:open .3s steps(3,end) both}
 @keyframes open{from{opacity:0;transform:scaleY(.92);transform-origin:top}to{opacity:1;transform:none}}
 .eq{display:inline-flex;gap:2px;align-items:flex-end;height:13px}

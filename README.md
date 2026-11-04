@@ -32,9 +32,11 @@
 
 ## What it does
 
-- **Finds your rounds.** Every round with your Frags becomes a Highlight with a Score: an Ace, a 4K, a 3K,
-  with bonuses for all-headshot rounds and knife, no-scope, through-smoke and blind Frags. The best five of
-  each match get recorded.
+- **Finds your rounds, and you pick.** Every round with 2 or more of your Frags is worth clipping, and so is a
+  single Frag with something to it: a Desert Eagle or knife, a no-scope, a jump shot, a wallbang, through smoke,
+  while flashed, on 20 HP or less, or one that wins a Clutch. Each match lists them on the Reels page with their
+  tags (and the halftime talk); tick the ones you want, press **Clip**, and only those get recorded. Add more
+  rounds later the same way.
 - **Records them in the game.** CS2 plays the Demo back through HLAE, and each Frag is recorded at 60 fps
   with its build-up: 4 seconds before, 2 after.
 - **Shows both sides.** Every Highlight comes twice: from your view, and from an Enemy POV that follows

@@ -6,7 +6,8 @@ from clipper import links
 from clipper.links import Link
 
 
-@pytest.mark.parametrize("page", ["/status", "/demos", "/reels", "/settings", "/reels?play=12"])
+@pytest.mark.parametrize("page", ["/status", "/demos", "/reels", "/settings", "/reels?play=12",
+                                  "/reels?match=aea4e59ccfc6c962", "/reels?match=7"])
 def test_every_page_the_window_shows_makes_a_link_that_reads_back_as_itself(page):
     assert links.parse(links.to_page(page)) == Link("open", page)
 
@@ -28,6 +29,8 @@ def test_a_link_survives_what_windows_and_browsers_do_to_it(url):
     "cs2clipper://status/../settings", "cs2clipper://reveal", "cs2clipper://reveal?reel=-1",
     "cs2clipper://reveal?reel=1&reel=2", "cs2clipper://snooze?minutes=0", "cs2clipper://snooze?minutes=1441",
     "cs2clipper://snooze?minutes=1e3", "cs2clipper://reels?play=1#x", "cs2clipper://" + "a" * 300, "", None, 12,
+    "cs2clipper://reels?match=", "cs2clipper://reels?match=xyz", "cs2clipper://reels?match=ABCDEF",
+    "cs2clipper://reels?match=" + "a" * 17, "cs2clipper://reels?match=ab&play=1", "cs2clipper://status?match=ab",
 ])
 def test_anything_else_is_not_a_link(url):
     assert links.parse(url) is None

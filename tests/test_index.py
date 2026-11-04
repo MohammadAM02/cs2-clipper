@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from clipper.index import Index
+from clipper.index import Index, PickRefused
 from clipper.model import Break, ClipFile, FaceitStats, Highlight, MatchInfo
 
 MATCH = MatchInfo(checksum="aea4e59ccfc6c962", map_name="de_inferno",
@@ -17,6 +17,11 @@ MATCH = MatchInfo(checksum="aea4e59ccfc6c962", map_name="de_inferno",
 def highlight(round_, score, start):
     return Highlight(round=round_, type="3K", score=score, reasons=("3k",), frag_ticks=(start + 100,),
                      round_start_tick=start, round_end_tick=start + 5000)
+
+
+def worth(round_, start):
+    """A Highlight worth clipping."""
+    return replace(highlight(round_, 40, start), worthy=True)
 
 
 @pytest.fixture
@@ -95,7 +100,8 @@ def test_a_retry_that_fails_midway_changes_nothing(index, monkeypatch):
 
 def test_deleting_a_demo_removes_its_rows_and_unlinks_its_faceit_match(index):
     index.save_match(MATCH)
-    index.save_highlights(MATCH.checksum, [highlight(3, 10, 1000)], {3})
+    index.save_highlights(MATCH.checksum, [highlight(3, 10, 1000)])
+    index.mark_picked(MATCH.checksum, {3})
     hl = index.selected_highlights(MATCH.checksum)[0]["id"]
     demo_id = add(index, name="1-abc-1.dem.zst")
     index.advance(demo_id, "rendering", match_checksum=MATCH.checksum)
@@ -129,7 +135,8 @@ def test_a_demo_that_has_its_reels_is_never_deleted(index, state):
 def test_a_demo_rendering_another_view_of_its_reels_is_never_deleted(index):
     demo_id = add(index)
     index.save_match(MATCH)
-    index.save_highlights(MATCH.checksum, [highlight(3, 50, 1000)], {3})
+    index.save_highlights(MATCH.checksum, [highlight(3, 50, 1000)])
+    index.mark_picked(MATCH.checksum, {3})
     index.advance(demo_id, "done", match_checksum=MATCH.checksum)
     index.save_reel(index.selected_highlights(MATCH.checksum)[0]["id"], "player", "r3-player.mp4", 6.0)
     index.ask_render(demo_id, "enemy")
@@ -142,14 +149,18 @@ def test_deleting_an_unknown_demo_finds_nothing(index):
     assert index.delete_demo(999) is None
 
 
-def test_saving_highlights_again_updates_them_in_place(index):
-    both = [highlight(3, 40, 15259), highlight(12, 80, 72031)]
-    index.save_highlights(MATCH.checksum, both, {3, 12})
+def test_saving_highlights_again_updates_them_in_place_and_keeps_the_picks(index):
+    """A match is scored again when its analysis is made again (the HP backfill) or the rules change."""
+    index.save_highlights(MATCH.checksum, [highlight(3, 40, 15259), highlight(12, 80, 72031)])
+    index.mark_picked(MATCH.checksum, {12})
     ids = {row["round"]: row["id"] for row in index.selected_highlights(MATCH.checksum)}
-    index.save_highlights(MATCH.checksum, both, {12})
+    again = [replace(highlight(3, 40, 15259), reasons=("3k", "14 HP"), worthy=True),
+             replace(highlight(12, 80, 72031), reasons=("3k", "deagle"), worthy=True)]
+    index.save_highlights(MATCH.checksum, again)
     rows = index.selected_highlights(MATCH.checksum)
     assert [(row["round"], row["id"]) for row in rows] == [(12, ids[12])]
-    assert json.loads(rows[0]["reasons"]) == ["3k"]
+    assert (json.loads(rows[0]["reasons"]), rows[0]["worthy"]) == (["3k", "deagle"], 1)
+    assert [(row["round"], row["selected"]) for row in index.pick_rows(MATCH.checksum)] == [(3, 0), (12, 1)]
 
 
 def test_render_jobs_track_the_latest_attempt(index):
@@ -274,7 +285,8 @@ def test_demo_of_match_is_the_newest_demo_of_that_match(index):
 
 def test_clips_come_from_finished_renders_in_tick_order(index):
     demo_id = add(index)
-    index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031)], {12})
+    index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031)])
+    index.mark_picked(MATCH.checksum, {12})
     highlight_id = index.selected_highlights(MATCH.checksum)[0]["id"]
     failed = index.queue_render(demo_id, "player", attempt=1)
     index.add_clip(failed, highlight_id, ClipFile(1, 74007, 74263, Path("old.mp4"), 4.0), "old.mp4")
@@ -295,7 +307,8 @@ OVERTIME = Break(24, 150000, 152240, "OT 1")
 
 
 def test_a_break_is_kept_beside_the_highlight_of_the_round_it_follows(index):
-    index.save_highlights(MATCH.checksum, [highlight(12, 80, 70000)], {12})
+    index.save_highlights(MATCH.checksum, [highlight(12, 80, 70000)])
+    index.mark_picked(MATCH.checksum, {12})
     index.save_breaks(MATCH.checksum, [OVERTIME, HALFTIME])
     assert [(row["after_round"], row["label"], row["start_tick"], row["end_tick"])
             for row in index.breaks(MATCH.checksum)] == [(12, "HALFTIME", 72031, 74271), (24, "OT 1", 150000, 152240)]
@@ -311,27 +324,30 @@ def test_saving_breaks_again_updates_them_in_place(index):
 
 def test_scoring_the_match_again_leaves_its_breaks_alone(index):
     index.save_breaks(MATCH.checksum, [HALFTIME])
-    index.save_highlights(MATCH.checksum, [highlight(12, 80, 70000)], {12})
+    index.save_highlights(MATCH.checksum, [highlight(12, 80, 70000)])
+    index.mark_picked(MATCH.checksum, {12})
     assert [row["label"] for row in index.breaks(MATCH.checksum)] == ["HALFTIME"]
 
 
 def test_a_breaks_reel_is_listed_apart_from_the_highlights_reels(index):
     index.save_match(MATCH)
-    index.save_highlights(MATCH.checksum, [highlight(12, 80, 70000)], {12})
+    index.save_highlights(MATCH.checksum, [highlight(12, 80, 70000)])
+    index.mark_picked(MATCH.checksum, {12})
     index.save_breaks(MATCH.checksum, [HALFTIME, OVERTIME])
     twelve = index.selected_highlights(MATCH.checksum)[0]["id"]
     index.save_reel(twelve, "player", "r12.mp4", 15.0)
     half = index.breaks(MATCH.checksum)[0]["id"]
     index.save_reel(half, "player", "half.mp4", 35.0)
     assert [(row["after_round"], row["label"], row["duration_s"])
-            for row in index.match_breaks(MATCH.checksum)] == [(12, "HALFTIME", 35.0)]
+            for row in index.pick_breaks(MATCH.checksum)] == [(12, "HALFTIME", 35.0), (24, "OT 1", None)]
     assert [row["round"] for row in index.match_reels(MATCH.checksum)] == [12]
     assert index.reel_details(index.best_reel(MATCH.checksum, "player"))["path"] == "r12.mp4"
-    assert index.reel_details(index.match_breaks(MATCH.checksum)[0]["reel_id"])["type"] == "HALFTIME"
+    assert index.reel_details(index.pick_breaks(MATCH.checksum)[0]["reel_id"])["type"] == "HALFTIME"
 
 def test_one_reel_per_highlight_and_perspective(index):
     index.save_match(MATCH)
-    index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031)], {12})
+    index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031)])
+    index.mark_picked(MATCH.checksum, {12})
     highlight_id = index.selected_highlights(MATCH.checksum)[0]["id"]
     index.save_reel(highlight_id, "player", Path("E:/r12-player.mp4"), 15.6)
     index.save_reel(highlight_id, "player", Path("E:/r12-player.mp4"), 15.7)
@@ -341,7 +357,8 @@ def test_one_reel_per_highlight_and_perspective(index):
 
 def test_has_reel_tells_whether_a_highlight_already_has_a_reel_for_a_view(index):
     index.save_match(MATCH)
-    index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031)], {12})
+    index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031)])
+    index.mark_picked(MATCH.checksum, {12})
     highlight_id = index.selected_highlights(MATCH.checksum)[0]["id"]
     assert index.has_reel(highlight_id, "player") is False
     index.save_reel(highlight_id, "player", Path("E:/r12-player.mp4"), 15.6)
@@ -349,57 +366,69 @@ def test_has_reel_tells_whether_a_highlight_already_has_a_reel_for_a_view(index)
     assert index.has_reel(highlight_id, "enemy") is False
 
 
-# --- reel_matches / match_reels / reel: the Reels page (Task 12) -----------------------------------
+# --- pick_matches / match_reels / reel: the Reels page (Task 12) -----------------------------------
 
 
-def test_reel_matches_lists_matches_of_any_demo_state_with_a_reel_newest_played_first(index):
-    older = MatchInfo(checksum="a" * 16, map_name="de_inferno",
-                      played_at=datetime(2026, 9, 20, tzinfo=timezone.utc), team_score=13, opponent_score=5)
-    newer = MatchInfo(checksum="b" * 16, map_name="de_mirage",
-                      played_at=datetime(2026, 9, 25, tzinfo=timezone.utc), team_score=10, opponent_score=13)
-    no_reel = MatchInfo(checksum="c" * 16, map_name="de_nuke",
-                        played_at=datetime(2026, 9, 26, tzinfo=timezone.utc), team_score=13, opponent_score=0)
-    not_done = MatchInfo(checksum="d" * 16, map_name="de_ancient",
-                         played_at=datetime(2026, 9, 27, tzinfo=timezone.utc), team_score=13, opponent_score=1)
-    for m in (older, newer, no_reel, not_done):
+def test_pick_matches_lists_matches_with_something_worth_clipping_or_a_reel_newest_played_first(index):
+    def played(checksum, day, map_name="de_inferno"):
+        return MatchInfo(checksum=checksum * 16, map_name=map_name, played_at=datetime(2026, 9, day, tzinfo=timezone.utc),
+                         team_score=13, opponent_score=5)
+
+    clipped, to_pick, filler, plain, no_demo = (played("a", 20), played("b", 25, "de_mirage"), played("c", 26),
+                                                played("d", 27), played("e", 28))
+    for m in (clipped, to_pick, filler, plain, no_demo):
         index.save_match(m)
-    for m, state in ((older, "done"), (newer, "done"), (no_reel, "done"), (not_done, "rendering")):
+    for m in (clipped, to_pick, filler, plain):
         demo_id = add(index, name=f"1-{m.checksum}.dem.zst", sha=m.checksum + "0" * 48)
-        index.advance(demo_id, state, match_checksum=m.checksum)
-    for m in (older, newer, not_done):
-        index.save_highlights(m.checksum, [highlight(1, 40, 1000)], {1})
-        highlight_id = index.selected_highlights(m.checksum)[0]["id"]
-        index.save_reel(highlight_id, "player", Path(f"E:/{m.checksum}-player.mp4"), 10.0)
-    # no_reel: a done Demo, but never scored/rendered -- no Highlights, so no Reel either
+        index.advance(demo_id, "done", match_checksum=m.checksum)
+    index.save_highlights(clipped.checksum, [worth(1, 1000)])
+    index.mark_picked(clipped.checksum, {1})
+    index.save_reel(index.selected_highlights(clipped.checksum)[0]["id"], "player", Path("E:/a.mp4"), 10.0)
+    index.save_highlights(to_pick.checksum, [worth(4, 1000)])             # nothing picked yet: ready to pick
+    index.save_highlights(filler.checksum, [highlight(2, 5, 1000)])       # a single Frag the old top 5 picked
+    index.mark_picked(filler.checksum, {2})
+    index.save_reel(index.selected_highlights(filler.checksum)[0]["id"], "player", Path("E:/c.mp4"), 4.0)
+    index.save_highlights(plain.checksum, [highlight(2, 5, 1000)])        # nothing worth clipping, no Reel
+    index.save_highlights(no_demo.checksum, [worth(4, 1000)])             # its Demo was deleted before any Reel
 
-    rows = index.reel_matches()
+    rows = index.pick_matches()
 
-    # not_done is still rendering its other view: it stays listed while that view renders
-    assert [r["checksum"] for r in rows] == [not_done.checksum, newer.checksum, older.checksum]
-    row = rows[2]
-    assert (row["map"], row["team_score"], row["opponent_score"], row["result"]) == ("de_inferno", 13, 5, "win")
+    assert [r["checksum"] for r in rows] == [filler.checksum, to_pick.checksum, clipped.checksum]
+    assert (rows[2]["map"], rows[2]["team_score"], rows[2]["opponent_score"], rows[2]["result"]) == (
+        "de_inferno", 13, 5, "win")
 
 
-def test_reel_matches_leaves_out_a_match_whose_reels_sit_only_on_deselected_highlights(index):
-    index.save_match(MATCH)
-    demo_id = add(index, name="1-deselected.dem.zst", sha="e" * 64)
-    index.advance(demo_id, "done", match_checksum=MATCH.checksum)
-    index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031)], {12})
-    highlight_id = index.selected_highlights(MATCH.checksum)[0]["id"]
-    index.save_reel(highlight_id, "player", Path("E:/r12-player.mp4"), 15.6)
-    assert [r["checksum"] for r in index.reel_matches()] == [MATCH.checksum]
+def test_pick_rows_are_the_rounds_worth_clipping_and_the_picked_ones_with_their_reels(index):
+    index.save_highlights(MATCH.checksum, [worth(3, 15259), highlight(9, 5, 50000), highlight(11, 5, 60000),
+                                           worth(12, 72031)])
+    index.mark_picked(MATCH.checksum, {9, 12})
+    ids = {row["round"]: row["id"] for row in index.selected_highlights(MATCH.checksum)}
+    index.save_reel(ids[12], "enemy", Path("E:/r12-enemy.mp4"), 15.6)
 
-    # Scored again with another top_n, round 12 is no longer selected -- its Reel stays in the index.
-    index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031)], set())
+    rows = index.pick_rows(MATCH.checksum)
 
-    assert index.reel_matches() == []                    # match_reels would show it an empty block
-    assert index.match_reels(MATCH.checksum) == []
+    assert [(r["round"], r["worthy"], r["selected"], r["player_reel_id"], r["enemy_s"]) for r in rows] == [
+        (3, 1, 0, None, None), (9, 0, 1, None, None), (12, 1, 1, None, 15.6)]
+    assert isinstance(rows[2]["enemy_reel_id"], int)
+
+
+def test_pick_breaks_are_every_break_with_whether_it_is_picked_and_its_reel(index):
+    index.save_breaks(MATCH.checksum, [Break(12, 70000, 72240, "HALFTIME"), Break(24, 150000, 152240, "OT 1")])
+    index.mark_picked(MATCH.checksum, breaks={12, 24})
+    index.save_reel(index.breaks(MATCH.checksum)[1]["id"], "player", Path("E:/OT 1.mp4"), 30.0)
+
+    rows = index.pick_breaks(MATCH.checksum)
+
+    assert [(r["after_round"], r["label"], r["picked"], r["duration_s"]) for r in rows] == [
+        (12, "HALFTIME", 1, None), (24, "OT 1", 1, 30.0)]
+    assert rows[0]["reel_id"] is None and isinstance(rows[1]["reel_id"], int)
 
 
 def test_match_reels_pairs_perspectives_leaves_missing_ones_null_and_drops_reel_less_highlights(index):
     index.save_match(MATCH)
     index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031), highlight(3, 40, 15259),
-                                           highlight(20, 10, 90000)], {3, 12, 20})
+                                           highlight(20, 10, 90000)])
+    index.mark_picked(MATCH.checksum, {3, 12, 20})
     ids = {row["round"]: row["id"] for row in index.selected_highlights(MATCH.checksum)}
     index.save_reel(ids[12], "player", Path("E:/r12-player.mp4"), 15.6)
     index.save_reel(ids[12], "enemy", Path("E:/r12-enemy.mp4"), 15.6)
@@ -416,7 +445,8 @@ def test_match_reels_pairs_perspectives_leaves_missing_ones_null_and_drops_reel_
 
 def test_reel_by_id_and_none_for_an_unknown_one(index):
     index.save_match(MATCH)
-    index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031)], {12})
+    index.save_highlights(MATCH.checksum, [highlight(12, 80, 72031)])
+    index.mark_picked(MATCH.checksum, {12})
     highlight_id = index.selected_highlights(MATCH.checksum)[0]["id"]
     index.save_reel(highlight_id, "player", Path("E:/r12-player.mp4"), 15.6)
     reel_id = index.match_reels(MATCH.checksum)[0]["player_reel_id"]
@@ -594,3 +624,198 @@ def test_an_existing_index_gains_the_faceit_table(tmp_path):
         assert index.faceit_match(FIRST)["state"] == "ready"
     finally:
         index.close()
+
+
+# --- picking (spec: Pick your rounds) ---------------------------------------------------------------
+
+OLD_HIGHLIGHTS = """CREATE TABLE highlights (
+    id INTEGER PRIMARY KEY, match_checksum TEXT NOT NULL, round INTEGER NOT NULL, type TEXT NOT NULL,
+    score INTEGER NOT NULL, reasons TEXT NOT NULL, frag_ticks TEXT NOT NULL, round_start_tick INTEGER NOT NULL,
+    round_end_tick INTEGER NOT NULL, selected INTEGER NOT NULL DEFAULT 0, UNIQUE (match_checksum, round))"""
+
+
+def test_an_index_made_before_picks_gains_their_columns_and_keeps_its_rows(tmp_path):
+    path = tmp_path / "old.sqlite"
+    old = sqlite3.connect(path)
+    old.execute(OLD_HIGHLIGHTS)
+    old.execute("INSERT INTO highlights (match_checksum, round, type, score, reasons, frag_ticks,"
+                " round_start_tick, round_end_tick, selected) VALUES ('ab', 3, '3K', 40, '[]', '[]', 0, 9, 1)")
+    old.commit()
+    old.close()
+    Index(path).close()
+    index = Index(path)                                  # and opening it again changes nothing
+    [row] = index.selected_highlights("ab")
+    assert (row["round"], row["worthy"], row["break_picked"]) == (3, 0, 0)
+    index.close()
+
+
+def test_saved_highlights_keep_whether_they_are_worth_clipping(index):
+    index.save_highlights(MATCH.checksum, [worth(3, 15259), highlight(9, 5, 50000)])
+    assert [(r["round"], r["worthy"]) for r in index.pick_rows(MATCH.checksum)] == [(3, 1)]
+
+
+def ready_demo(index, *highlights, name="1-picks.dem.zst"):
+    """A done Demo of MATCH, scored to `highlights`, with nothing picked. Returns its id."""
+    index.save_match(MATCH)
+    demo_id = add(index, name=name, sha="p" * 64)
+    index.advance(demo_id, "done", match_checksum=MATCH.checksum)
+    index.save_highlights(MATCH.checksum, highlights)
+    return demo_id
+
+
+BOTH = ("player", "enemy")
+
+
+def test_pick_marks_the_rounds_and_breaks_it_names_and_says_which_were_new(index):
+    ready_demo(index, worth(3, 15259), worth(12, 72031))
+    index.save_breaks(MATCH.checksum, [Break(12, 81477, 84000, "HALFTIME")])
+    index.mark_picked(MATCH.checksum, {3})
+    assert index.pick(MATCH.checksum, [3, 12], [12], BOTH) == ([12], [12])
+    assert [row["round"] for row in index.selected_highlights(MATCH.checksum)] == [3, 12]
+    assert [row["picked"] for row in index.pick_breaks(MATCH.checksum)] == [1]
+    assert index.pick(MATCH.checksum, [3, 12], [12], BOTH) == ([], [])     # picked already: left as it is
+
+
+@pytest.mark.parametrize(("rounds", "breaks"), [([9], []), ([7], []), ([0], []), ([], [24]), ([3, 9], [])])
+def test_pick_refuses_a_round_not_worth_clipping_and_a_break_the_match_lacks_and_picks_nothing(index, rounds, breaks):
+    demo_id = ready_demo(index, worth(3, 15259), highlight(9, 5, 50000))
+    with pytest.raises(ValueError):
+        index.pick(MATCH.checksum, rounds, breaks, BOTH)
+    assert index.selected_highlights(MATCH.checksum) == []
+    assert index.demo(demo_id)["state"] == "done"
+
+
+def test_picking_on_a_done_demo_queues_each_view_that_lacks_a_pick_and_sends_it_back_to_rendering(index):
+    demo_id = ready_demo(index, worth(3, 15259), worth(12, 72031))
+    index.record_failure(demo_id, "it failed 3 times, last with: stalled")
+    index.pick(MATCH.checksum, [12], [], BOTH)
+    demo = index.demo(demo_id)
+    assert (demo["state"], demo["last_error"]) == ("rendering", None)
+    assert [(index.latest_render(demo_id, p)["state"], index.latest_render(demo_id, p)["attempt"]) for p in BOTH] == [
+        ("queued", 1), ("queued", 1)]
+
+
+def test_a_view_that_failed_three_times_starts_again_from_attempt_one_when_picked_again(index):
+    demo_id = ready_demo(index, worth(3, 15259))
+    job = index.queue_render(demo_id, "player", attempt=3)
+    index.finish_render(job, "failed", "stalled")
+    index.pick(MATCH.checksum, [3], [], ("player",))
+    latest = index.latest_render(demo_id, "player")
+    assert (latest["state"], latest["attempt"]) == ("queued", 1)
+
+
+def test_a_picked_break_asks_for_your_view_only(index):
+    demo_id = ready_demo(index, worth(3, 15259))
+    index.save_breaks(MATCH.checksum, [Break(12, 81477, 84000, "HALFTIME")])
+    index.pick(MATCH.checksum, [], [12], BOTH)
+    assert index.latest_render(demo_id, "player")["state"] == "queued"
+    assert index.latest_render(demo_id, "enemy") is None
+
+
+def test_picking_what_every_view_has_leaves_a_done_demo_done(index):
+    demo_id = ready_demo(index, worth(3, 15259))
+    index.mark_picked(MATCH.checksum, {3})
+    for perspective in BOTH:
+        index.save_reel(index.selected_highlights(MATCH.checksum)[0]["id"], perspective, f"E:/{perspective}.mp4", 4.0)
+    index.pick(MATCH.checksum, [3], [], BOTH)
+    assert index.demo(demo_id)["state"] == "done"
+    assert index.latest_render(demo_id, "player") is None
+
+
+def test_picking_on_a_demo_still_on_its_way_leaves_it_to_the_worker(index):
+    demo_id = ready_demo(index, worth(3, 15259))
+    index.advance(demo_id, "scored")
+    index.pick(MATCH.checksum, [3], [], BOTH)
+    assert index.demo(demo_id)["state"] == "scored"
+    assert index.latest_render(demo_id, "player") is None
+    assert [row["round"] for row in index.selected_highlights(MATCH.checksum)] == [3]
+
+
+def test_pick_is_refused_for_a_match_without_a_demo_and_for_a_failed_demo(index):
+    index.save_match(MATCH)
+    index.save_highlights(MATCH.checksum, [worth(3, 15259)])
+    with pytest.raises(PickRefused, match="This match has no Demo."):
+        index.pick(MATCH.checksum, [3], [], BOTH)
+    demo_id = add(index)
+    index.advance(demo_id, "rendering", match_checksum=MATCH.checksum)
+    index.fail(demo_id, "rendering: CS2 never started the demo")
+    with pytest.raises(PickRefused, match="This Demo failed: rendering: CS2 never started the demo. Retry it on Status."):
+        index.pick(MATCH.checksum, [3], [], BOTH)
+    assert index.selected_highlights(MATCH.checksum) == []
+
+
+def test_what_is_left_to_record_is_what_is_picked_and_the_view_has_neither_a_reel_nor_clips_of(index):
+    demo_id = ready_demo(index, worth(3, 15259), worth(12, 72031), worth(14, 90164), worth(18, 116005))
+    index.mark_picked(MATCH.checksum, {3, 12, 14})
+    ids = {row["round"]: row["id"] for row in index.selected_highlights(MATCH.checksum)}
+    index.save_reel(ids[3], "player", "E:/r3-player.mp4", 6.0)
+    job = index.queue_render(demo_id, "enemy", attempt=1)              # recorded, not joined yet
+    index.add_clip(job, ids[14], ClipFile(1, 90264, 90520, Path("E:/s1.mp4"), 4.0), "s1.mp4")
+    index.finish_render(job, "done")
+    assert [r["round"] for r in index.highlights_to_record(MATCH.checksum, "player")] == [12, 14]
+    assert [r["round"] for r in index.highlights_to_record(MATCH.checksum, "enemy")] == [3, 12]
+
+
+def test_the_breaks_left_to_record_are_the_picked_ones_without_a_reel(index):
+    index.save_breaks(MATCH.checksum, [Break(12, 81477, 84000, "HALFTIME"), Break(24, 150000, 152240, "OT 1"),
+                                       Break(27, 170000, 172240, "OT 1 HALF")])
+    index.mark_picked(MATCH.checksum, breaks={12, 24})
+    index.save_reel(index.breaks(MATCH.checksum)[0]["id"], "player", "E:/HALFTIME.mp4", 35.0)
+    assert [(b["after_round"], b["label"], b["start_tick"]) for b in index.breaks_to_record(MATCH.checksum)] == [
+        (24, "OT 1", 150000)]
+
+
+def test_give_back_unpicks_what_has_no_reel_in_any_view(index):
+    index.save_highlights(MATCH.checksum, [worth(3, 15259), worth(12, 72031)])
+    index.save_breaks(MATCH.checksum, [Break(12, 81477, 84000, "HALFTIME")])
+    index.mark_picked(MATCH.checksum, {3, 12}, {12})
+    index.save_reel(index.selected_highlights(MATCH.checksum)[0]["id"], "player", "E:/r3-player.mp4", 6.0)
+    assert index.give_back(MATCH.checksum) == 2
+    assert [row["round"] for row in index.selected_highlights(MATCH.checksum)] == [3]
+    assert [row["picked"] for row in index.pick_breaks(MATCH.checksum)] == [0]
+
+
+def test_the_move_to_picks_unpicks_what_top_n_picked_and_never_recorded_but_not_while_it_renders(index):
+    rendering = replace(MATCH, checksum="b" * 16)
+    ready_demo(index, worth(3, 15259), worth(12, 72031))
+    index.mark_picked(MATCH.checksum, {3, 12})
+    index.save_reel(index.selected_highlights(MATCH.checksum)[0]["id"], "player", "E:/r3-player.mp4", 6.0)
+    index.save_match(rendering)
+    demo_id = add(index, name="1-rendering.dem.zst", sha="r" * 64)
+    index.advance(demo_id, "rendering", match_checksum=rendering.checksum)
+    index.save_highlights(rendering.checksum, [worth(5, 30000)])
+    index.mark_picked(rendering.checksum, {5})
+    assert index.unpick_unrecorded() == 1
+    assert [row["round"] for row in index.selected_highlights(MATCH.checksum)] == [3]
+    assert [row["round"] for row in index.selected_highlights(rendering.checksum)] == [5]
+
+
+def test_recorded_by_counts_the_highlights_a_render_job_has_clips_of(index):
+    demo_id = ready_demo(index, worth(3, 15259), worth(12, 72031))
+    index.save_breaks(MATCH.checksum, [Break(12, 81477, 84000, "HALFTIME")])
+    index.mark_picked(MATCH.checksum, {3, 12}, {12})
+    ids = {row["round"]: row["id"] for row in index.selected_highlights(MATCH.checksum)}
+    job = index.queue_render(demo_id, "player", attempt=1)
+    for n, highlight_id in enumerate((ids[3], ids[3], ids[12], index.breaks(MATCH.checksum)[0]["id"]), start=1):
+        index.add_clip(job, highlight_id, ClipFile(n, n * 100, n * 100 + 50, Path(f"E:/s{n}.mp4"), 4.0), f"s{n}.mp4")
+    assert index.recorded_by(job) == 2                  # two Highlights; the Break is no Highlight
+
+
+def test_render_seconds_counts_the_highlights_each_render_recorded_not_all_those_picked(index):
+    demo_id = ready_demo(index, worth(3, 15259), worth(12, 72031), worth(14, 90164))
+    index.mark_picked(MATCH.checksum, {3, 12, 14})
+    twelve = next(h["id"] for h in index.selected_highlights(MATCH.checksum) if h["round"] == 12)
+    job = index.queue_render(demo_id, "player", attempt=1)                # a later pick of round 12 alone
+    index.add_clip(job, twelve, ClipFile(1, 72100, 72400, Path("E:/s1.mp4"), 4.0), "s1.mp4")
+    index.start_render(job, Path("E:/out"), Path("E:/log.txt"))
+    index._db.execute("UPDATE render_jobs SET state = 'done', started_at = ?, finished_at = ? WHERE id = ?",
+                      ("2026-10-13T10:00:00+00:00", "2026-10-13T10:01:40+00:00", job))
+    assert index.render_seconds() == [(100.0, 1)]
+
+
+def test_lacks_reel_says_whether_a_picked_highlight_has_no_reel_of_a_view(index):
+    index.save_highlights(MATCH.checksum, [worth(3, 15259), worth(12, 72031)])
+    index.mark_picked(MATCH.checksum, {3})
+    index.save_reel(index.selected_highlights(MATCH.checksum)[0]["id"], "player", "E:/r3-player.mp4", 6.0)
+    assert index.lacks_reel(MATCH.checksum, "player") is False       # round 12 is not picked
+    assert index.lacks_reel(MATCH.checksum, "enemy") is True

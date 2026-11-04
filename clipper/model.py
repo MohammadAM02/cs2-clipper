@@ -22,6 +22,11 @@ class RoundFacts:
     round_won: bool = False
     round_start_tick: int = 0
     round_end_tick: int = 0
+    deagle_frags: int = 0
+    airborne_frags: int = 0             # jump shots
+    wallbang_frags: int = 0
+    lowest_hp: int | None = None        # the subject's lowest HP at one of their Frags; None: the analysis kept no hits
+    clutch_opponents: int = 0           # the opponents of a Clutch the subject won in the round; 0 without one
 
     @property
     def frags(self) -> int:
@@ -30,7 +35,8 @@ class RoundFacts:
 
 @dataclass(frozen=True)
 class Highlight:
-    """A scored round: it becomes one Reel per Perspective if selected."""
+    """A scored round: it becomes one Reel per Perspective once picked. `worthy`: it is worth clipping, so the Reels
+    page lists it to pick (spec: Pick your rounds)."""
 
     round: int
     type: str
@@ -39,6 +45,7 @@ class Highlight:
     frag_ticks: tuple[int, ...]
     round_start_tick: int
     round_end_tick: int
+    worthy: bool = False
 
 
 @dataclass(frozen=True)

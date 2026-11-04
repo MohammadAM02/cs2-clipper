@@ -30,7 +30,10 @@ log = logging.getLogger(__name__)
 ANALYZE_TIMEOUT_SECONDS = 600      # csda reads a Demo in seconds; it never launches CS2, so stopping it orphans nothing
 KEPT = ("checksum", "date", "mapName", "tickrate", "tickCount", "demoFileName", "source", "type", "serverName",
         "buildNumber", "networkProtocol", "maxRounds", "overtimeCount", "duration", "winner", "teamA", "teamB",
-        "players", "rounds", "kills", "clutches")
+        "players", "rounds", "kills", "clutches", "damages")
+HIT_FIELDS = ("tick", "roundNumber", "victimSteamId", "healthDamage")    # what a kept hit keeps: HP is worked out of it
+FULL_HP = 100                      # every round of competitive CS2 starts on it
+DEAGLE = "Desert Eagle"            # csda's weaponName for it
 _CHECKSUM = re.compile(r"[0-9a-f]{1,16}")
 POSITIONS = "playerPositions"      # csda's array of every player's place on every frame, written with -positions
 PIECE = 1 << 20                    # characters of csda's output read at a time
@@ -48,8 +51,12 @@ def is_checksum(text: str) -> bool:
 
 
 def trim(data: Data) -> dict[str, Any]:
-    """The part of csda's output the app keeps: the match, its teams and players, its rounds, kills and clutches."""
-    return {key: data[key] for key in KEPT if key in data}
+    """The part of csda's output the app keeps: the match, its teams and players, its rounds, kills and clutches, and
+    its hits, each cut to HIT_FIELDS."""
+    kept = {key: data[key] for key in KEPT if key in data}
+    if "damages" in kept:
+        kept["damages"] = [{field: hit[field] for field in HIT_FIELDS if field in hit} for hit in kept["damages"]]
+    return kept
 
 
 def _steam_id(value: object) -> str:
@@ -92,9 +99,17 @@ def round_facts(data: Data, steamid: str) -> list[RoundFacts]:
         if (_steam_id(kill["killerSteamId"]) == steamid and kill["killerSide"] != kill["victimSide"]
                 and kill["roundNumber"] in rounds):
             frags[kill["roundNumber"]].append(kill)
+    hits = _hits_taken(data, steamid)
+    clutches = {c["roundNumber"]: c["opponentCount"] for c in data.get("clutches", ())
+                if _steam_id(c["clutcherSteamId"]) == steamid and c["hasWon"]}
     facts = []
     for number in sorted(frags):
         kills, row = frags[number], rounds[number]
+        lowest_hp = None
+        if hits is not None:
+            taken = hits.get(number, [])
+            lowest_hp = max(1, min(FULL_HP - sum(damage for tick, damage in taken if tick <= k["tick"])
+                                   for k in kills))   # a Frag made in the tick they die was made alive
         facts.append(RoundFacts(
             round=number,
             frag_ticks=tuple(sorted(k["tick"] for k in kills)),
@@ -107,8 +122,27 @@ def round_facts(data: Data, steamid: str) -> list[RoundFacts]:
             round_won=row["winnerName"] == team,
             round_start_tick=row["startTick"],
             round_end_tick=row["endTick"],
+            deagle_frags=sum(1 for k in kills if k["weaponName"] == DEAGLE),
+            airborne_frags=sum(1 for k in kills if k.get("is_killer_airborne")),
+            wallbang_frags=sum(1 for k in kills if (k.get("penetratedObjects") or 0) > 0),
+            lowest_hp=lowest_hp,
+            clutch_opponents=clutches.get(number, 0),
         ))
     return facts
+
+
+def _hits_taken(data: Data, steamid: str) -> dict[int, list[tuple[int, int]]] | None:
+    """The hits `steamid` took, by round: (tick, health damage) each. None when the analysis kept no hits (one made
+    before the app kept them). A hit missing a field is left out."""
+    if "damages" not in data:
+        return None
+    taken: dict[int, list[tuple[int, int]]] = defaultdict(list)
+    for hit in data["damages"]:
+        if any(field not in hit for field in HIT_FIELDS):
+            continue
+        if _steam_id(hit["victimSteamId"]) == steamid:
+            taken[hit["roundNumber"]].append((hit["tick"], hit["healthDamage"]))
+    return taken
 
 
 def render_inputs(data: Data) -> RenderInputs:
@@ -329,6 +363,11 @@ class Analyses:
 
     def has(self, checksum: str) -> bool:
         return self._path(checksum).is_file()
+
+    def has_hits(self, checksum: str) -> bool:
+        """Whether the kept analysis of the match has its hits, which the low-HP reason is worked out from: one
+        analyzed before the app kept them has none."""
+        return "damages" in self._load(checksum)
 
     def forget(self, checksum: str) -> None:
         self._path(checksum).unlink(missing_ok=True)

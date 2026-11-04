@@ -1,5 +1,5 @@
 import logging
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -12,6 +12,7 @@ from clipper.hlae_plan import RenderInputs, Round
 from clipper.index import Index
 from clipper.model import Break, ClipFile, Highlight, MatchInfo
 from clipper.render import ABORTED, RenderProgress, RenderResult
+from clipper.scoring import score_match
 from clipper.state import AppState
 from clipper.voice import VoiceError
 from clipper.worker import (
@@ -30,6 +31,8 @@ INPUTS = RenderInputs(tickrate=64.0, tick_count=130_000, kills=(), players=(),
                       rounds=(Round(12, end_tick=81477, freeze_time_end_tick=73000),
                               Round(13, end_tick=89000, freeze_time_end_tick=84000)))
 HALFTIME = Break(12, 81477, 84000, "HALFTIME")
+TOP_FIVE = (3, 4, 8, 12, 14)          # MATCH_FACTS' five best rounds, what the clipper recorded before picks
+BOTH = ("player", "enemy")
 
 
 class FakeIntake:
@@ -164,6 +167,11 @@ class World:
     clock: FakeClock
     buttons: list                                     # each toast's buttons, in the order the toasts went out
     talk: FakeTalk
+    # The player: picks these rounds of each match, and its Breaks, the moment it is scored, as the Reels page lets
+    # them, so the Demo records them straight on. Tests of what happens before a pick clear it.
+    picks: dict[str, tuple[int, ...]] = field(
+        default_factory=lambda: {MATCH_CHECKSUM: TOP_FIVE, SECOND_CHECKSUM: TOP_FIVE})
+    picked: set[int] = field(default_factory=set)
 
     def add_demo(self, name: str = DEMO_NAME, sha256: str = "0" * 64) -> int:
         file_name = f"{name}.dem.zst"
@@ -173,6 +181,22 @@ class World:
     def ticks(self, count: int) -> None:
         for _ in range(count):
             self.worker.tick()
+            self._pick_when_scored()
+
+    def _pick_when_scored(self) -> None:
+        for demo in self.index.demos_in(("scored",)):
+            checksum = demo["match_checksum"]
+            if checksum not in self.picks or demo["id"] in self.picked:
+                continue
+            self.picked.add(demo["id"])
+            worth = {row["round"] for row in self.index.pick_rows(checksum) if row["worthy"]}
+            breaks = [row["after_round"] for row in self.index.breaks(checksum)]
+            self.index.pick(checksum, [r for r in self.picks[checksum] if r in worth], breaks,
+                            self.cfg.perspectives_to_render)
+
+    def pick(self, rounds=(), breaks=(), checksum: str = MATCH_CHECKSUM) -> None:
+        """What the Reels page's Clip does."""
+        self.index.pick(checksum, rounds, breaks, self.cfg.perspectives_to_render)
 
     def use(self, **settings) -> None:
         """Change settings as the app does: the next tick runs on a new Worker with the new Config."""
@@ -442,16 +466,25 @@ def test_renders_wait_for_the_gate(world):
     assert world.index.demo(demo_id)["state"] == "done"
 
 
-def test_three_failed_renders_fail_the_demo_and_pause_rendering(world):
+def test_three_failed_renders_give_the_picks_back_and_pause_rendering(world):
+    """The Demo is done, not failed: its rounds get their tick boxes back, and ticking them again is the retry."""
     world.render.results = [RenderResult(ok=False, failure="CS2 closed before the render finished")] * 3
     demo_id = world.add_demo()
     world.ticks(8)
     demo = world.index.demo(demo_id)
-    assert demo["state"] == "failed"
-    assert demo["last_error"] == "player render failed 3 times: CS2 closed before the render finished"
-    assert world.index.get_flag("paused") == "1"
+    why = "it failed 3 times, last with: CS2 closed before the render finished"
+    assert (demo["state"], demo["last_error"]) == ("done", why)
+    assert world.index.selected_highlights(MATCH_CHECKSUM) == []
+    assert world.notices[-1] == ("Couldn't record your picks",
+                                 f"5 picks from de_inferno couldn't be recorded: {why}. Tick them again to try again.")
     assert world.index.paused_by() == "failures"
     assert "Rendering paused" in world.titles()
+
+    world.index.resume()
+    world.pick(TOP_FIVE)
+    world.ticks(6)                                    # unpacked again, your view, shipped, the Enemy POV, joined, done
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert world.index.reel_count(MATCH_CHECKSUM) == 10
 
 
 def test_every_failed_render_attempt_gets_its_own_log_line(world, caplog):
@@ -519,7 +552,7 @@ def test_a_break_someone_talks_in_is_recorded_with_your_view_and_gets_a_reel(wor
     world.ticks(9)
     assert world.index.demo(demo_id)["state"] == "done"
     assert [call.breaks for call in world.render.calls] == [(HALFTIME,), ()]       # your view, then the Enemy POV
-    [half] = world.index.match_breaks(MATCH_CHECKSUM)
+    [half] = [row for row in world.index.pick_breaks(MATCH_CHECKSUM) if row["reel_id"] is not None]
     assert (half["after_round"], half["label"], half["duration_s"]) == (12, "HALFTIME", 4.0)
     assert Path(world.index.reel_details(half["reel_id"])["path"]).name == "HALFTIME Inferno.mp4"
     assert world.index.reel_count(MATCH_CHECKSUM) == 11
@@ -559,8 +592,9 @@ def test_a_break_the_render_did_not_record_gets_no_reel_and_holds_nothing_up(wor
     demo_id = world.add_demo()
     world.ticks(9)
     assert world.index.demo(demo_id)["state"] == "done"
-    assert world.index.match_breaks(MATCH_CHECKSUM) == []
+    assert [row for row in world.index.pick_breaks(MATCH_CHECKSUM) if row["reel_id"] is not None] == []
     assert world.index.reel_count(MATCH_CHECKSUM) == 10
+    assert [row["picked"] for row in world.index.pick_breaks(MATCH_CHECKSUM)] == [0]   # given back, to pick again
 
 
 class FailingAlerts:
@@ -1124,7 +1158,7 @@ def test_in_round_mode_an_asked_enemy_view_is_dropped_without_a_render(world):
     assert world.titles() == titles                   # no heads-up, and no "ready" either
 
 
-def test_a_demo_that_is_not_asked_fails_when_its_download_is_gone(world):
+def test_a_demo_whose_download_is_gone_gives_its_picks_back(world):
     demo_id = world.add_demo()
     world.ticks(4)                                    # rendering, nothing rendered yet
     (world.cfg.demos_dir / f"{DEMO_NAME}.dem.zst").unlink()
@@ -1132,8 +1166,11 @@ def test_a_demo_that_is_not_asked_fails_when_its_download_is_gone(world):
     world.ticks(1)
 
     demo = world.index.demo(demo_id)
-    assert (demo["state"], demo["last_error"]) == ("failed", "its download is gone")
+    assert (demo["state"], demo["last_error"]) == ("done", "its download is gone")
+    assert world.index.selected_highlights(MATCH_CHECKSUM) == []
     assert world.render.calls == []
+    assert world.notices[-1] == ("Couldn't record your picks", "5 picks from de_inferno couldn't be recorded: "
+                                                               "its download is gone. Tick them again to try again.")
 
 
 # --- the player's PC comes first: nothing while CS2 is open, Not now, and saying why renders wait ----------------
@@ -1255,7 +1292,8 @@ def test_two_matches_with_the_same_day_map_and_score_keep_apart(world):
     world.index.save_match(replace(MATCH, checksum="00000000000000c3"))
     for checksum in (MATCH_CHECKSUM, "00000000000000c3"):
         world.index.save_highlights(checksum, [Highlight(round=3, type="3K", score=30, reasons=("3k",), frag_ticks=(1,),
-                                                          round_start_tick=0, round_end_tick=10)], {3})
+                                                          round_start_tick=0, round_end_tick=10)])
+        world.index.mark_picked(checksum, {3})
     first = reel_path(world.index, world.cfg, MATCH_CHECKSUM, 3, "3K", "player")
     world.index.save_reel(world.index.selected_highlights(MATCH_CHECKSUM)[0]["id"], "player",
                           world.cfg.store_path(first), 4.0)
@@ -1267,7 +1305,8 @@ def test_two_matches_with_the_same_day_map_and_score_keep_apart(world):
 def test_reels_made_before_readable_names_get_them_at_the_next_start(world):
     world.index.save_match(MATCH)
     world.index.save_highlights(MATCH_CHECKSUM, [Highlight(round=8, type="4K", score=40, reasons=("4k",),
-                                                           frag_ticks=(1,), round_start_tick=0, round_end_tick=10)], {8})
+                                                           frag_ticks=(1,), round_start_tick=0, round_end_tick=10)])
+    world.index.mark_picked(MATCH_CHECKSUM, {8})
     old = _write(world.cfg.library_dir / "videos" / MATCH_CHECKSUM / "r8-player.mp4")
     world.index.save_reel(world.index.selected_highlights(MATCH_CHECKSUM)[0]["id"], "player",
                           world.cfg.store_path(old), 4.0)
@@ -1277,3 +1316,137 @@ def test_reels_made_before_readable_names_get_them_at_the_next_start(world):
     assert new.name == "4K Inferno R8.mp4" and new.is_file()
     assert not old.exists() and not old.parent.exists()   # the emptied checksum folder goes too
     assert rename_old_reels(world.index, world.cfg) == 0  # once
+
+
+# --- picking (spec: Pick your rounds) ---------------------------------------------------------------
+
+WORTH_CLIPPING = [1, 3, 4, 5, 6, 7, 8, 10, 12, 14, 15, 18]      # MATCH_FACTS' rounds of 2+ Frags, and 7, through smoke
+
+
+def test_a_match_is_scored_with_what_is_worth_clipping_and_nothing_picked(world):
+    world.picks = {}
+    world.add_demo()
+    world.ticks(3)
+    assert [row["round"] for row in world.index.pick_rows(MATCH_CHECKSUM)] == WORTH_CLIPPING
+    assert world.index.selected_highlights(MATCH_CHECKSUM) == []
+
+
+def test_a_new_demo_finishes_without_recording_and_says_once_that_it_is_ready_to_pick(world):
+    world.picks = {}
+    demo_id = world.add_demo()
+    world.ticks(4)
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert world.render.calls == []
+    assert world.notices == [("de_inferno is ready to pick", "12 rounds worth clipping.")]
+    assert world.buttons == [(("Pick rounds", f"cs2clipper://reels?match={MATCH_CHECKSUM}"),)]
+    assert not (world.cfg.demos_dir / f"{DEMO_NAME}.dem").exists()           # the .dem goes, the download stays
+    assert (world.cfg.demos_dir / f"{DEMO_NAME}.dem.zst").exists()
+    world.ticks(3)
+    assert len(world.notices) == 1
+
+
+def test_ready_to_pick_says_when_there_is_talk_to_pick_too(world):
+    world.picks = {}
+    world.talk.ticks = [82000] * 100
+    world.add_demo()
+    world.ticks(4)
+    assert world.notices == [("de_inferno is ready to pick", "12 rounds worth clipping, and the talk at halftime.")]
+
+
+def test_picking_a_done_demo_records_the_picked_rounds_alone(world):
+    world.picks = {}
+    demo_id = world.add_demo()
+    world.ticks(4)
+    world.pick([7, 12])
+    assert world.index.demo(demo_id)["state"] == "rendering"
+    world.ticks(6)                                    # unpacked again, your view, shipped, the Enemy POV, joined, done
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert [(call.perspectives, call.rounds) for call in world.render.calls] == [
+        (("player",), (7, 12)), (("enemy",), (7, 12))]
+    assert world.index.reel_count(MATCH_CHECKSUM) == 4
+    assert world.titles()[1:] == ["Rendering highlights", "Highlights ready", "Rendering highlights", "Enemy POV ready"]
+    assert world.notices[1][1].startswith("2 Highlights from de_inferno (player view).")
+
+
+def test_picking_more_later_records_only_the_new_rounds(world):
+    world.picks = {}
+    demo_id = world.add_demo()
+    world.ticks(4)
+    world.pick([7, 12])
+    world.ticks(6)
+    world.pick([3])
+    world.ticks(6)
+    assert [call.rounds for call in world.render.calls] == [(7, 12), (7, 12), (3,), (3,)]
+    assert world.index.reel_count(MATCH_CHECKSUM) == 6
+    assert world.index.demo(demo_id)["state"] == "done"
+
+
+def test_a_round_picked_while_its_demo_records_is_recorded_before_the_demo_finishes(world):
+    demo_id = world.add_demo()
+    world.ticks(5)                                    # your view of the top five recorded
+    world.pick([7])
+    world.ticks(6)
+    assert [(call.perspectives[0], call.rounds) for call in world.render.calls] == [
+        ("player", TOP_FIVE), ("player", (7,)), ("enemy", (3, 4, 7, 8, 12, 14))]
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert world.index.reel_count(MATCH_CHECKSUM) == 12
+
+
+def test_a_view_turned_off_keeps_its_reels_and_a_later_pick_records_only_the_view_still_on(world):
+    world.picks = {}
+    demo_id = world.add_demo()
+    world.ticks(4)
+    world.pick([12])
+    world.ticks(6)                                    # both views of round 12
+    world.use(perspectives="player")
+    world.pick([7])
+    world.ticks(4)                                    # unpacked again, your view, joined, done
+    assert [(call.perspectives[0], call.rounds) for call in world.render.calls] == [
+        ("player", (12,)), ("enemy", (12,)), ("player", (7,))]
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert world.index.reel_count(MATCH_CHECKSUM) == 3   # no Enemy POV of round 7: it was never recorded
+
+
+def test_a_break_picked_alone_records_your_view_of_it_and_no_round(world):
+    world.picks = {}
+    world.talk.ticks = [82000] * 100
+    demo_id = world.add_demo()
+    world.ticks(4)
+    world.pick(breaks=[12])
+    world.ticks(4)                                    # unpacked again, your view, joined, done
+    assert [(call.perspectives, call.rounds, call.breaks) for call in world.render.calls] == [
+        (("player",), (), (HALFTIME,))]
+    assert world.index.demo(demo_id)["state"] == "done"
+    assert [row["after_round"] for row in world.index.pick_breaks(MATCH_CHECKSUM) if row["reel_id"]] == [12]
+    assert world.notices[-1][1].startswith("The talk at halftime from de_inferno (player view).")
+
+
+def test_the_heads_up_counts_the_rounds_and_talk_the_launch_records(world):
+    world.picks = {}
+    world.talk.ticks = [82000] * 100
+    world.add_demo()
+    world.ticks(4)
+    world.pick([7, 12], [12])
+    world.ticks(2)
+    assert world.notices[-1][1].startswith("2 Highlights and the talk at halftime from de_inferno (player view).")
+
+
+def test_the_first_start_with_picks_scores_every_match_again_and_unpicks_what_was_never_recorded(world):
+    world.picks = {}
+    world.index.save_match(MATCH)
+    demo_id = world.add_demo()
+    world.index.advance(demo_id, "done", match_checksum=MATCH_CHECKSUM)
+    world.index.save_highlights(MATCH_CHECKSUM, [replace(h, worthy=False) for h in score_match(MATCH_FACTS)])
+    world.index.mark_picked(MATCH_CHECKSUM, set(TOP_FIVE))               # the top five of an older version
+    twelve = next(h["id"] for h in world.index.selected_highlights(MATCH_CHECKSUM) if h["round"] == 12)
+    world.index.save_reel(twelve, "player", "r12.mp4", 4.0)
+    world.facts.kept.add(MATCH_CHECKSUM)
+
+    world.ticks(1)
+
+    assert [row["round"] for row in world.index.selected_highlights(MATCH_CHECKSUM)] == [12]
+    assert [row["round"] for row in world.index.pick_rows(MATCH_CHECKSUM) if row["worthy"]] == WORTH_CLIPPING
+    world.index.mark_picked(MATCH_CHECKSUM, {3})
+    world.use()                                       # the next start: once is enough
+    world.ticks(1)
+    assert [row["round"] for row in world.index.selected_highlights(MATCH_CHECKSUM)] == [3, 12]

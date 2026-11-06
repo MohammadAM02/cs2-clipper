@@ -131,36 +131,65 @@ async function hasRoute(path) {
   try { return (await fetch(path, {method: "OPTIONS", cache: "no-store"})).status !== 404; } catch (e) { return false; }
 }
 
-// --- the backdrop: the pixel scene behind every page ------------------------------------------------------------
-// The scene fills the window behind the panels, dimmed so the pages stay readable. It plays in the setting of the map
-// Status last showed (kept in localStorage, so every page opens on the same one), and every page starts its loop from
-// the clock, so going from page to page does not jump. It rests while the window is not in front (pixelscene.js).
+// --- the backdrop: the map's weather behind every page ----------------------------------------------------------
+// Pixel weather fills the window behind the panels (app.css): snow for Office, sand for Dust2 and Mirage, embers for
+// Inferno and Nuke, rain for Anubis and Overpass, fireflies for Ancient, and a clear night for any other map. It
+// follows the map Status last showed (kept in localStorage, so every page opens on the same one), and every page
+// starts its loops from the clock, so going from page to page does not jump. It rests while the window is not in
+// front (.asleep), and holds still when Windows asks for less motion or Calm mode is on.
 const BACKDROP_KEY = "clipper.backdrop";
+// by a demo's map name or label ("de_inferno", "Inferno"), or by the scene's setting that 0.12 kept here ("desert")
+const WEATHER_OF = {office: "snow", snow: "snow", dust2: "sand", mirage: "sand", desert: "sand",
+  inferno: "embers", italy: "embers", village: "embers", nuke: "embers", plant: "embers",
+  anubis: "rain", overpass: "rain", river: "rain", ancient: "fireflies", jungle: "fireflies"};
+const weatherFor = map => WEATHER_OF[String(map || "").toLowerCase().replace(/^(de|cs)_/, "")] || "night";
+// The few weathers drawn with sprites besides their layers: where each sits and how it moves (app.css's keyframes).
+const bgRun = (name, seconds, steps, phase) => `${name} ${seconds}s steps(${steps},end) calc(var(--wt,0s) + ${phase}s) infinite`;
+const WEATHER_BITS = {
+  rain: [[11, "bottom:24px", bgRun("bgwSplash", 1.2, 1, -0.3)], [26, "bottom:24px", bgRun("bgwSplash", 0.9, 1, -0.6)],
+    [41, "bottom:24px", bgRun("bgwSplash", 1.2, 1, -0.1)], [59, "bottom:24px", bgRun("bgwSplash", 1, 1, -0.8)],
+    [77, "bottom:24px", bgRun("bgwSplash", 1.2, 1, -0.4)], [92, "bottom:24px", bgRun("bgwSplash", 0.9, 1, -0.7)]],
+  fireflies: [[9, "bottom:180px", bgRun("bgwFly1", 12, 6, -2) + "," + bgRun("bgwGlow", 3.2, 1, -1)],
+    [20, "bottom:100px", bgRun("bgwFly2", 15, 6, -5) + "," + bgRun("bgwGlow", 2.4, 1, -0.4)],
+    [33, "bottom:220px", bgRun("bgwFly3", 16, 6, -7) + "," + bgRun("bgwGlow", 4, 1, -2.2)],
+    [44, "bottom:60px", bgRun("bgwFly1", 12, 6, -9) + "," + bgRun("bgwGlow", 3.6, 1, -1.7)],
+    [55, "bottom:160px", bgRun("bgwFly2", 15, 6, -3) + "," + bgRun("bgwGlow", 3, 1, -0.9)],
+    [67, "bottom:100px", bgRun("bgwFly3", 12, 6, -6) + "," + bgRun("bgwGlow", 4, 1, -3)],
+    [78, "bottom:200px", bgRun("bgwFly1", 16, 6, -4) + "," + bgRun("bgwGlow", 3.2, 1, -2.6)],
+    [89, "bottom:120px", bgRun("bgwFly2", 18, 6, -8) + "," + bgRun("bgwGlow", 4, 1, -0.2)],
+    [42, "top:22%", bgRun("bgwFly3", 18, 6, -1) + "," + bgRun("bgwGlow", 3.6, 1, -1.3)],
+    [97, "top:46%", bgRun("bgwFly1", 15, 6, -10) + "," + bgRun("bgwGlow", 2.4, 1, -2)]],
+  night: [[37, "top:14%", bgRun("bgwTwinkle", 8, 1, -1)], [48, "top:20%", bgRun("bgwTwinkle", 9, 1, -4)],
+    [11, "top:74%", bgRun("bgwTwinkle", 8, 1, -2)], [28, "top:85%", bgRun("bgwTwinkle", 12, 1, -7)],
+    [46, "top:78%", bgRun("bgwTwinkle", 6, 1, -3)], [64, "top:92%", bgRun("bgwTwinkle", 10, 1, -6)],
+    [79, "top:72%", bgRun("bgwTwinkle", 9, 1, -5)], [98, "top:36%", bgRun("bgwTwinkle", 12, 1, -8)]],
+};
 let backdrop = null;
 function backdropMap() { try { return localStorage.getItem(BACKDROP_KEY) || "rooftop"; } catch (e) { return "rooftop"; } }
 // Status says which map is on: the backdrop follows, now and on the next page opened.
 function setBackdrop(map) {
   if (!map) return;
-  try { localStorage.setItem(BACKDROP_KEY, map); } catch (e) { /* a page without storage keeps today's scene */ }
-  if (backdrop) backdrop.setMap(map);
+  try { localStorage.setItem(BACKDROP_KEY, map); } catch (e) { /* a page without storage keeps today's weather */ }
+  if (backdrop) paintWeather(backdrop, weatherFor(map));
 }
 const loopStart = () => (Date.now() / 1000) % 30;
+
+function paintWeather(bg, weather) {
+  if (bg.dataset.weather === weather) return;
+  bg.dataset.weather = weather;
+  // every loop runs a whole number of times an hour, so a phase taken from the clock picks up where the last page was
+  bg.style.setProperty("--wt", `-${((Date.now() / 1000) % 3600).toFixed(2)}s`);
+  bg.innerHTML = `<i class="w-sky"></i><i class="w-a"></i><i class="w-b"></i><i class="w-c"></i>` +
+    (WEATHER_BITS[weather] || []).map(([left, place, run]) => `<i class="w-bit" style="left:${left}%;${place};animation:${run}"></i>`).join("");
+}
 
 function drawBackground() {
   const bg = document.createElement("div");
   bg.className = "bg";
   bg.setAttribute("aria-hidden", "true");
-  bg.innerHTML = `<canvas class="bg-scene"></canvas><div class="bg-veil"></div>`;
   document.body.insertBefore(bg, document.body.firstChild);
-  // pixelscene.js loads after this file: the scene starts once the page's scripts are in
-  document.addEventListener("DOMContentLoaded", () => {
-    if (typeof PIXELSCENE === "undefined") return;
-    // a page with a scene of its own (Status's monitor, the first-run banner) gets the setting alone behind it, so
-    // the agent and Nugget are never on screen twice
-    const own = document.querySelector("main canvas#scene, main canvas#ob-scene");
-    backdrop = PIXELSCENE.mount($(".bg-scene", bg), {fit: "window", map: backdropMap(), start: loopStart(),
-      pauseOnBlur: true, stageShare: 0.5, cast: !own});
-  });
+  backdrop = bg;
+  paintWeather(bg, weatherFor(backdropMap()));
 }
 
 // How fast the radar sweeps: quick while a render runs, slow when something needs fixing.

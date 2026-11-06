@@ -1869,10 +1869,28 @@ def test_the_exe_carries_nugget_the_scene_and_the_fonts():
 
 
 def test_every_page_loads_the_scene_after_the_shared_script(client):
-    # the scene is every page's backdrop, and Status's monitor and the carousels draw it too
+    # Status's monitor and first-run banner and the Highlights carousels draw the scene
     for page in ("/status", "/demos", "/reels", "/settings"):
         html = pc_get(client, page).get_data(as_text=True)
         assert html.index('src="/app.js"') < html.index('src="/pixelscene.js"'), page
+
+
+def test_every_weather_the_backdrop_picks_is_drawn_by_the_stylesheet(client):
+    # app.js picks the backdrop's weather from the map Status last showed, and app.css draws it: a weather it could
+    # pick with no rules there would leave the window bare
+    js = pc_get(client, "/app.js").get_data(as_text=True)
+    css = pc_get(client, "/app.css").get_data(as_text=True)
+    table = re.search(r"const WEATHER_OF = \{(.*?)\};", js, re.S)
+    assert table, "app.js has no WEATHER_OF table"
+    weathers = set(re.findall(r'"(\w+)"', table.group(1))) | {"night"}
+    assert weathers == {"snow", "sand", "embers", "rain", "fireflies", "night"}
+    for weather in weathers:
+        assert f'.bg[data-weather="{weather}"]' in css, weather
+
+
+def test_the_backdrop_rests_while_the_window_is_not_in_front(client):
+    css = "".join(pc_get(client, "/app.css").get_data(as_text=True).split())
+    assert ".asleep.bg*{animation-play-state:paused!important}" in css
 
 
 # --- every route Tasks 10-14 added is PC-only: a foreign Host is refused on all of them -------------

@@ -3,6 +3,20 @@
 What changed in each release of CS2 Clipper. The release workflow publishes a version's section as the notes of
 its GitHub Release, and the app shows those notes on the Status page when it offers that version.
 
+## 0.13.0
+
+### The map's weather behind every page
+
+- **Pixel weather instead of the night round.** The window behind every page now shows the weather of the map
+  Status last showed: snow for Office, blowing sand for Dust2 and Mirage, rising embers for Inferno and Nuke, rain
+  for Anubis and Overpass, and fireflies for Ancient. Any other map gets a clear night, with stars drifting by and a
+  few that twinkle. Like the rest of the app it moves in pixel steps, and the next page you open picks it up where
+  it was.
+- **The round still plays on Status's monitor** and in the first-run banner, and the Highlights carousel still shows
+  its setting until a Reel's frame is ready.
+- **It rests like the scene did.** The weather stops while the window isn't in front, and holds still when Calm mode
+  is on or Windows asks for less motion (Settings › Accessibility › Visual effects › Animation effects).
+
 ## 0.12.0
 
 ### Installed as a folder, not one big file

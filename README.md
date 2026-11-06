@@ -98,7 +98,7 @@ open.
 | **Spotted** | A finished FACEIT Demo lands in Downloads and moves into your clips folder. |
 | **Unpacked** | The `.dem.zst` FACEIT serves becomes a `.dem`. |
 | **Analyzed** | [csda](https://github.com/akiver/cs-demo-analyzer) reads every round; the app keeps what it needs as `analyses\<checksum>.json`. |
-| **Scored** | Each round with your Frags becomes a Highlight; the five with the best Score are picked. |
+| **Scored** | Each round with your Frags becomes a Highlight. The ones worth clipping wait on the Reels page for you to pick, and a toast says the match is ready; **Clip** sends the Demo on with your picks. |
 | **Rendering** | HLAE starts CS2 and a console script ([`hlae_plan.py`](clipper/hlae_plan.py)) records each Sequence at its exact ticks, one view per CS2 launch: your view first, whose Reels are joined and announced straight away, then the Enemy POV (or only the view Settings picks). CS2 and its encoder run below normal priority. |
 | **Joined** | FFmpeg joins each Highlight's Clips into one Reel per view. |
 | **Done** | The unpacked `.dem` is deleted, and a toast says the Reels are ready, with **Watch** and **Show in folder**. |
@@ -133,10 +133,12 @@ with one click, keeping your settings, Demos and Reels. What changed in each ver
 
 1. **Play a FACEIT match.** When it has Highlights, a match alert says so, and the match shows up in
    Demos to grab.
-2. **Download the Demo** with **Open**, which takes you to the matchroom. That is the one manual step:
+2. **Download the Demo** with **Open**, which takes you to the matchroom. The app can't fetch it for you:
    FACEIT keeps Demo downloads behind a partner-only API ([ADR 0001](docs/adr/0001-faceit-only-ingestion.md)).
-3. **Walk away.** Status shows each step, and the tray icon says what the app is doing.
-4. **Watch** with the toast's **Watch**, on the Reels page, or open the files: a folder per match in
+3. **Pick your rounds.** Once the Demo is analyzed, a toast says the match is ready to pick, and **Pick rounds**
+   opens it on the Reels page. Tick the rounds you want (and the halftime talk) and press **Clip**.
+4. **Walk away.** Status shows each step, and the tray icon says what the app is doing.
+5. **Watch** with the toast's **Watch**, on the Reels page, or open the files: a folder per match in
    `<clips folder>\library\videos`, like `2026-10-12 Dust2 13-9\ACE Dust2 R9 you.mp4`. Exports go to
    `<clips folder>\Exports`.
 

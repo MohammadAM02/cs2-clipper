@@ -30,17 +30,19 @@
   <sub>Round 9 on Dust2, the start of an Ace. The app found it, recorded it and joined the Reel on its own.</sub>
 </p>
 
-## What's new in 0.12.0
+## What's new in 0.13.0
 
-### Installed as a folder, not one big file
+### The map's weather behind every page
 
-- **The app no longer unpacks itself every time it starts.** It was one big file that wrote about 300 of its parts
-  (42 MB) into your temp folder at each start and ran them from there. Some malware works that way too, and on
-  2 November Microsoft Defender mistook 0.11.0 for a trojan and removed it. The installer now puts those parts in a
-  folder beside `CS2Clipper.exe` once, so the app starts about a second sooner, leaves nothing behind in your temp
-  folder, and is less likely to be mistaken for malware.
-- **Updating works as before.** Click Update and the installer swaps the single file for the folder. Your settings,
-  clips and tools stay where they are.
+- **Pixel weather instead of the night round.** The window behind every page now shows the weather of the map
+  Status last showed: snow for Office, blowing sand for Dust2 and Mirage, rising embers for Inferno and Nuke, rain
+  for Anubis and Overpass, and fireflies for Ancient. Any other map gets a clear night, with stars drifting by and a
+  few that twinkle. Like the rest of the app it moves in pixel steps, and the next page you open picks it up where
+  it was.
+- **The round still plays on Status's monitor** and in the first-run banner, and the Highlights carousel still shows
+  its setting until a Reel's frame is ready.
+- **It rests like the scene did.** The weather stops while the window isn't in front, and holds still when Calm mode
+  is on or Windows asks for less motion (Settings › Accessibility › Visual effects › Animation effects).
 
 Every version before it is in the [changelog](CHANGELOG.md), and the app shows a version's notes when it offers
 the update.

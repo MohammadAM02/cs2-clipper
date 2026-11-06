@@ -13,8 +13,8 @@
 <h3 align="center">Play FACEIT. Download the Demo. Come back to your Highlights.</h3>
 
 <p align="center">
-  CS2 Clipper finds the rounds worth watching in your FACEIT Demos, records each one in CS2<br>
-  from your view <i>and</i> the enemy's, and joins them into Reels. No editor, no timeline, no clicks in between.
+  CS2 Clipper finds the rounds worth watching in your FACEIT Demos, records the ones you pick in CS2<br>
+  from your view <i>and</i> the enemy's, and joins them into Reels. No editor, no timeline, just a tick per round.
 </p>
 
 <p align="center">

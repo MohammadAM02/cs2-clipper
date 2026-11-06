@@ -171,10 +171,11 @@ Set `CLIPPER_DATA_DIR` to keep a development copy's data apart from the installe
 | `clipper highlights <demo>` | prints the scored Highlights of an analyzed Demo |
 | `clipper quit` | asks the running copy to quit, and waits until it has |
 
-`packaging\build.ps1 -Installer` builds `dist\CS2Clipper.exe` (PyInstaller, one file) and
-`dist\CS2Clipper-Setup.exe` (Inno Setup). Pushing a `v*` tag runs the
-[release workflow](.github/workflows/release.yml): the tests, the build, a proof install on a clean runner,
-then a GitHub Release with the installer, whose notes are the version's section of [CHANGELOG.md](CHANGELOG.md).
+`packaging\build.ps1 -Installer` builds `dist\CS2Clipper\` (PyInstaller: `CS2Clipper.exe` and the `_internal\`
+folder it runs from) and `dist\CS2Clipper-Setup.exe` (Inno Setup). Pushing a `v*` tag runs the
+[release workflow](.github/workflows/release.yml): the tests, the build, a proof on a clean runner (install, upgrade,
+an update from the latest release, uninstall), then a GitHub Release with the installer, whose notes are the
+version's section of [CHANGELOG.md](CHANGELOG.md).
 
 ## Project layout
 

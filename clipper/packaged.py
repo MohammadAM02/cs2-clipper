@@ -1,10 +1,11 @@
-"""The packaged app: CS2Clipper.exe, one file built by PyInstaller (packaging\\cs2clipper.spec).
+"""The packaged app: CS2Clipper.exe and the _internal folder beside it, built by PyInstaller
+(packaging\\cs2clipper.spec).
 
-The exe unpacks itself into a temporary folder on every start and runs from there, so nothing in it
-can lean on the repo: ``REPO_ROOT`` is that folder, and there is nothing to move in from. Two more
-things only the exe does: it takes that folder back off the DLL search path its children inherit, and
-the build runs ``CS2Clipper.exe --bundle-check <report>`` to find what PyInstaller left out, since the
-app loads some modules and files only once it is running.
+The exe runs Python and the app from _internal, so nothing in it can lean on the repo: ``REPO_ROOT``
+is that folder, and there is nothing to move in from. Two more things only the exe does: it takes that
+folder back off the DLL search path its children inherit, and the build runs
+``CS2Clipper.exe --bundle-check <report>`` to find what PyInstaller left out, since the app loads some
+modules and files only once it is running.
 """
 from __future__ import annotations
 
@@ -31,7 +32,7 @@ def frozen() -> bool:
 
 
 def release_dll_directory() -> None:
-    """In the exe, takes its unpacked bundle back off the DLL search path. PyInstaller's bootloader puts
+    """In the exe, takes its _internal folder back off the DLL search path. PyInstaller's bootloader puts
     it there (SetDllDirectoryW) and every process the app starts inherits it, so csda, HLAE, CS2 and
     ffmpeg would load the bundle's copies of DLLs such as vcruntime140.dll before their own. The window
     process keeps it: pywebview loads .NET and WebView2 from the bundle."""
@@ -40,15 +41,14 @@ def release_dll_directory() -> None:
 
 
 def other_copies() -> list[psutil.Process]:
-    """The other processes running this exe's file; none when this is not the exe. The exe is one file
-    that runs as two processes, and the outer one is still clearing away what it unpacked for a moment
-    after the app inside it has ended: the file cannot be replaced until that one is gone too."""
+    """The other processes running this exe's file; none when this is not the exe. The app's files
+    cannot be replaced while any of them runs. The exe runs as one process, so every other process
+    running its file is another copy, even the one that started this one."""
     if not frozen():
         return []
-    mine = {os.getpid(), os.getppid()}
     exe = os.path.normcase(sys.executable)
     return [process for process in psutil.process_iter(["exe"])
-            if process.pid not in mine and os.path.normcase(process.info["exe"] or "") == exe]
+            if process.pid != os.getpid() and os.path.normcase(process.info["exe"] or "") == exe]
 
 
 # --- the bundle check --------------------------------------------------------------------------------------

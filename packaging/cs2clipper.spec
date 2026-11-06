@@ -1,9 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for dist\\CS2Clipper.exe: the whole app in one windowed file. Run by build.ps1.
+"""PyInstaller spec for dist\\CS2Clipper\\: the windowed CS2Clipper.exe and, beside it, the _internal folder
+it runs Python and the app from. Run by build.ps1.
 
-Adapted from thelifeofsuleyman/cs2-clipper's `packaging/aegis.spec` (MIT). What we changed: one file
-instead of a folder; our entry point, name, icon and version; the pages as data; no obsws_python;
-and Pillow left to PyInstaller's own hooks.
+A folder rather than one file: one file unpacks every DLL into %TEMP% and loads it from there on each
+start, which is what droppers do, and Defender's machine learning has quarantined such a build of
+ours (v0.11.0's) as a trojan.
+
+Adapted from thelifeofsuleyman/cs2-clipper's `packaging/aegis.spec` (MIT). What we changed: our entry
+point, name, icon and version; the pages as data; no obsws_python; and Pillow left to PyInstaller's
+own hooks.
 
 MIT License
 
@@ -93,12 +98,13 @@ version = VSVersionInfo(
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="CS2Clipper",
     console=False,
     upx=False,
     icon=str(ICON),
     version=version,
+    contents_directory="_internal",     # the installer clears it before an upgrade (cs2clipper.iss)
 )
+COLLECT(exe, a.binaries, a.datas, name="CS2Clipper", upx=False)

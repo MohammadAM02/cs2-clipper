@@ -3,6 +3,18 @@
 What changed in each release of CS2 Clipper. The release workflow publishes a version's section as the notes of
 its GitHub Release, and the app shows those notes on the Status page when it offers that version.
 
+## 0.12.0
+
+### Installed as a folder, not one big file
+
+- **The app no longer unpacks itself every time it starts.** It was one big file that wrote about 300 of its parts
+  (42 MB) into your temp folder at each start and ran them from there. Some malware works that way too, and on
+  2 November Microsoft Defender mistook 0.11.0 for a trojan and removed it. The installer now puts those parts in a
+  folder beside `CS2Clipper.exe` once, so the app starts about a second sooner, leaves nothing behind in your temp
+  folder, and is less likely to be mistaken for malware.
+- **Updating works as before.** Click Update and the installer swaps the single file for the folder. Your settings,
+  clips and tools stay where they are.
+
 ## 0.11.2
 
 ### Reels keeps up with the mouse again

@@ -1,5 +1,6 @@
 <#
-Builds dist\CS2Clipper.exe, the whole app in one file, and checks it. From the repo:
+Builds dist\CS2Clipper\, the app: CS2Clipper.exe and the _internal folder beside it. Then checks it.
+From the repo:
 
     powershell -ExecutionPolicy Bypass -File packaging\build.ps1
 
@@ -11,8 +12,8 @@ With -Installer it then compiles dist\CS2Clipper-Setup.exe, the installer, from 
 That takes Inno Setup (https://jrsoftware.org/isdl.php).
 
 Adapted from thelifeofsuleyman/cs2-clipper's `packaging/build.ps1` (MIT). What we changed: uv instead
-of a venv's python, one file instead of a folder, the refusal while the app runs, the bundle check, and
-of its switches only -Installer is kept.
+of a venv's python, the refusal while the app runs, the bundle check, and of its switches only
+-Installer is kept.
 
 MIT License
 
@@ -60,7 +61,8 @@ try {
     Invoke-Tool 'shipped.env' { uv run --no-sync python packaging\make_shipped_env.py }
     Invoke-Tool 'PyInstaller' { uv run --no-sync pyinstaller --noconfirm --clean packaging\cs2clipper.spec }
 
-    $exe = Join-Path $root 'dist\CS2Clipper.exe'
+    $bundle = Join-Path $root 'dist\CS2Clipper'
+    $exe = Join-Path $bundle 'CS2Clipper.exe'
     $scratch = Join-Path ([IO.Path]::GetTempPath()) "cs2clipper-bundle-check-$PID"
     New-Item -ItemType Directory -Force $scratch | Out-Null
     try {
@@ -85,9 +87,10 @@ try {
         Remove-Item -Recurse -Force $scratch -ErrorAction SilentlyContinue
     }
 
-    $size = [math]::Round((Get-Item $exe).Length / 1MB, 1)
+    $files = @(Get-ChildItem -LiteralPath $bundle -Recurse -File)
+    $size = [math]::Round(($files | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
     Write-Host ''
-    Write-Host "Built $exe ($size MB)"
+    Write-Host "Built $bundle ($($files.Count) files, $size MB)"
 
     if ($Installer) {
         # Inno Setup's compiler: the one on PATH, or where Inno Setup's own installer puts it. The release

@@ -3,7 +3,7 @@
 The installed app asks GitHub for this repo's newest Release at start-up and then every six hours (an hour
 after a failure). A Release newer than the running app is offered on the Status page with its notes, as long
 as GitHub publishes a SHA-256 for its installer. Update downloads that installer, checks it, and runs it
-silently with /RELAUNCH: the installer asks the running copy to quit, replaces the exe, keeps the shortcuts
+silently with /RELAUNCH: the installer asks the running copy to quit, replaces its files, keeps the shortcuts
 the user chose and the app data folder, and starts the app again (packaging/cs2clipper.iss). Python running
 the repo's source never looks for updates."""
 from __future__ import annotations
@@ -161,7 +161,7 @@ def notes_html(notes: str) -> str:
 def _clean_environment() -> dict[str, str]:
     """This app's environment without what PyInstaller's bootloader puts in it for the app's own processes
     (`_PYI_*`). With it, the installer's `CS2Clipper.exe quit` and the app it starts again would take themselves
-    for parts of this app, and look for its unpacked files, which go when it quits."""
+    for processes this app started rather than starts of their own."""
     return {name: value for name, value in os.environ.items() if not name.upper().startswith("_PYI_")}
 
 

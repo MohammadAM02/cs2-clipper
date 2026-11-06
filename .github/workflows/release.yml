@@ -84,12 +84,12 @@ jobs:
           CS2CLIPPER_FACEIT_KEY: ${{ secrets.CS2CLIPPER_FACEIT_KEY }}
         run: .\packaging\build.ps1 -Installer
 
+      # Every build reads the version, so a pull request finds out too when the exe is not where this looks.
       - name: The tag is the exe's version
-        if: startsWith(github.ref, 'refs/tags/v')
         shell: powershell
         run: |
-          $version = (Get-Item dist\CS2Clipper.exe).VersionInfo.ProductVersion
-          if ($env:GITHUB_REF_NAME -ne "v$version") {
+          $version = (Get-Item dist\CS2Clipper\CS2Clipper.exe).VersionInfo.ProductVersion
+          if ($env:GITHUB_REF -like 'refs/tags/v*' -and $env:GITHUB_REF_NAME -ne "v$version") {
             throw "The tag is $env:GITHUB_REF_NAME, but pyproject.toml says the version is $version."
           }
 

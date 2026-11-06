@@ -61,7 +61,7 @@ def on_start(repo_root: Path = REPO_ROOT) -> list[str]:
     """The call site: [] when CLIPPER_DATA_DIR is set (tests and development never copy the real
     .env key or index), or when there is nothing to move in; else the result of move_in().
 
-    In the packaged exe `repo_root` is the folder the exe unpacked into, which is not a repository: it
+    In the packaged exe `repo_root` is the _internal folder the exe runs from, which is not a repository: it
     has no old setup to move in, and the only thing it may seed is the key the build shipped -- see
     `_seed_shipped`."""
     if paths.overridden():

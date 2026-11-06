@@ -1,19 +1,20 @@
-; Builds dist\CS2Clipper-Setup.exe, the installer, from dist\CS2Clipper.exe. Inno Setup compiles it;
-; packaging\build.ps1 -Installer runs that.
+; Builds dist\CS2Clipper-Setup.exe, the installer, from dist\CS2Clipper\, the app's folder. Inno Setup
+; compiles it; packaging\build.ps1 -Installer runs that.
 ;
-; The installer only puts the app on the PC: the exe under the user's own Programs folder, which takes no
-; admin prompt, a Start Menu shortcut, and a sign-in shortcut that starts the app in the tray. What the
+; The installer only puts the app on the PC: its folder under the user's own Programs folder, which takes
+; no admin prompt, a Start Menu shortcut, and a sign-in shortcut that starts the app in the tray. What the
 ; app needs to analyze and render (csda, FFmpeg, HLAE, about 122 MB) the app downloads by itself when it
 ; first opens, as the Ready and Finished pages say (or `CS2Clipper.exe setup`). The Start Menu shortcut
-; carries the app's AppUserModelID, so its toasts say CS2 Clipper. Uninstalling removes the exe, the
-; shortcuts and what the app registered for itself, and leaves %LOCALAPPDATA%\CS2Clipper, the user's
+; carries the app's AppUserModelID, so its toasts say CS2 Clipper. Uninstalling removes the app's folder,
+; the shortcuts and what the app registered for itself, and leaves %LOCALAPPDATA%\CS2Clipper, the user's
 ; settings, index, analyses and tools, alone.
 ;
-; Adapted from thelifeofsuleyman/cs2-clipper's `packaging/aegis.iss` (MIT). What we changed: one exe
-; instead of a folder, an install for this user only with no choice of folder, the version read from the
-; exe, no WebView2 bootstrapper, the sign-in shortcut starts in the tray and is ticked by default, a
-; shortcut whose box is unticked on an upgrade is removed, the running copy is asked to quit before its
-; exe is replaced or removed, and no relaunch after a silent install unless /RELAUNCH asks for one.
+; Adapted from thelifeofsuleyman/cs2-clipper's `packaging/aegis.iss` (MIT). What we changed: an install
+; for this user only with no choice of folder, the version read from the exe, no WebView2 bootstrapper,
+; the sign-in shortcut starts in the tray and is ticked by default, an upgrade first removes the _internal
+; folder an older version installed and any shortcut whose box is now unticked, the running copy is asked
+; to quit before its files are replaced or removed, and no relaunch after a silent install unless
+; /RELAUNCH asks for one.
 ;
 ; MIT License
 ;
@@ -42,9 +43,9 @@
 ; clipper.notify.APP_ID: the id the app's toasts and its window go by.
 #define AppUserModelID "CS2Clipper.App"
 ; The version is the exe's own, which the build stamps on it from pyproject.toml.
-#define AppVersion GetStringFileInfo(AddBackslash(SourcePath) + "..\dist\" + AppExe, "ProductVersion")
+#define AppVersion GetStringFileInfo(AddBackslash(SourcePath) + "..\dist\CS2Clipper\" + AppExe, "ProductVersion")
 #if AppVersion == ""
-  #error dist\CS2Clipper.exe is missing or has no version. Build it first: packaging\build.ps1 -Installer
+  #error dist\CS2Clipper\CS2Clipper.exe is missing or has no version. Build it first: packaging\build.ps1 -Installer
 #endif
 
 [Setup]
@@ -81,7 +82,8 @@ Name: "startup"; Description: "Start {#AppName} when I sign in to Windows"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "..\dist\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
+; The whole folder the build makes: the exe, and the _internal folder it runs from.
+Source: "..\dist\CS2Clipper\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Messages]
 ; Said before anything is installed, and again at the end: the first start downloads the tools.
@@ -100,6 +102,9 @@ Root: HKCU; Subkey: "Software\Classes\cs2clipper"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\AppUserModelId\{#AppUserModelID}"; Flags: uninsdeletekey
 
 [InstallDelete]
+; An upgrade brings the whole _internal folder again: what an older version had in it, and this one has not,
+; must not stay to be loaded. An install over the single exe that earlier releases were has none to remove.
+Type: filesandordirs; Name: "{app}\_internal"
 ; An upgrade remembers the boxes ticked last time: a shortcut whose box is unticked now has to go.
 Type: files; Name: "{autodesktop}\{#AppName}.lnk"; Tasks: not desktopicon
 Type: files; Name: "{userstartup}\{#AppName}.lnk"; Tasks: not startup

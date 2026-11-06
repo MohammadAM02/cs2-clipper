@@ -1,8 +1,10 @@
 <#
 Proves the installer on a machine that has never seen the app. It installs dist\CS2Clipper-Setup.exe,
-runs the installed exe's real setup (which downloads and installs csda, FFmpeg and HLAE), checks what
-that left, runs setup again, upgrades over a running copy, updates the way the app does (which starts
-it again), and uninstalls.
+checks that the app's folder holds the build's files, runs the installed exe's real setup (which
+downloads and installs csda, FFmpeg and HLAE), checks what that left, runs setup again, upgrades over a
+running copy, updates the way the app does (which starts it again), and uninstalls. Then it installs the
+newest published release, updates that copy to this one the same way, as users will, and uninstalls
+again.
 
 It is for a throwaway machine, such as the one GitHub lends a release build: it installs for the
 signed-in user and takes the app off again. So it refuses without -ThrowawayMachine, and on a PC that
@@ -10,8 +12,9 @@ already has the app or its data folder. There, after packaging\build.ps1 -Instal
 
     powershell -ExecutionPolicy Bypass -File packaging\prove.ps1 -ThrowawayMachine
 
-Setup asks GitHub's API which HLAE is the newest. A runner shares its address with many others, so the
-workflow gives it a token to ask with, in CLIPPER_GITHUB_TOKEN.
+Setup asks GitHub's API which HLAE is the newest, and the proof asks it for the newest release. A runner
+shares its address with many others, so the workflow gives both a token to ask with, in
+CLIPPER_GITHUB_TOKEN.
 #>
 param([switch]$ThrowawayMachine)
 $ErrorActionPreference = 'Stop'
@@ -78,8 +81,35 @@ function Get-LogLength {
     return @(Get-Content -Encoding UTF8 -LiteralPath $log).Count
 }
 
+function Get-Files([string]$folder) {
+    # The files under $folder, as paths relative to it, in order.
+    $prefix = (Get-Item -LiteralPath $folder).FullName.TrimEnd('\') + '\'
+    return @(Get-ChildItem -LiteralPath $folder -Recurse -File |
+        ForEach-Object { $_.FullName.Substring($prefix.Length) } | Sort-Object)
+}
+
+function Confirm-TheBuildsFiles {
+    # The app's folder holds every file of the build, and no other: none an older version left. The uninstaller's
+    # unins000 files are Inno Setup's own.
+    $built = @(Get-Files $bundle)
+    $installed = @(Get-Files $appDir | Where-Object { $_ -notlike 'unins*' })
+    foreach ($file in $built) { if ($installed -notcontains $file) { Write-Host "  missing: $file" } }
+    foreach ($file in $installed) { if ($built -notcontains $file) { Write-Host "  not the build's: $file" } }
+    Confirm-That (($built -join '|') -eq ($installed -join '|')) "$appDir holds the build's $($built.Count) files, and no others"
+}
+
+function Uninstall-TheApp([string]$logName) {
+    $code = Start-AndWait (Join-Path $appDir 'unins000.exe') "$silently /LOG=`"$installerLogs\$logName`"" 600
+    Confirm-That ($code -eq 0) "the uninstaller ended with exit code 0 (it gave $code)"
+    # It hands over to a copy of itself in the temp folder, which may still be at work.
+    $patience = [Diagnostics.Stopwatch]::StartNew()
+    while ((Test-Path -LiteralPath $appDir) -and $patience.Elapsed.TotalSeconds -lt 60) { Start-Sleep -Seconds 1 }
+    Confirm-That (-not (Test-Path -LiteralPath $appDir)) "$appDir is gone"
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 $setup = Join-Path $root 'dist\CS2Clipper-Setup.exe'
+$bundle = Join-Path $root 'dist\CS2Clipper'      # what the build made, which the installer copies
 $appDir = Join-Path $env:LOCALAPPDATA 'Programs\CS2Clipper'
 $exe = Join-Path $appDir 'CS2Clipper.exe'
 $data = Join-Path $env:LOCALAPPDATA 'CS2Clipper'
@@ -104,7 +134,7 @@ foreach ($seen in $appDir, $data) {
     if (Test-Path -LiteralPath $seen) { throw "$seen exists: this is not a machine that has never seen the app." }
 }
 
-$version = (Get-Item (Join-Path $root 'dist\CS2Clipper.exe')).VersionInfo.ProductVersion
+$version = (Get-Item (Join-Path $bundle 'CS2Clipper.exe')).VersionInfo.ProductVersion
 New-Item -ItemType Directory -Force $installerLogs | Out-Null
 try {
     Write-Host '::group::Install'
@@ -112,6 +142,7 @@ try {
     Confirm-That ($code -eq 0) "the installer ended with exit code 0 (it gave $code)"
     Confirm-That (Test-Path -LiteralPath $exe) "it installed $exe"
     Confirm-That ((Get-Item $exe).VersionInfo.ProductVersion -eq $version) "the installed exe is version $version"
+    Confirm-TheBuildsFiles
     Confirm-That ((Get-Shortcut $inStartMenu).TargetPath -eq $exe) 'the Start Menu shortcut starts it'
     $atSignIn = Get-Shortcut $inStartup
     Confirm-That ($atSignIn.TargetPath -eq $exe -and $atSignIn.Arguments -eq '--background') `
@@ -172,6 +203,8 @@ try {
     $port = Wait-ForPage $before $running
     Confirm-That $port 'the installed app runs, and its page answers'
     Write-Host "  on port $port"
+    # A file an older version had in _internal and this one has not: the upgrade must not leave it there.
+    Set-Content -LiteralPath (Join-Path $appDir '_internal\left-by-an-older-version.txt') -Value 'stale'
     $code = Start-AndWait $setup "$silently /LOG=`"$installerLogs\upgrade.log`"" 600
     Show-File "$installerLogs\upgrade.log"
     Confirm-That ($code -eq 0) "the installer ended with exit code 0 over the running copy (it gave $code)"
@@ -181,6 +214,7 @@ try {
     Confirm-That (-not (Get-Process -Name CS2Clipper -ErrorAction SilentlyContinue)) 'no copy of the app runs'
     Confirm-That (-not (Test-AppAnswers $port)) "nothing answers on port $port any more"
     Confirm-That ((Get-Item $exe).VersionInfo.ProductVersion -eq $version) "the installed exe is version $version"
+    Confirm-TheBuildsFiles
     Write-Host '::endgroup::'
 
     Write-Host '::group::An update starts the app again'
@@ -203,21 +237,52 @@ try {
     Write-Host '::endgroup::'
 
     Write-Host '::group::Uninstall'
-    $code = Start-AndWait (Join-Path $appDir 'unins000.exe') "$silently /LOG=`"$installerLogs\uninstall.log`"" 600
-    Confirm-That ($code -eq 0) "the uninstaller ended with exit code 0 (it gave $code)"
-    # It hands over to a copy of itself in the temp folder, which may still be at work.
-    $patience = [Diagnostics.Stopwatch]::StartNew()
-    while ((Test-Path -LiteralPath $appDir) -and $patience.Elapsed.TotalSeconds -lt 60) { Start-Sleep -Seconds 1 }
-    Confirm-That (-not (Test-Path -LiteralPath $appDir)) "$appDir is gone"
+    Uninstall-TheApp 'uninstall.log'
     Confirm-That (-not (Test-Path -LiteralPath $inStartMenu)) 'the Start Menu shortcut is gone'
     Confirm-That (-not (Test-Path -LiteralPath $inStartup)) 'the sign-in shortcut is gone'
     Confirm-That (-not (Test-Path -LiteralPath $listing)) 'Windows no longer lists the app'
     Confirm-That (Test-Path -LiteralPath $csda) "the data folder is left as it was, $data"
     Write-Host '::endgroup::'
 
+    Write-Host '::group::An update from the newest published release'
+    # How users get this version: the copy the newest published release installed updates itself, the way the
+    # app does. A release before the app was a folder was one exe, with no _internal. This comes after setup, so
+    # that copy does not start a setup of its own.
+    $repo = if ($env:GITHUB_REPOSITORY) { $env:GITHUB_REPOSITORY } else { 'MohammadAM02/cs2-clipper' }
+    $asking = @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'cs2-clipper-prove' }
+    if ($env:CLIPPER_GITHUB_TOKEN) { $asking.Authorization = "Bearer $env:CLIPPER_GITHUB_TOKEN" }
+    $latest = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" -Headers $asking
+    $asset = @($latest.assets | Where-Object { $_.name -eq 'CS2Clipper-Setup.exe' })[0]
+    Confirm-That $asset "the newest published release, $($latest.tag_name), has an installer"
+    $published = Join-Path $installerLogs 'published-setup.exe'
+    Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $published -UseBasicParsing
+    $digest = 'sha256:' + (Get-FileHash -Algorithm SHA256 -LiteralPath $published).Hash.ToLowerInvariant()
+    Confirm-That ($digest -eq $asset.digest) 'the download is the installer GitHub publishes'
+    $code = Start-AndWait $published "$silently /LOG=`"$installerLogs\published.log`"" 600
+    Confirm-That ($code -eq 0) "it installed with exit code 0 (it gave $code)"
+    $before = Get-LogLength
+    $running = Start-Program $exe 'run --headless'
+    Confirm-That (Wait-ForPage $before $running) "$($latest.tag_name) runs, and its page answers"
+    $before = Get-LogLength
+    $code = Start-AndWait $setup "$silently /RELAUNCH /LOG=`"$installerLogs\from-published.log`"" 600
+    Show-File "$installerLogs\from-published.log"
+    Confirm-That ($code -eq 0) "this installer ended with exit code 0 over it (it gave $code)"
+    Confirm-That ($running.WaitForExit(30000)) "the copy of $($latest.tag_name) has ended"
+    Confirm-That ((Get-Item $exe).VersionInfo.ProductVersion -eq $version) "the installed exe is version $version"
+    Confirm-TheBuildsFiles
+    $port = Wait-ForPage $before $null
+    Confirm-That $port 'the installer started this version, and its page answers'
+    $code = Start-AndWait $exe 'quit' 120
+    Confirm-That ($code -eq 0) "it quits when asked (exit code $code)"
+    Write-Host '::endgroup::'
+
+    Write-Host '::group::Uninstall again'
+    Uninstall-TheApp 'uninstall-again.log'
+    Write-Host '::endgroup::'
+
     Write-Host ''
     Write-Host ("Proved: CS2 Clipper $version installs, sets a PC up, upgrades over a running copy, updates " +
-                "the way the app does, and uninstalls.")
+                "the way the app does, also from $($latest.tag_name), and uninstalls.")
 } catch {
     Write-Host '::endgroup::'
     Write-Host "::error::$($_.Exception.Message)"

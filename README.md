@@ -30,6 +30,18 @@
   <sub>Round 9 on Dust2, the start of an Ace. The app found it, recorded it and joined the Reel on its own.</sub>
 </p>
 
+## What's new in 0.11.2
+
+### Reels keeps up with the mouse again
+
+- **Reels is smooth again.** With a few dozen matches on it, moving the mouse over Reels slowed the page to a few
+  frames a second, and a click could take a second to land. It keeps up now, however many matches it lists.
+- **No glow follows the cursor any more**, and the dots it lit on the Highlights carousel are gone with it. The map
+  glow behind the pages while a match renders stays, and Settings → Touches still turns it off.
+
+Every version before it is in the [changelog](CHANGELOG.md), and the app shows a version's notes when it offers
+the update.
+
 ## What it does
 
 - **Finds your rounds, and you pick.** Every round with 2 or more of your Frags is worth clipping, and so is a

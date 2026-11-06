@@ -35,4 +35,5 @@ packages = ["clipper"]
 testpaths = ["tests"]
 markers = [
     "ffmpeg: needs ffmpeg and ffprobe on PATH (skipped when missing)",
+    "node: needs Node.js on PATH (skipped when missing)",
 ]

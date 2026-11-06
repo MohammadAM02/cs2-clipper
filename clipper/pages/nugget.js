@@ -186,10 +186,27 @@ const NUGGET = (() => {
     }
     return (burstCells = {fill: on.map(i => [i % N, (i / N) | 0]), ring});
   }
+  // Each colour is one path of whole-pixel runs, row by row: Reels puts a burst on every Highlight row, and a <rect>
+  // per pixel made a page of them 150,000 elements, slow to style, lay out and paint.
+  let burstPaths = null;
+  function runs(cells) {
+    const rows = new Map();
+    for (const [x, y] of cells) (rows.get(y) || rows.set(y, []).get(y)).push(x);
+    let d = "";
+    for (const [y, xs] of [...rows].sort((a, b) => a[0] - b[0])) {
+      xs.sort((a, b) => a - b);
+      for (let i = 0, n; i < xs.length; i += n) {
+        n = 1;
+        while (i + n < xs.length && xs[i + n] === xs[i] + n) n++;
+        d += `M${xs[i] + 1} ${y + 1}h${n}v1h-${n}z`;
+      }
+    }
+    return d;
+  }
   function burst(word, fill = "#FF5500") {
-    const {fill: f, ring} = burstShape();
-    const r = (cs, c) => cs.map(([x, y]) => `<rect x="${x + 1}" y="${y + 1}" width="1" height="1" fill="${c}"/>`).join("");
-    return `<svg viewBox="0 0 ${N + 2} ${N + 2}" shape-rendering="crispEdges" aria-hidden="true">${r(ring, K)}${r(f, fill)}</svg><b>${word}</b>`;
+    if (!burstPaths) { const {fill: f, ring} = burstShape(); burstPaths = {ring: runs(ring), fill: runs(f)}; }
+    return `<svg viewBox="0 0 ${N + 2} ${N + 2}" shape-rendering="crispEdges" aria-hidden="true">` +
+      `<path fill="${K}" d="${burstPaths.ring}"/><path fill="${fill}" d="${burstPaths.fill}"/></svg><b>${word}</b>`;
   }
 
   const scene = () => "";

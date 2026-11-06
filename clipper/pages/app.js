@@ -131,7 +131,7 @@ async function hasRoute(path) {
   try { return (await fetch(path, {method: "OPTIONS", cache: "no-store"})).status !== 404; } catch (e) { return false; }
 }
 
-// --- the backdrop: the pixel scene behind every page, and the cursor glow ---------------------------------------
+// --- the backdrop: the pixel scene behind every page ------------------------------------------------------------
 // The scene fills the window behind the panels, dimmed so the pages stay readable. It plays in the setting of the map
 // Status last showed (kept in localStorage, so every page opens on the same one), and every page starts its loop from
 // the clock, so going from page to page does not jump. It rests while the window is not in front (pixelscene.js).
@@ -161,33 +161,6 @@ function drawBackground() {
     backdrop = PIXELSCENE.mount($(".bg-scene", bg), {fit: "window", map: backdropMap(), start: loopStart(),
       pauseOnBlur: true, stageShare: 0.5, cast: !own});
   });
-
-  const root = document.documentElement;
-  let cur = {x: -999, y: -999}, tgt = {x: -999, y: -999}, raf = 0;
-  const paint = () => {
-    root.style.setProperty("--vx", cur.x + "px");
-    root.style.setProperty("--vy", cur.y + "px");
-    document.querySelectorAll(".glow-local").forEach(n => {
-      const r = n.getBoundingClientRect();
-      n.style.setProperty("--lx", (cur.x - r.left) + "px");
-      n.style.setProperty("--ly", (cur.y - r.top) + "px");
-    });
-  };
-  const step = () => {
-    cur.x += (tgt.x - cur.x) * 0.2;
-    cur.y += (tgt.y - cur.y) * 0.2;
-    paint();
-    raf = Math.abs(tgt.x - cur.x) + Math.abs(tgt.y - cur.y) > 0.5 ? requestAnimationFrame(step) : 0;
-  };
-  addEventListener("pointermove", e => {
-    if (e.pointerType === "touch") return;
-    tgt = {x: e.clientX, y: e.clientY};
-    if (cur.x < -900) cur = {...tgt};
-    root.style.setProperty("--px", ((e.clientX / innerWidth) * 2 - 1).toFixed(3));
-    root.style.setProperty("--py", ((e.clientY / innerHeight) * 2 - 1).toFixed(3));
-    if (!raf) raf = requestAnimationFrame(step);
-  }, {passive: true});
-  document.addEventListener("pointerleave", () => { tgt = cur = {x: -999, y: -999}; paint(); });
 }
 
 // How fast the radar sweeps: quick while a render runs, slow when something needs fixing.
@@ -334,10 +307,9 @@ function dateLabel(iso) {
 // href | play}]}. A slide's thumb is a Reel id: its frame shows when the app serves /reels/<id>.jpg, and
 // the pixel scene, in the setting of the slide's map, shows when it does not.
 function Carousel(root, {slideMs = 7000, onPlay} = {}) {
-  root.classList.add("glow-local");
   root.setAttribute("aria-roledescription", "carousel");
   root.style.setProperty("--slide", slideMs + "ms");
-  root.innerHTML = `<div class="scenes"></div><div class="hshade"></div><div class="hdots"></div>
+  root.innerHTML = `<div class="scenes"></div><div class="hshade"></div>
     <div class="hcopy"></div><div class="htabs" role="group" aria-label="Choose a slide"></div>`;
   const scenes = $(".scenes", root), copy = $(".hcopy", root), tabs = $(".htabs", root);
   let slides = [], si = 0, timer = 0, started = 0, left = slideMs, shown = "", sized = 0;

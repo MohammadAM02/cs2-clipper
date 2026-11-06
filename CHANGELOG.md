@@ -3,6 +3,15 @@
 What changed in each release of CS2 Clipper. The release workflow publishes a version's section as the notes of
 its GitHub Release, and the app shows those notes on the Status page when it offers that version.
 
+## 0.11.2
+
+### Reels keeps up with the mouse again
+
+- **Reels is smooth again.** With a few dozen matches on it, moving the mouse over Reels slowed the page to a few
+  frames a second, and a click could take a second to land. It keeps up now, however many matches it lists.
+- **No glow follows the cursor any more**, and the dots it lit on the Highlights carousel are gone with it. The map
+  glow behind the pages while a match renders stays, and Settings → Touches still turns it off.
+
 ## 0.11.1
 
 ### Fixes for the 16-bit release

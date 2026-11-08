@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/images/banner.webp" alt="CS2 Clipper: hands-off highlight Reels from your FACEIT Demos" width="100%">
+  <img src="docs/images/banner.webp" alt="CS2 Clipper: highlight Reels from your FACEIT Demos" width="100%">
 </p>
 
 <p align="center">
@@ -68,30 +68,40 @@ the update.
   all-headshot rounds. Click one to watch it; from the player, **Copy file** (paste it straight into Discord),
   **Export for Discord** (under the 20 MB free limit), **9:16** for TikTok, Shorts and Reels, or **Show in folder**.
   Exports open on a title card with your name, the map and the round. Reels open on your phone too.
+- **Shows every match's numbers.** Each match on the Reels page has **Stats**: K/D/A, ADR, HS%, KAST, opening
+  kills, trades, flashes, utility damage, Clutches and 2K–5K rounds for all ten players, FACEIT's own numbers first,
+  with arrows against your last 20 matches. The round timeline links each kill to its Reel, and **Replay this
+  round** draws the round on the map's radar.
 
 ## A look inside
 
 <p align="center">
-  <img src="docs/images/status.webp" alt="Status: a Dust2 Demo mid-render, Found then Making clips with the time left, and the latest Highlights" width="100%">
+  <img src="docs/images/status.webp" alt="Status: the night round on its monitor while a Cache Demo records its Enemy POV, the rundown at Making clips with the time left, and the latest Highlights" width="100%">
   <br>
   <sub><b>Status</b>: what the app is doing right now, the latest Highlights, and whether this PC is ready.</sub>
 </p>
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/demos.webp" alt="Demos to grab: recent FACEIT matches with their Highlights and the days left on each Demo link, and each match's numbers under its map"></td>
-    <td width="50%"><img src="docs/images/reels.webp" alt="Reels: every Highlight in a carousel, with filters, and each match's rounds"></td>
+    <td width="50%"><img src="docs/images/demos.webp" alt="Demos to grab: recent FACEIT matches with their Highlights, each match's numbers under its map, and the days left on each Demo link"></td>
+    <td width="50%"><img src="docs/images/reels.webp" alt="Reels: a match's rounds worth clipping, the recorded ones ticked with Play, the rest and the halftime talk waiting for a tick"></td>
   </tr>
   <tr>
     <td align="center"><sub><b>Demos to grab</b>: matches worth downloading, and how long each link lasts.</sub></td>
-    <td align="center"><sub><b>Reels</b>: every Highlight, to watch from either view and to share.</sub></td>
+    <td align="center"><sub><b>Reels</b>: tick the rounds to clip, then watch each Highlight from either view and share it.</sub></td>
   </tr>
 </table>
+
+<p align="center">
+  <img src="docs/images/stats.webp" alt="Stats for a Mirage match: your numbers against your last 20 matches, and all ten players with FACEIT's line beside the Demo's" width="100%">
+  <br>
+  <sub><b>Stats</b>: every match's numbers for all ten players, FACEIT's first, and each round's kills linked to their Reels.</sub>
+</p>
 
 ## How it works
 
 <p align="center">
-  <img src="docs/images/pipeline.webp" alt="You play and download the Demo; the app analyzes, scores, records and joins the Reels" width="100%">
+  <img src="docs/images/pipeline.webp" alt="You play and grab the Demo; the app analyzes it; you tick the rounds; the app records them and joins the Reels" width="100%">
 </p>
 
 Each Demo moves through the same steps; Status sums them up as Found, Making clips (with about how long is left)
@@ -102,7 +112,7 @@ open.
 | --- | --- |
 | **Spotted** | A finished FACEIT Demo lands in Downloads and moves into your clips folder. |
 | **Unpacked** | The `.dem.zst` FACEIT serves becomes a `.dem`. |
-| **Analyzed** | [csda](https://github.com/akiver/cs-demo-analyzer) reads every round; the app keeps what it needs as `analyses\<checksum>.json`. |
+| **Analyzed** | [csda](https://github.com/akiver/cs-demo-analyzer) reads every round; the app keeps what it needs as `analyses\<checksum>.json`, with the match's stats beside it. |
 | **Scored** | Each round with your Frags becomes a Highlight. The ones worth clipping wait on the Reels page for you to pick, and a toast says the match is ready; **Clip** sends the Demo on with your picks. |
 | **Rendering** | HLAE starts CS2 and a console script ([`hlae_plan.py`](clipper/hlae_plan.py)) records each Sequence at its exact ticks, one view per CS2 launch: your view first, whose Reels are joined and announced straight away, then the Enemy POV (or only the view Settings picks). CS2 and its encoder run below normal priority. |
 | **Joined** | FFmpeg joins each Highlight's Clips into one Reel per view. |
@@ -146,6 +156,8 @@ with one click, keeping your settings, Demos and Reels. What changed in each ver
 5. **Watch** with the toast's **Watch**, on the Reels page, or open the files: a folder per match in
    `<clips folder>\library\videos`, like `2026-10-12 Dust2 13-9\ACE Dust2 R9 you.mp4`. Exports go to
    `<clips folder>\Exports`.
+6. **Look back** with **Stats** under any match on the Reels page, and **Replay this round** to see a round on
+   the radar.
 
 > [!TIP]
 > A CS2 update can break HLAE until advancedfx ships a fix. Status checks for new HLAE releases every day
@@ -160,7 +172,7 @@ git clone https://github.com/MohammadAM02/cs2-clipper
 cd cs2-clipper
 uv sync
 uv run clipper     # the app: tray, window and pages
-uv run pytest      # over 1,000 tests; none needs CS2, HLAE or FACEIT
+uv run pytest      # over 1,600 tests; none needs CS2, HLAE or FACEIT
 ```
 
 Run from source, the app needs your own FACEIT Data API key in Settings → You; installed builds ship one.
@@ -186,7 +198,8 @@ version's section of [CHANGELOG.md](CHANGELOG.md).
 
 ```text
 clipper/              the app
-├── pages/            Status, Demos to grab, Reels and Settings: plain HTML, CSS and JS
+├── pages/            Status, Demos to grab, Reels, Stats, Replay and Settings: plain HTML, CSS and JS
+│   └── fonts/        Silkscreen and Pixelify Sans, the 16-bit lettering
 ├── worker.py         moves each Demo through the steps
 ├── intake.py         takes finished Demos from Downloads
 ├── analysis.py       the only code that reads csda's output
@@ -195,6 +208,9 @@ clipper/              the app
 ├── hlae_plan.py      Sequences become the console script CS2 follows
 ├── hlae_render.py    one Render Job: CS2 through HLAE, watched to the end
 ├── join.py           Clips become one Reel per view
+├── stats.py          what each player did in a Demo, worked out from its events
+├── replay.py         a round's positions, once a second, for Replay
+├── radar.py          each map's radar, read from the installed CS2
 ├── alerts.py         match alerts from the FACEIT Data API
 ├── update.py         finds a newer release on GitHub and installs it with one click
 ├── app.py            tray, window, web server and worker, together
@@ -224,10 +240,12 @@ CS2 Clipper is built on open-source work:
   window and installer started from it.
 - [faceitperf](https://github.com/iffypixy/faceitperf) by iffypixy (MIT): the Rating 2.0 estimate.
 - [FFmpeg](https://ffmpeg.org), in [gyan.dev's builds](https://www.gyan.dev/ffmpeg/builds/), joins the Clips.
+- [Silkscreen](https://github.com/googlefonts/silkscreen) and [Pixelify Sans](https://github.com/eifetx/Pixelify-Sans)
+  (SIL Open Font License) letter every page.
 
 ## License
 
 [MIT](LICENSE). The code adapted from Aegis, CS Demo Manager and faceitperf keeps its authors' MIT notices in
-the files it lives in.
+the files it lives in, and the fonts keep their Open Font License beside them in `clipper/pages/fonts`.
 
 <sub>Not affiliated with Valve or FACEIT. Counter-Strike 2 is a trademark of Valve Corporation.</sub>

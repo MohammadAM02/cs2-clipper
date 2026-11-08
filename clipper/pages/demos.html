@@ -49,10 +49,6 @@ function when(iso) {
   return d.toDateString() === new Date().toDateString()
     ? `Today, ${time}` : `${d.toLocaleDateString([], {day: "numeric", month: "short"})}, ${time}`;
 }
-function left(iso) {
-  const hours = (new Date(iso) - Date.now()) / 3600000;
-  return hours >= 48 ? `${Math.ceil(hours / 24)} days` : `${Math.max(1, Math.ceil(hours))} hours`;
-}
 function actions(r) {
   if (r.state === "grabbed") {
     return `<span class="got"><b>${ICON.check.replace('stroke="currentColor"', 'stroke="#FF5500"')}Got it</b>${r.waiting_for ? `<small>Rendering waits: ${esc(r.waiting_for)}</small>` : ""}</span>`;
@@ -74,10 +70,10 @@ function row(r) {
   return `<div class="t-wrap" role="listitem" data-map="${esc(r.map)}">${track}<article class="drow dgrid${done ? " done" : " t-drag"}">
     <div class="who">${maptile(r.map)}<span style="min-width:0">${done ? "" : '<small class="wtd">Ready to download</small>'}<b>${esc(r.map)}</b><small>${when(r.finished_at)}</small><small class="detail">${detail}</small></span></div>
     <div class="hls" style="display:flex;gap:5px;flex-wrap:wrap">${badges(r.highlights)}</div>
-    <div class="exp"><span style="font-size:14px;color:${soon ? "#FFB27A" : "#CFC5BA"}">${left(r.expires_at)}</span>${r.reminded ? '<span class="pill">Reminder</span>' : ""}
+    <div class="exp"><span style="font-size:14px;color:${soon ? "#FFB27A" : "#CFC5BA"}">${timeLeft(r.expires_at)}</span>${r.reminded ? '<span class="pill">Reminder</span>' : ""}
       <div class="life${soon ? " soon" : ""}" title="FACEIT keeps a Demo link for about 30 days"><i data-w="${Math.max(2, Math.min(100, days / 30 * 100)).toFixed(1)}%"></i></div></div>
     <div class="dact">${actions(r)}</div>
-    ${!done && hours <= 24 ? '<span class="stamp">Last call</span>' : ""}
+    ${!done && hours > 0 && hours <= 24 ? '<span class="stamp">Last call</span>' : ""}
   </article></div>`;
 }
 function render() {
@@ -88,7 +84,7 @@ function render() {
   const sum = document.getElementById("sum");
   sum.innerHTML = pending.length
     ? `${esc(plural(pending.length, "match", "matches"))} with ${esc(plural(count, "Highlight"))} to grab.`
-      + (urgent ? ` <span class="warn">${esc(soonest.map)} expires in ${left(soonest.expires_at)}.</span>` : "")
+      + (urgent ? ` <span class="warn">${esc(soonest.map)} ${expires(soonest.expires_at)}.</span>` : "")
     : "All caught up. New matches show up here after you play.";
   setNavCount(pending.length);
   document.getElementById("note").hidden = data.this_pc;

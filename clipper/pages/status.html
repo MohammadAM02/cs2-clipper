@@ -454,10 +454,6 @@ function checkRow(c) {
 }
 
 // --- Demos to grab ----------------------------------------------------------------------------------------
-function left(iso) {
-  const hours = (new Date(iso) - Date.now()) / 3600000;
-  return hours >= 48 ? `${Math.ceil(hours / 24)} days` : `${Math.max(1, Math.ceil(hours))} hours`;
-}
 const GRAB_WORDS = [["5k", "ACE", "b-ace"], ["4k", "4K", "b-4k"], ["3k", "3K", "b-3k"]];
 function grabRow(r) {
   const hours = (new Date(r.expires_at) - Date.now()) / 3600000, days = hours / 24, soon = days <= 3;
@@ -467,9 +463,9 @@ function grabRow(r) {
     : `<a class="primary dark sm" href="${esc(r.url)}" target="_blank" rel="noopener" data-open="${esc(r.id)}">Open</a>`;
   return `<article class="wanted"><div class="w">Ready to download</div>
     <div class="mid"><span class="m">${esc(r.map)}</span><span class="r">${hl}</span><span class="go">${act}</span></div>
-    <div class="e${soon ? " soon" : ""}">Link expires in ${left(r.expires_at)}</div>
+    <div class="e${soon ? " soon" : ""}">Link ${expires(r.expires_at)}</div>
     <span class="life${soon ? " soon" : ""}" style="display:block"><i data-w="${Math.max(2, Math.min(100, days / 30 * 100)).toFixed(1)}%"></i></span>
-    ${hours <= 24 ? '<span class="stamp">Last call</span>' : ""}</article>`;
+    ${hours > 0 && hours <= 24 ? '<span class="stamp">Last call</span>' : ""}</article>`;
 }
 
 function renderGrab() {

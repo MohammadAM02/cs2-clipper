@@ -270,6 +270,20 @@ function setNavCount(n) {
 
 const pendingRows = rows => rows.filter(r => r.state === "ready" || r.state === "announced");
 
+// How long a Demo link has left (FACEIT keeps one about 30 days: LINK_LIFETIME in alerts.py), rounded up: whole hours
+// up to 47 ("5 hours", "1 hour"), then whole days ("2 days"). Past its 30 days it is "expired", for the little while
+// before the app marks the match expired and drops its row.
+function timeLeft(iso, now = Date.now()) {
+  const hours = Math.ceil((new Date(iso) - now) / 3600000);
+  if (hours <= 0) return "expired";
+  return hours >= 48 ? plural(Math.ceil(hours / 24), "day") : plural(hours, "hour");
+}
+// The same, ending a sentence about the link: "expires in 3 days", "expires in 1 hour", "expired".
+function expires(iso, now) {
+  const left = timeLeft(iso, now);
+  return left === "expired" ? left : `expires in ${left}`;
+}
+
 function watchDemoCount() {
   every(15000, async () => {
     const r = await api("/demos.json");

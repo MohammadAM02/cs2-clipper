@@ -3,6 +3,19 @@
 What changed in each release of CS2 Clipper. The release workflow publishes a version's section as the notes of
 its GitHub Release, and the app shows those notes on the Status page when it offers that version.
 
+## 0.13.1
+
+### Demos from CS2's 11 November update are read again
+
+- **csda reads them again.** That CS2 update changed how Demos are written, and csda, the tool that reads each
+  Demo, gave up at the start of every one recorded since: they failed with "csda wrote no analysis". The app now
+  uses csda 1.14.2, which reads them.
+- **It updates itself.** When 0.13.1 first starts it downloads the new csda (about 4 MB), and it reads no Demo until
+  that is in place. Then press **Retry** on Status under each Demo that failed with "csda wrote no analysis".
+- **Updating a tool no longer brings back the first-run screen**, which Status used to show while HLAE updated.
+- **A Demo link's countdown reads "1 hour"** in its last hour rather than "1 hours", and **"expired"** once its 30
+  days are up, on Demos to grab and on Status.
+
 ## 0.13.0
 
 ### The map's weather behind every page

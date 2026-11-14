@@ -30,19 +30,18 @@
   <sub>Round 9 on Dust2, the start of an Ace. The app found it, recorded it and joined the Reel on its own.</sub>
 </p>
 
-## What's new in 0.13.0
+## What's new in 0.13.1
 
-### The map's weather behind every page
+### Demos from CS2's 11 November update are read again
 
-- **Pixel weather instead of the night round.** The window behind every page now shows the weather of the map
-  Status last showed: snow for Office, blowing sand for Dust2 and Mirage, rising embers for Inferno and Nuke, rain
-  for Anubis and Overpass, and fireflies for Ancient. Any other map gets a clear night, with stars drifting by and a
-  few that twinkle. Like the rest of the app it moves in pixel steps, and the next page you open picks it up where
-  it was.
-- **The round still plays on Status's monitor** and in the first-run banner, and the Highlights carousel still shows
-  its setting until a Reel's frame is ready.
-- **It rests like the scene did.** The weather stops while the window isn't in front, and holds still when Calm mode
-  is on or Windows asks for less motion (Settings › Accessibility › Visual effects › Animation effects).
+- **csda reads them again.** That CS2 update changed how Demos are written, and csda, the tool that reads each
+  Demo, gave up at the start of every one recorded since: they failed with "csda wrote no analysis". The app now
+  uses csda 1.14.2, which reads them.
+- **It updates itself.** When 0.13.1 first starts it downloads the new csda (about 4 MB), and it reads no Demo until
+  that is in place. Then press **Retry** on Status under each Demo that failed with "csda wrote no analysis".
+- **Updating a tool no longer brings back the first-run screen**, which Status used to show while HLAE updated.
+- **A Demo link's countdown reads "1 hour"** in its last hour rather than "1 hours", and **"expired"** once its 30
+  days are up, on Demos to grab and on Status.
 
 Every version before it is in the [changelog](CHANGELOG.md), and the app shows a version's notes when it offers
 the update.

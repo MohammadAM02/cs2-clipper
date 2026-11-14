@@ -424,8 +424,10 @@ class App:
         cfg = self.settings.current().config
         setup = self.setup.status()
         missing = [step for step in setup.get("steps", []) if step["state"] != "ok" and not step.get("update")]
-        tools = ("downloading" if setup.get("running") else "failed" if setup.get("error") and missing
-                 else "needed" if missing or not setup.get("steps") and setup.get("needed") else "ok")
+        lacking = missing or not setup.get("steps") and setup.get("needed")     # not merely behind: an update
+        tools = ("downloading" if setup.get("running") and lacking               # run is not the first run again
+                 else "failed" if setup.get("error") and missing
+                 else "needed" if lacking else "ok")
         return {"done": bool(cfg.subject_steamid) and cfg.data_root is not None and tools == "ok",
                 "nickname": cfg.faceit_nickname, "steamid": bool(cfg.subject_steamid),
                 "clips_folder": str(cfg.data_root or ""), "tools": tools,
@@ -433,12 +435,14 @@ class App:
 
     def start_setup_if_missing(self) -> None:
         """At start, Setup downloads what the PC lacks (the installer says it will): nobody has to find a button
-        for it. A newer HLAE or FFmpeg alone waits for its Update button, since an update can wait."""
+        for it. A newer HLAE or FFmpeg alone waits for its Update button, since an update can wait. An older csda
+        cannot: it cannot read the Demos of newer CS2 builds, and the worker waits until it is replaced."""
         status = self.setup.status()
         if status.get("running"):
             return
-        if any(step["state"] != "ok" and not step.get("update") for step in status.get("steps", [])):
-            log.info("Setup starts on its own: this PC lacks some of the tools")
+        if any(step["state"] != "ok" and (not step.get("update") or step["id"] == "csda")
+               for step in status.get("steps", [])):
+            log.info("Setup starts on its own: this PC lacks some of the tools, or has an older csda")
             self.start_setup()
 
     # --- cs2clipper: links (toast buttons; `open_link`) ---------------------------------------------------

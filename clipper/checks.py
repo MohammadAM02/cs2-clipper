@@ -15,13 +15,12 @@ from pathlib import Path
 
 import psutil
 
-from clipper import cs2_paths, download
+from clipper import components, cs2_paths, download
 from clipper.config import Config
 
 log = logging.getLogger(__name__)
 
 GB = 1024**3
-ADVANCEDFX_RELEASES_URL = "https://api.github.com/repos/advancedfx/advancedfx/releases/latest"
 DAILY_SECONDS = 24 * 60 * 60.0
 RETRY_AFTER_FAILURE_SECONDS = 60 * 60.0
 
@@ -69,7 +68,7 @@ def latest_hlae_release(fetch_json: Callable[[str], dict] = _fetch_release_json)
     """The newest advancedfx release's tag (e.g. "2.192.6"), without a leading "v". Raises
     OSError (no network; urllib.error.URLError is one), ValueError (not valid JSON), or KeyError
     (no "tag_name") when it can't be had."""
-    data = fetch_json(ADVANCEDFX_RELEASES_URL)
+    data = fetch_json(components.ADVANCEDFX_RELEASES_URL)
     tag = data["tag_name"]
     return tag[1:] if tag.startswith("v") else tag
 
@@ -132,12 +131,36 @@ def _free_bytes(path: Path) -> int:
     return psutil.disk_usage(str(path)).free
 
 
+# --- csda: the one this version pins --------------------------------------------------------------
+
+
+def csda_stamp(cfg: Config) -> Path:
+    """Beside csda.exe: the name of the zip Setup unpacked it from."""
+    return cfg.csda_exe.with_name("installed-from.txt")
+
+
+def csda_state(cfg: Config) -> str:
+    """"ready", "missing", or "outdated": unpacked from a zip other than the one components.CSDA pins, or
+    before Setup noted which. An older csda cannot read the Demos of newer CS2 builds: 1.11.0 read none
+    recorded after CS2's update of 2026-11-11."""
+    if not cfg.csda_exe.is_file():
+        return "missing"
+    try:
+        noted = csda_stamp(cfg).read_text(encoding="utf-8").strip()
+    except (OSError, ValueError):       # no note, or not text: a csda Setup did not note
+        return "outdated"
+    return "ready" if noted == components.CSDA.name else "outdated"
+
+
 # --- the five checks ------------------------------------------------------------------------------
 
 
 def _csda_check(cfg: Config) -> Check:
-    if not cfg.csda_exe.is_file():
+    state = csda_state(cfg)
+    if state == "missing":
         return Check("csda", False, "not found", "Set up this PC to install it")
+    if state == "outdated":
+        return Check("csda", False, "out of date", "Update csda: an older one cannot read newer CS2 Demos")
     return Check("csda", True, "found")
 
 
@@ -236,6 +259,9 @@ def startup_problems(cfg: Config) -> list[str]:
         problems.append("Choose a clips folder in Settings")
     elif not cfg.data_root.is_dir():
         problems.append(f"The clips folder {cfg.data_root} is missing")
-    if not cfg.csda_exe.is_file():
+    state = csda_state(cfg)
+    if state == "missing":
         problems.append("csda isn't installed yet: Set up installs it")
+    elif state == "outdated":       # it would fail every newer Demo, and Setup cannot replace a csda.exe that runs
+        problems.append("csda is out of date: Update replaces it")
     return problems

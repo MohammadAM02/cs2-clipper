@@ -25,8 +25,9 @@ runs it. The Sequence builders and the commands the script sends are ported from
 ## Consequences
 
 - `clipper/analysis.py` is the only code that reads csda's output: a csda change is absorbed there.
-  csda is pinned (v1.11.0), and Setup installs it, HLAE, and FFmpeg unless the PC has one on PATH,
-  into the data folder's `tools\`.
+  csda is pinned (v1.14.2 since CS2's update of 2026-11-11, which v1.11.0 cannot read), and Setup
+  installs it, HLAE, and FFmpeg unless the PC has one on PATH, into the data folder's `tools\`. Setup
+  replaces a csda unpacked from any other zip, and the worker waits until it has.
 - Each match is analyzed once; scoring and every render read the kept copy.
 - No database server: the app's own index is SQLite.
 - `hlae_exe` names the HLAE to use, and blank means the one Setup installs.

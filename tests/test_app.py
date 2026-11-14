@@ -1573,6 +1573,8 @@ def test_the_first_run_is_done_once_the_player_the_folder_and_the_tools_are_ther
     ([("csda", "needed", False)], False, "needed"),
     ([("csda", "needed", False)], True, "downloading"),
     ([("hlae", "needed", True)], False, "ok"),                 # a newer HLAE can wait for its Update button
+    ([("hlae", "needed", True)], True, "ok"),                  # and updating it is not the first run again
+    ([("csda", "needed", True)], True, "ok"),                  # nor is replacing an older csda
 ])
 def test_the_first_run_says_how_the_tools_are_coming(world, steps, running, tools):
     world.setup.steps = _tools(*steps)
@@ -1592,3 +1594,11 @@ def test_an_update_alone_does_not_start_setup(world):
     world.setup.steps = _tools(("csda", "ok", False), ("hlae", "needed", True))
     world.app.start_setup_if_missing()
     assert world.setup.starts == 0
+
+
+def test_an_older_csda_starts_setup_on_its_own(world):
+    """Unlike a newer HLAE, it cannot wait for its Update button: an older csda cannot read the Demos of newer CS2
+    builds, and the worker waits until it is replaced."""
+    world.setup.steps = _tools(("csda", "needed", True), ("hlae", "ok", False))
+    world.app.start_setup_if_missing()
+    assert world.setup.starts == 1

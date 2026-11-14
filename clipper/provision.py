@@ -93,16 +93,24 @@ class Step:
     installed: Callable[[Context], bool] | None = None          # when that asks less than "no longer needed"
 
 
-# --- csda: always the one setup installs, since nothing else on a PC would have it ---------------------
+# --- csda: always the one setup installs, since nothing else on a PC would have it, and the one this version
+# pins, since an older one cannot read the Demos of newer CS2 builds ---------------------------------------
 
 
 def _csda_needed(ctx: Context) -> bool:
-    return not ctx.cfg().csda_exe.is_file()
+    return checks.csda_state(ctx.cfg()) != "ready"
+
+
+def _csda_installed(ctx: Context) -> bool:
+    return ctx.cfg().csda_exe.is_file()
 
 
 def _install_csda(ctx: Context) -> None:
+    """Replaces the whole csda folder, then notes the zip it came from, which tells an older csda apart."""
+    cfg = ctx.cfg()
     archive = ctx.fetch(components.CSDA)
-    download.extract(archive, ctx.cfg().csda_exe.parent)
+    download.extract(archive, cfg.csda_exe.parent)
+    checks.csda_stamp(cfg).write_text(components.CSDA.name, encoding="utf-8")
     archive.unlink(missing_ok=True)
 
 
@@ -161,10 +169,11 @@ def _install_hlae(ctx: Context) -> None:
         ctx.save({"hlae_exe": ""})
 
 
-# HLAE counts as installed once it is there: were its changelog ever behind its release tag, asking
-# "no longer behind" would fail a step that did all it could.
+# csda and HLAE count as installed once they are there, so replacing an older one is an update (Status offers
+# it as one, and the first run stays done). Were HLAE's changelog ever behind its release tag, asking "no
+# longer behind" would fail a step that did all it could.
 STEPS = (
-    Step("csda", "csda", _csda_needed, _install_csda, lambda ctx: components.CSDA.size),
+    Step("csda", "csda", _csda_needed, _install_csda, lambda ctx: components.CSDA.size, _csda_installed),
     Step("ffmpeg", "FFmpeg", _ffmpeg_needed, _install_ffmpeg, _ffmpeg_download),
     Step("hlae", "HLAE", _hlae_needed, _install_hlae, lambda ctx: HLAE_BYTES, _hlae_installed),
 )
@@ -220,7 +229,8 @@ def _run(ctx: Context, report: Callable[[str, str], None]) -> str | None:
 
 
 def _look(ctx: Context) -> dict:
-    """`update` is true of a needed step that replaces what is there already: a newer HLAE."""
+    """`update` is true of a needed step that replaces what is there already: a newer HLAE, or the csda this
+    version pins."""
     todo = needed(ctx)
     return {"steps": [{"id": step.id, "name": step.name, "state": "needed" if step.id in todo else "ok",
                        "update": step.id in todo and step.installed is not None and step.installed(ctx)}

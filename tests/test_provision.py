@@ -117,10 +117,16 @@ def context(world: World, latest: str | None = "2.192.6", **more) -> provision.C
     return provision.Context(store=SettingsStore(paths.settings_file()), tools=world.tools(), latest_hlae=latest, **more)
 
 
+def csda_stamp(world: World) -> Path:
+    """Beside csda.exe: the name of the zip Setup unpacked it from."""
+    return checks.csda_stamp(context(world).cfg())
+
+
 def install_by_hand(world: World, tmp_path: Path, hlae: str = "2.192.6") -> None:
     """A PC set up by hand, the way the developer's is: FFmpeg on PATH, HLAE in a folder of the user's
-    choosing, and csda where setup puts it (there is no setting for it)."""
+    choosing, and csda where setup puts it (there is no setting for it), noted as the pinned one."""
     touch(tools() / "csda" / "csda.exe")
+    csda_stamp(world).write_text(components.CSDA.name, encoding="utf-8")
     world.on_path = {name: str(touch(tmp_path / "bin" / f"{name}.exe")) for name in ("ffmpeg", "ffprobe")}
     touch(tmp_path / "HLAE" / "hlae.exe")
     (tmp_path / "HLAE" / "changelog.xml").write_text(CHANGELOG.format(hlae), encoding="utf-8")
@@ -154,9 +160,9 @@ def test_setup_installs_everything_in_order_and_then_nothing_is_needed(world):
 def test_only_what_is_used_is_unpacked(world):
     provision.run(context(world))
 
-    assert names(tools()) == ["csda/csda.exe", "ffmpeg/LICENSE", "ffmpeg/README.txt", "ffmpeg/bin/ffmpeg.exe",
-                              "ffmpeg/bin/ffprobe.exe", "hlae/HLAE.exe", "hlae/changelog.xml",
-                              "hlae/x64/AfxHookSource2.dll"]
+    assert names(tools()) == ["csda/csda.exe", "csda/installed-from.txt", "ffmpeg/LICENSE", "ffmpeg/README.txt",
+                              "ffmpeg/bin/ffmpeg.exe", "ffmpeg/bin/ffprobe.exe", "hlae/HLAE.exe",
+                              "hlae/changelog.xml", "hlae/x64/AfxHookSource2.dll"]
 
 
 def test_downloads_are_removed_once_they_are_installed(world):
@@ -190,7 +196,7 @@ def test_a_pc_that_has_everything_is_left_alone(world, tmp_path):
 
     assert world.fetched == []
     assert settings_file() == before
-    assert names(tools()) == ["csda/csda.exe"] and not downloads().exists()
+    assert names(tools()) == ["csda/csda.exe", "csda/installed-from.txt"] and not downloads().exists()
 
 
 def test_an_ffmpeg_already_on_the_pc_is_used(world, tmp_path):
@@ -226,6 +232,32 @@ def test_an_ffmpeg_setup_unpacked_before_is_taken_up_again_without_a_download(wo
 
     assert components.FFMPEG.name not in world.fetched
     assert ctx.cfg().ffmpeg == str(tools() / "ffmpeg" / "bin" / "ffmpeg.exe")
+
+
+# --- csda: the one this version pins -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize("from_zip", ["csda-1.11.0-windows-x64.zip", None])
+def test_a_csda_other_than_the_pinned_one_is_replaced_by_it(world, from_zip):
+    """An older csda cannot read the Demos of newer CS2 builds: 1.11.0 read none recorded after CS2's update of
+    2026-11-11. None is a csda unpacked before Setup noted which zip it came from: every PC set up until then."""
+    ctx = context(world)
+    provision.run(ctx)
+    world.fetched.clear()
+    exe, stamp = ctx.cfg().csda_exe, csda_stamp(world)
+    exe.write_text("the older csda", encoding="utf-8")
+    if from_zip is None:
+        stamp.unlink()
+    else:
+        stamp.write_text(from_zip, encoding="utf-8")
+
+    assert provision.needed(ctx) == ["csda"]
+    assert provision.run(ctx) is None
+
+    assert world.fetched == [components.CSDA.name]
+    assert exe.read_text(encoding="utf-8") == "x"                     # the pinned zip's csda.exe
+    assert stamp.read_text(encoding="utf-8") == components.CSDA.name
+    assert provision.needed(ctx) == []
 
 
 # --- HLAE --------------------------------------------------------------------------------------------
@@ -413,6 +445,18 @@ def test_a_step_that_replaces_what_is_already_there_is_an_update(world, tmp_path
     assert [(step["id"], step["state"], step["update"]) for step in status["steps"] if step["state"] != "ok"] == [
         ("hlae", "needed", True)]
     assert [step["update"] for step in status["steps"]] == [False, False, True]
+
+
+def test_replacing_an_older_csda_is_an_update(world, tmp_path):
+    """So Status offers it as one, and the first-run screen stays away while it runs."""
+    install_by_hand(world, tmp_path)
+    csda_stamp(world).unlink()                          # as Setup left it before it noted the zip
+
+    status = provision.Setup(lambda: context(world)).status()
+
+    assert [(step["id"], step["state"], step["update"]) for step in status["steps"] if step["state"] != "ok"] == [
+        ("csda", "needed", True)]
+    assert status["download_bytes"] == components.CSDA.size
 
 
 def test_on_a_fresh_pc_nothing_is_an_update(world):

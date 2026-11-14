@@ -1,9 +1,10 @@
 """What setup downloads.
 
 csda and FFmpeg are pinned: one known file each, checked against the SHA-256 written here, so a
-changed or tampered download is refused. HLAE is not pinned, because an HLAE older than the CS2 build
-cannot record: setup takes the newest release and checks it against the SHA-256 GitHub publishes for
-that file, and refuses a release that publishes none."""
+changed or tampered download is refused. Setup replaces a csda unpacked from any other zip
+(checks.csda_state), since an older csda cannot read the Demos of newer CS2 builds. HLAE is not pinned,
+because an HLAE older than the CS2 build cannot record: setup takes the newest release and checks it
+against the SHA-256 GitHub publishes for that file, and refuses a release that publishes none."""
 from __future__ import annotations
 
 import re
@@ -11,8 +12,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from clipper import download
-from clipper.checks import ADVANCEDFX_RELEASES_URL
 from clipper.download import DownloadError
+
+ADVANCEDFX_RELEASES_URL = "https://api.github.com/repos/advancedfx/advancedfx/releases/latest"
 
 
 @dataclass(frozen=True)
@@ -23,11 +25,13 @@ class Asset:
     size: int        # bytes
 
 
-CSDA = Asset(          # cs-demo-analyzer: the zip holds csda.exe alone, which reads each Demo
-    name="csda-1.11.0-windows-x64.zip",
-    url="https://github.com/akiver/cs-demo-analyzer/releases/download/v1.11.0/windows-x64.zip",
-    sha256="c1c897d304e6247f850f3164343092bee3f760472d6f1bb53144cd2f296aabb1",
-    size=3_709_408,
+# cs-demo-analyzer: the zip holds csda.exe alone, which reads each Demo. 1.14.2 reads the Demos of CS2's update of
+# 2026-11-11 (fixed8-encoded fields on the player controller), which 1.11.0 failed on from the first packet.
+CSDA = Asset(
+    name="csda-1.14.2-windows-x64.zip",
+    url="https://github.com/akiver/cs-demo-analyzer/releases/download/v1.14.2/windows-x64.zip",
+    sha256="05767a62998c1e35074467bb1ca82336c70c59629c0be45445882a63635a98b5",
+    size=3_744_334,
 )
 FFMPEG = Asset(
     name="ffmpeg-9.0.2-essentials_build.zip",

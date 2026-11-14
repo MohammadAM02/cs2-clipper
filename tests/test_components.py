@@ -32,6 +32,13 @@ def test_every_pinned_download_names_an_https_zip_a_hash_and_a_size(asset):
     assert asset.size > 1_000_000
 
 
+def test_the_csda_pin_is_named_by_its_version():
+    """Setup notes this name beside csda.exe and replaces a csda noted with another (checks.csda_state): a new pin
+    whose name stayed the same would leave every PC with the csda it replaces."""
+    version = re.search(r"/releases/download/v([0-9.]+)/", components.CSDA.url).group(1)
+    assert components.CSDA.name == f"csda-{version}-windows-x64.zip"
+
+
 def test_latest_hlae_is_the_releases_zip_with_githubs_hash():
     asked = []
 

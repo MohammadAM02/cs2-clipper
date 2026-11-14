@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from clipper import checks
+from clipper import checks, components
 from clipper.config import Config
 
 GB = 1024**3
@@ -37,6 +37,15 @@ def _touch(path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"")
     return path
+
+
+def _install_csda(cfg: Config, from_zip: str | None = components.CSDA.name) -> Path:
+    """csda.exe as Setup leaves it, with the name of the zip it came from beside it. None notes nothing, as every
+    Setup did before it began to."""
+    exe = _touch(cfg.csda_exe)
+    if from_zip is not None:
+        checks.csda_stamp(cfg).write_text(from_zip, encoding="utf-8")
+    return exe
 
 
 # --- hlae_exe --------------------------------------------------------------------------------------
@@ -205,9 +214,20 @@ def test_run_checks_csda_missing(tmp_path):
 
 def test_run_checks_csda_found(tmp_path):
     cfg = _cfg(tmp_path)
-    _touch(cfg.csda_exe)
+    _install_csda(cfg)
     result = _get(cfg)["csda"]
     assert (result.ok, result.detail, result.hint) == (True, "found", "")
+
+
+@pytest.mark.parametrize("from_zip", ["csda-1.11.0-windows-x64.zip", None])
+def test_run_checks_a_csda_other_than_the_pinned_one_is_out_of_date(tmp_path, from_zip):
+    """An older csda cannot read the Demos of newer CS2 builds: 1.11.0 read none recorded after CS2's update of
+    2026-11-11. None is a csda unpacked before Setup noted which zip it came from."""
+    cfg = _cfg(tmp_path)
+    _install_csda(cfg, from_zip)
+    result = _get(cfg)["csda"]
+    assert (result.ok, result.detail) == (False, "out of date")
+    assert result.hint.startswith("Update csda")
 
 
 def _install_hlae(cfg: Config, changelog_xml: str) -> Path:
@@ -354,9 +374,19 @@ def test_startup_problems_empty_when_all_is_well_even_without_hlae(tmp_path):
     clips = tmp_path / "clips"
     clips.mkdir()
     cfg = _cfg(tmp_path, subject_steamid="76561190000000001", data_root=clips)
-    _touch(cfg.csda_exe)
+    _install_csda(cfg)
     assert checks.hlae_exe(cfg) is None
     assert checks.startup_problems(cfg) == []
+
+
+def test_startup_problems_an_older_csda_keeps_the_worker_waiting_until_it_is_replaced(tmp_path):
+    """It would fail every newer Demo, each failure costing one of the Demo's attempts, and Setup could not swap
+    a csda.exe that is running."""
+    clips = tmp_path / "clips"
+    clips.mkdir()
+    cfg = _cfg(tmp_path, subject_steamid="76561190000000001", data_root=clips)
+    _install_csda(cfg, from_zip=None)
+    assert checks.startup_problems(cfg) == ["csda is out of date: Update replaces it"]
 
 
 # --- hlae_behind ---------------------------------------------------------------------------------

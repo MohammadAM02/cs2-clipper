@@ -7,13 +7,15 @@ its GitHub Release, and the app shows those notes on the Status page when it off
 
 ### Clip your deaths
 
-- **A new switch in Settings, under Picture.** Turn on **Clip your deaths** and every round you die in is listed on
-  Reels to pick, even one with no Frag of yours, which shows as a red DEATH.
-- **A round's Reel shows how you died.** With the switch on, each round you pick records your death too: after your
-  Frags, or carried straight on from one when you die within 10 seconds of it. The Enemy POV watches your killer.
-- **Your older matches too.** Turning the switch on lists the rounds you died in of every match the app still has,
-  and turning it off takes the ones you haven't picked off the list again. A death you picked still records.
-- **A Deaths chip on Reels** shows only the rounds with your death in them.
+- **A new switch in Settings, under Picture.** Turn on **Clip your deaths** and each of your deaths is listed on
+  Reels to pick, beside the rounds, as a red DEATH.
+- **Each death is a Reel of its own,** apart from your kills: the seconds before you died, from your view, and in
+  the Enemy POV from your killer's. Your kill Reels stay as they were.
+- **A death just after one of your kills still gets its own clip.** CS2 plays the demo once more for it in the
+  same launch, which adds about ten seconds to that render.
+- **Your older matches too.** Turning the switch on lists your deaths in every match the app still has, and turning
+  it off takes the ones you haven't picked off the list again. A death you picked still records.
+- **A Deaths chip on Reels** shows only your deaths.
 
 ## 0.14.0
 

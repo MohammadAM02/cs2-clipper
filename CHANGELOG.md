@@ -8,7 +8,7 @@ its GitHub Release, and the app shows those notes on the Status page when it off
 ### Clip your deaths
 
 - **A new switch in Settings, under Picture.** Turn on **Clip your deaths** and each of your deaths is listed on
-  Reels to pick, beside the rounds, as a red DEATH.
+  Reels to pick, beside your rounds, under a red DIED!.
 - **Each death is a Reel of its own,** apart from your kills: the seconds before you died, from your view, and in
   the Enemy POV from your killer's. Your kill Reels stay as they were.
 - **A death just after one of your kills still gets its own clip.** CS2 plays the demo once more for it in the

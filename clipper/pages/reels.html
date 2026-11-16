@@ -67,7 +67,9 @@ if (!PC) {
 document.querySelectorAll("[data-nugget-full]").forEach(n => { n.outerHTML = NUGGET.svg(n.dataset.nuggetFull, "Nugget, asleep on his egg"); });
 // Each Highlight's kind as a comic burst: an Ace is the loudest.
 const BURST_FILL = {ACE: "#FF5500", "5K": "#FF5500", "4K": "#F2EFEA", "3K": "#FFB27A", "2K": "#8F857A", DEATH: "#FF3D2E"};
-const hitBurst = type => `<span class="hitb" title="${esc(type)}">${NUGGET.burst(type === "5K" ? "ACE!" : esc(type) + "!", BURST_FILL[type] || "#8F857A")}</span>`;
+// The burst's word is the Type's, but for an Ace's and a death's: "DEATH!" would run off the burst's edges.
+const BURST_WORD = {"5K": "ACE!", DEATH: "DIED!"};
+const hitBurst = type => `<span class="hitb" title="${esc(type)}">${NUGGET.burst(BURST_WORD[type] || esc(type) + "!", BURST_FILL[type] || "#8F857A")}</span>`;
 let sumMood = "";
 // What a filter chip keeps: Highlights of its Type (a DEATH is your death in a round, with Clip your deaths on in
 // Settings), or with its reason (all headshots).

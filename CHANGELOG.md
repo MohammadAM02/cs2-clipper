@@ -3,6 +3,19 @@
 What changed in each release of CS2 Clipper. The release workflow publishes a version's section as the notes of
 its GitHub Release, and the app shows those notes on the Status page when it offers that version.
 
+## 0.14.0
+
+### Faster renders
+
+- **Both views in one CS2 launch.** Your view and the Enemy POV now record one after the other in a single CS2
+  launch, with one heads-up, where they used to take a launch each. That saves a CS2 start-up and a heads-up for
+  every match. If a launch records your view but stops before the Enemy POV, your Reels still come first and the
+  Enemy POV records again on its own.
+- **4:3 stretched Reels aren't encoded twice any more.** The stretch to 1920×1080 now happens while each Clip
+  records, so making the Reels is a quick copy instead of a second encode, which took a minute or two for each
+  view. The Reels come out a little sharper for it too.
+- **Status's time left** counts a launch that records both views once, rather than twice.
+
 ## 0.13.1
 
 ### Demos from CS2's 11 November update are read again

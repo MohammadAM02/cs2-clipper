@@ -30,18 +30,18 @@
   <sub>Round 9 on Dust2, the start of an Ace. The app found it, recorded it and joined the Reel on its own.</sub>
 </p>
 
-## What's new in 0.13.1
+## What's new in 0.14.0
 
-### Demos from CS2's 11 November update are read again
+### Faster renders
 
-- **csda reads them again.** That CS2 update changed how Demos are written, and csda, the tool that reads each
-  Demo, gave up at the start of every one recorded since: they failed with "csda wrote no analysis". The app now
-  uses csda 1.14.2, which reads them.
-- **It updates itself.** When 0.13.1 first starts it downloads the new csda (about 4 MB), and it reads no Demo until
-  that is in place. Then press **Retry** on Status under each Demo that failed with "csda wrote no analysis".
-- **Updating a tool no longer brings back the first-run screen**, which Status used to show while HLAE updated.
-- **A Demo link's countdown reads "1 hour"** in its last hour rather than "1 hours", and **"expired"** once its 30
-  days are up, on Demos to grab and on Status.
+- **Both views in one CS2 launch.** Your view and the Enemy POV now record one after the other in a single CS2
+  launch, with one heads-up, where they used to take a launch each. That saves a CS2 start-up and a heads-up for
+  every match. If a launch records your view but stops before the Enemy POV, your Reels still come first and the
+  Enemy POV records again on its own.
+- **4:3 stretched Reels aren't encoded twice any more.** The stretch to 1920×1080 now happens while each Clip
+  records, so making the Reels is a quick copy instead of a second encode, which took a minute or two for each
+  view. The Reels come out a little sharper for it too.
+- **Status's time left** counts a launch that records both views once, rather than twice.
 
 Every version before it is in the [changelog](CHANGELOG.md), and the app shows a version's notes when it offers
 the update.

@@ -27,6 +27,7 @@ class RoundFacts:
     wallbang_frags: int = 0
     lowest_hp: int | None = None        # the subject's lowest HP at one of their Frags; None: the analysis kept no hits
     clutch_opponents: int = 0           # the opponents of a Clutch the subject won in the round; 0 without one
+    death_tick: int | None = None       # when the subject died in the round, to anyone or anything; None: they lived
 
     @property
     def frags(self) -> int:

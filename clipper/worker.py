@@ -29,7 +29,7 @@ from clipper.index import Index
 from clipper.join import JoinError, assign_clips
 from clipper.model import Break, MatchInfo, RoundFacts
 from clipper.render import RenderProgress, RenderRequest, RenderResult
-from clipper.scoring import score_match
+from clipper.scoring import DEATH, score_match
 from clipper.state import AppState, Rendering, view_name, views_label
 
 log = logging.getLogger(__name__)
@@ -50,6 +50,7 @@ STUCK_TOAST_SECONDS = 120.0        # how long a Gate held only by what the playe
 _FIXES = {FACEIT_REASON: "close FACEIT AC", STEAM_REASON: "open Steam"}
 PICKS_FLAG = "picks"               # set once the index has moved from the top N to your picks (spec: Pick your rounds)
 READY_FLAG = "ready_to_pick:"      # + a Demo's id: its "ready to pick" toast went out
+DEATHS_FLAG = "scored_with_deaths" # "1" while every match is scored with Clip your deaths on; unset is "0"
 
 
 def _count(n: int, noun: str) -> str:
@@ -345,6 +346,7 @@ class Worker:
             if not self._pruned_at_start:
                 self._pruned_at_start = True
                 self._move_to_picks()
+                self._score_deaths_again()
                 self._prune_done_matches()
                 rename_old_reels(self.index, self.cfg)
             for path in self.services.intake.ready():
@@ -409,12 +411,33 @@ class Worker:
             except Exception:  # noqa: BLE001 - one match's analysis must not stop the move
                 log.exception("match %s could not be scored again", checksum)
                 continue
-            self.index.save_highlights(checksum, score_match(facts))
+            self.index.save_highlights(checksum, score_match(facts, deaths=self.cfg.clip_deaths))
             scored += 1
         unpicked = self.index.unpick_unrecorded()
         self.index.set_flag(PICKS_FLAG, "1")
         log.info("moved to picks: %s scored again, %s never recorded and picked no more",
                  _count(scored, "match"), _count(unpicked, "round"))
+
+    def _score_deaths_again(self) -> None:
+        """When Clip your deaths has changed since the matches were scored, every match the app has an analysis of is
+        scored again from it (no csda run): the rounds you died in are listed to pick, or no longer are. Picks stay."""
+        wanted = "1" if self.cfg.clip_deaths else "0"
+        if self.index.get_flag(DEATHS_FLAG, "0") == wanted:
+            return
+        checksums = set(self.index.scored_matches()) | {
+            demo["match_checksum"] for demo in self.index.all_demos() if demo["match_checksum"]}
+        for checksum in sorted(checksums):
+            if not self.services.facts.has(checksum):
+                continue
+            try:
+                facts = self.services.facts.round_facts(checksum, self.cfg.subject_steamid)
+            except Exception:  # noqa: BLE001 - one match's analysis must not stop the others
+                log.exception("match %s could not be scored again", checksum)
+                continue
+            self.index.save_highlights(checksum, score_match(facts, deaths=self.cfg.clip_deaths))
+        self.index.set_flag(DEATHS_FLAG, wanted)
+        log.info("Clip your deaths is %s: %s scored again", "on" if self.cfg.clip_deaths else "off",
+                 _count(len(checksums), "match"))
 
     def _prune_done_matches(self) -> None:
         """On the first tick of each Worker: matches finished before their raw Clips were pruned give them up now.
@@ -506,7 +529,7 @@ class Worker:
         Pick your rounds). A match worth clipping has its Breaks found too, to pick with its rounds."""
         self._ensure_analysis(demo)
         facts = self.services.facts.round_facts(demo["match_checksum"], self.cfg.subject_steamid)
-        highlights = score_match(facts)
+        highlights = score_match(facts, deaths=self.cfg.clip_deaths)
         self.index.save_highlights(demo["match_checksum"], highlights)
         if any(h.worthy for h in highlights):         # a Break is listed with a match worth clipping, never by itself
             self._find_breaks(demo)
@@ -718,6 +741,7 @@ class Worker:
             height=self.cfg.video_size[1],
             checksum=demo["match_checksum"],
             breaks=breaks,
+            deaths=self.cfg.clip_deaths or any(h["type"] == DEATH for h in highlights),   # a DEATH picked while on
         )
         try:
             result = self.services.render(

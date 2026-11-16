@@ -20,6 +20,8 @@ KILL_RULES: dict[int, tuple[str, int]] = {
 }
 LOW_HP = 20                 # a Frag made on this much HP or less is worth clipping
 CLUTCH_OPPONENTS = 2        # a Clutch is won against this many or more (CONTEXT.md, Clutch)
+DEATH = "DEATH"             # the Type of a round you only died in, a Highlight with Clip your deaths on
+DIED = "death"              # the reason a round you died in has, with Clip your deaths on: its Reel shows your death
 
 
 def _base_rules(facts: RoundFacts) -> list[tuple[str, int]]:
@@ -47,13 +49,19 @@ def _bonus_rules(facts: RoundFacts) -> list[tuple[str, int]]:
     return [(reason, points) for reason, points, matched in candidates if matched]
 
 
-def score_round(facts: RoundFacts) -> Highlight | None:
-    """The round as a Highlight, or None when the subject has no Frag in it."""
+def score_round(facts: RoundFacts, *, deaths: bool = False) -> Highlight | None:
+    """The round as a Highlight, or None when the subject has no Frag in it. With `deaths` (Settings: Clip your
+    deaths), a round they died in is worth clipping, its Reel shows their death too, and one with no Frag is a
+    DEATH that scores nothing."""
+    died = deaths and facts.death_tick is not None
     if facts.frags == 0:
-        return None
+        if not died:
+            return None
+        return Highlight(round=facts.round, type=DEATH, score=0, reasons=(DIED,), frag_ticks=(),
+                         round_start_tick=facts.round_start_tick, round_end_tick=facts.round_end_tick, worthy=True)
     bases = sorted(_base_rules(facts), key=lambda rule: rule[1], reverse=True)
     highlight_type, base_score = bases[0]
-    bonuses = _bonus_rules(facts)
+    bonuses = _bonus_rules(facts) + ([(DIED, 0)] if died else [])
     return Highlight(
         round=facts.round,
         type=highlight_type,
@@ -66,6 +74,6 @@ def score_round(facts: RoundFacts) -> Highlight | None:
     )
 
 
-def score_match(facts: Iterable[RoundFacts]) -> list[Highlight]:
-    """Every round with a Frag, as Highlights, in round order."""
-    return [h for f in sorted(facts, key=lambda f: f.round) if (h := score_round(f)) is not None]
+def score_match(facts: Iterable[RoundFacts], *, deaths: bool = False) -> list[Highlight]:
+    """Every round with a Frag, and with `deaths` every round the subject died in, as Highlights, in round order."""
+    return [h for f in sorted(facts, key=lambda f: f.round) if (h := score_round(f, deaths=deaths)) is not None]

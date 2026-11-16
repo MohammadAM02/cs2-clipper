@@ -540,7 +540,7 @@ def render(
             for perspective in req.perspectives:
                 sequences = hlae_plan.build_sequences(
                     inputs, req.steamid, event=req.event, perspective=perspective, rounds=req.rounds,
-                    padding_before_s=req.padding_before_s, padding_after_s=req.padding_after_s,
+                    padding_before_s=req.padding_before_s, padding_after_s=req.padding_after_s, deaths=req.deaths,
                 ) if req.rounds else []         # no rounds is none, not every round: a Break picked alone
                 view_breaks: dict[int, Break] = {}
                 if perspective == "player" and req.breaks:

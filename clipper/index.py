@@ -321,7 +321,13 @@ class Index:
         return self._all("SELECT * FROM matches WHERE checksum != ? ORDER BY played_at DESC", (checksum,))
 
     def save_highlights(self, checksum: str, highlights: Iterable[Highlight]) -> None:
-        """A Highlight saved again (its match scored again) is updated in place and keeps whether you picked it."""
+        """A Highlight saved again (its match scored again) is updated in place and keeps whether you picked it. A
+        round of the match the scoring no longer gives (a DEATH once Clip your deaths is off) is no longer worth
+        clipping: still listed while picked."""
+        highlights = list(highlights)
+        kept = [h.round for h in highlights]
+        self._db.execute(f"UPDATE highlights SET worthy = 0 WHERE match_checksum = ? AND round > 0"
+                         f" AND round NOT IN ({', '.join('?' * len(kept))})", (checksum, *kept))
         for h in highlights:
             self._db.execute(
                 "INSERT INTO highlights (match_checksum, round, type, score, reasons, frag_ticks,"

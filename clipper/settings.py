@@ -68,6 +68,9 @@ FIELDS: tuple[Field, ...] = (
     Field("perspectives", "Picture", "Views to render", "choice", choices=tuple(PERSPECTIVE_CHOICES)),
     Field("padding_before_s", "Picture", "Seconds before each Frag", "number", minimum=0, maximum=30),
     Field("padding_after_s", "Picture", "Seconds after each Frag", "number", minimum=0, maximum=30),
+    Field("clip_deaths", "Picture", "Clip your deaths", "bool",
+          help="Every round you die in is listed to pick, and its Reel shows how you died. Enemy POV watches your "
+               "killer."),
     Field("title_card", "Picture", "Title card on shared clips", "bool",
           help="Exports for Discord and 9:16 open on your nickname, the map, the round and the Highlight."),
     Field("hud", "HUD", "HUD", "choice", choices=HUD_CHOICES),

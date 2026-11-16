@@ -39,11 +39,13 @@ def test_match_info_is_none_when_the_subjects_team_is_neither_team():
     assert analysis.match_info(match(players=players), SUBJECT) is None
 
 
-def test_round_facts_are_the_subjects_frags_per_round():
-    """No hit on the subject in MATCH: they make every Frag on 100 HP. Round 3 is a Clutch they won against two."""
+def test_round_facts_are_the_subjects_frags_and_death_per_round():
+    """No hit on the subject in MATCH: they make every Frag on 100 HP. In round 2 they only die, to the world. Round 3
+    is a Clutch they won against two."""
     assert analysis.round_facts(MATCH, SUBJECT) == [
         RoundFacts(round=1, frag_ticks=(3000, 3100), headshots=1, noscope_frags=1, smoke_frags=1, round_won=True,
                    round_start_tick=1000, round_end_tick=9000, lowest_hp=100),
+        RoundFacts(round=2, frag_ticks=(), round_start_tick=9500, round_end_tick=18000, death_tick=11500),
         RoundFacts(round=3, frag_ticks=(20000,), blind_frags=1, knife_frags=1, bot_frags=1, round_won=True,
                    round_start_tick=18500, round_end_tick=27000, lowest_hp=100, clutch_opponents=2),
     ]
@@ -82,27 +84,42 @@ def test_an_analysis_that_kept_no_hits_has_no_hp():
     """Every match analyzed before the app kept hits."""
     old = match()
     del old["damages"]
-    assert [facts.lowest_hp for facts in analysis.round_facts(old, SUBJECT)] == [None, None]
+    assert [facts.lowest_hp for facts in analysis.round_facts(old, SUBJECT)] == [None, None, None]
 
 
 def test_a_clutch_is_the_subjects_only_when_they_won_it():
     clutches = [{"roundNumber": 1, "clutcherSteamId": int(SUBJECT), "opponentCount": 3, "hasWon": False},
                 {"roundNumber": 3, "clutcherSteamId": int(ALLY), "opponentCount": 2, "hasWon": True}]
     facts = analysis.round_facts(match(clutches=clutches), SUBJECT)
-    assert [f.clutch_opponents for f in facts] == [0, 0]
+    assert [f.clutch_opponents for f in facts] == [0, 0, 0]
 
 
 def test_team_kills_suicides_and_kills_in_a_round_without_a_row_are_not_frags():
     """Round 2's only kill by the subject is of a teammate, and round 4 has no row in csda's rounds."""
-    assert [facts.round for facts in analysis.round_facts(MATCH, SUBJECT)] == [1, 3]
+    assert [(f.round, f.frags) for f in analysis.round_facts(MATCH, SUBJECT)] == [(1, 2), (2, 0), (3, 1)]
     suicide = kill(12000, 2, SUBJECT, SUBJECT, victim_side=2)
-    assert [f.round for f in analysis.round_facts(match(kills=[*MATCH["kills"], suicide]), SUBJECT)] == [1, 3]
+    facts = analysis.round_facts(match(kills=[*MATCH["kills"], suicide]), SUBJECT)
+    assert [(f.round, f.frags) for f in facts] == [(1, 2), (2, 0), (3, 1)]
+
+
+def test_the_subjects_death_is_their_first_in_the_round_to_anyone_or_anything():
+    """A teammate's kill and a suicide are deaths too. A death in a round with no row is left out, as its Frags are."""
+    kills = [kill(5000, 1, ALLY, SUBJECT, killer_side=T, victim_side=T),          # a team kill
+             kill(4000, 1, ENEMY, SUBJECT, killer_side=CT, victim_side=T),        # csda's odd second death: the first counts
+             kill(12000, 2, SUBJECT, SUBJECT, killer_side=T, victim_side=T),      # a suicide
+             kill(30000, 4, ENEMY, SUBJECT, killer_side=CT, victim_side=T)]       # round 4 has no row
+    facts = analysis.round_facts(match(kills=kills), SUBJECT)
+    assert [(f.round, f.frags, f.death_tick, f.lowest_hp) for f in facts] == [(1, 0, 4000, None), (2, 0, 12000, None)]
+
+
+def test_a_round_the_subject_lives_through_has_no_death():
+    assert [f.death_tick for f in analysis.round_facts(MATCH, SUBJECT)] == [None, 11500, None]
 
 
 def test_a_round_is_won_when_its_winner_is_the_subjects_team():
     rounds = [round_(1, 1000, 2000, 9000, BRAVO), *MATCH["rounds"][1:]]
     facts = analysis.round_facts(match(rounds=rounds), SUBJECT)
-    assert [(f.round, f.round_won) for f in facts] == [(1, False), (3, True)]
+    assert [(f.round, f.round_won) for f in facts] == [(1, False), (2, False), (3, True)]
 
 
 def test_there_are_no_round_facts_for_someone_not_in_the_match():

@@ -163,6 +163,20 @@ def test_saving_highlights_again_updates_them_in_place_and_keeps_the_picks(index
     assert [(row["round"], row["selected"]) for row in index.pick_rows(MATCH.checksum)] == [(3, 0), (12, 1)]
 
 
+def test_a_round_the_scoring_no_longer_gives_is_no_longer_worth_clipping_but_stays_listed_while_picked(index):
+    """Clip your deaths turned off: the match is scored again without the rounds you only died in (5 and 7). Its
+    Breaks are no rounds, and stay."""
+    index.save_highlights(MATCH.checksum, [worth(3, 15259), worth(5, 30000), worth(7, 42476), worth(12, 72031)])
+    index.save_breaks(MATCH.checksum, [Break(12, 81477, 84000, "HALFTIME")])
+    index.mark_picked(MATCH.checksum, {7})
+    index.save_highlights(MATCH.checksum, [worth(3, 15259), worth(12, 72031)])
+    assert [(row["round"], row["worthy"], row["selected"]) for row in index.pick_rows(MATCH.checksum)] == [
+        (3, 1, 0), (7, 0, 1), (12, 1, 0)]
+    assert [row["label"] for row in index.breaks(MATCH.checksum)] == ["HALFTIME"]
+    index.save_highlights(MATCH.checksum, [worth(3, 15259), worth(5, 30000), worth(7, 42476), worth(12, 72031)])
+    assert [row["round"] for row in index.pick_rows(MATCH.checksum)] == [3, 5, 7, 12]      # turned on again
+
+
 def test_render_jobs_track_the_latest_attempt(index):
     demo_id = add(index)
     first = index.queue_render(demo_id, "player", attempt=1)

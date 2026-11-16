@@ -10,9 +10,9 @@ from clipper.config import Config
 from clipper.gate import GateStatus
 from clipper.hlae_plan import RenderInputs, Round
 from clipper.index import Index
-from clipper.model import Break, ClipFile, Highlight, MatchInfo
+from clipper.model import Break, ClipFile, Highlight, MatchInfo, RoundFacts
 from clipper.render import ABORTED, RenderProgress, RenderResult
-from clipper.scoring import score_match
+from clipper.scoring import DEATH, score_match
 from clipper.state import AppState
 from clipper.voice import VoiceError
 from clipper.worker import (
@@ -1459,3 +1459,78 @@ def test_the_first_start_with_picks_scores_every_match_again_and_unpicks_what_wa
     world.use()                                       # the next start: once is enough
     world.ticks(1)
     assert [row["round"] for row in world.index.selected_highlights(MATCH_CHECKSUM)] == [3, 12]
+
+
+# --- your deaths (Settings: Clip your deaths) -------------------------------------------------------------------
+
+# Round 13 of the match, which the subject only died in: MATCH_FACTS has no round 13.
+DIED_ONLY = RoundFacts(round=13, frag_ticks=(), round_start_tick=81925, round_end_tick=89716, death_tick=86000)
+
+
+@pytest.fixture
+def died_in_13(world, monkeypatch):
+    """The match's analysis has round 13, which the subject only died in; a render's Clip of it lands in it."""
+    world.facts.facts = (*MATCH_FACTS, DIED_ONLY)
+    monkeypatch.setitem(ROUND_START, DIED_ONLY.round, DIED_ONLY.round_start_tick)
+    return world
+
+
+def listed(world):
+    """The match's rounds the Reels page lists, with their Types."""
+    return {row["round"]: row["type"] for row in world.index.pick_rows(MATCH_CHECKSUM)}
+
+
+def test_with_your_deaths_off_a_round_you_only_died_in_is_not_listed_and_renders_leave_deaths_out(died_in_13):
+    demo_id = died_in_13.add_demo()
+    died_in_13.ticks(9)
+    assert died_in_13.index.demo(demo_id)["state"] == "done"
+    assert 13 not in listed(died_in_13)
+    assert [call.deaths for call in died_in_13.render.calls] == [False]
+
+
+def test_with_your_deaths_on_a_round_you_only_died_in_is_a_death_to_pick_that_records_with_your_deaths(died_in_13):
+    died_in_13.use(clip_deaths=True)
+    died_in_13.picks = {MATCH_CHECKSUM: (13,)}
+    demo_id = died_in_13.add_demo()
+    died_in_13.ticks(9)
+    assert died_in_13.index.demo(demo_id)["state"] == "done"
+    assert listed(died_in_13)[13] == DEATH
+    [call] = died_in_13.render.calls
+    assert (call.rounds, call.deaths) == ((13,), True)
+    assert died_in_13.index.reel_count(MATCH_CHECKSUM) == 2            # your view and the Enemy POV
+
+
+def test_turning_your_deaths_on_lists_the_rounds_you_died_in_of_matches_scored_before_and_off_again_unlists_them(
+        died_in_13):
+    died_in_13.picks = {}
+    died_in_13.add_demo()
+    died_in_13.ticks(5)
+    assert 13 not in listed(died_in_13)
+    scored = []
+    facts_of = died_in_13.facts.round_facts
+    died_in_13.facts.round_facts = lambda checksum, steamid: scored.append(checksum) or facts_of(checksum, steamid)
+    died_in_13.use(clip_deaths=True)
+    died_in_13.ticks(1)
+    assert listed(died_in_13)[13] == DEATH
+    assert scored == [MATCH_CHECKSUM]
+    died_in_13.use(clip_deaths=True)                  # the app starts again with the same settings
+    died_in_13.ticks(1)
+    assert scored == [MATCH_CHECKSUM]                 # scored again once, not at every start
+    died_in_13.use(clip_deaths=False)
+    died_in_13.ticks(1)
+    assert 13 not in listed(died_in_13)
+
+
+def test_a_death_picked_while_your_deaths_were_on_still_records_once_they_are_off(died_in_13):
+    died_in_13.use(clip_deaths=True)
+    died_in_13.picks = {}
+    demo_id = died_in_13.add_demo()
+    died_in_13.ticks(5)
+    died_in_13.pick([13])
+    died_in_13.use(clip_deaths=False)
+    died_in_13.ticks(9)
+    assert died_in_13.index.demo(demo_id)["state"] == "done"
+    [call] = died_in_13.render.calls
+    assert (call.rounds, call.deaths) == ((13,), True)
+    assert listed(died_in_13)[13] == DEATH            # picked, so still listed, with its Reels
+    assert died_in_13.index.reel_count(MATCH_CHECKSUM) == 2

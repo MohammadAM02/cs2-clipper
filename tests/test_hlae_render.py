@@ -401,6 +401,16 @@ def test_a_request_of_a_break_alone_records_the_break_and_no_round(world, req):
         (HALFTIME, "sequence-1-tick-80000-to-82240.mp4")]
 
 
+def test_a_request_with_your_deaths_records_your_death_in_the_rounds_asked_for_too(world, req):
+    """Clip your deaths: the subject dies in round 12 well after its Frag, so the death is a Sequence of its own."""
+    world.inputs = replace(INPUTS, kills=(*INPUTS.kills, Kill(79000, 12, ENEMY, SUBJECT), Kill(93000, 14, ENEMY, SUBJECT)))
+    world.scripts = [game((1, 2, 3))]
+    result = run(world, replace(req, deaths=True))
+    assert result.ok
+    assert [clip.path.name for clip in result.clips["player"]] == [
+        CLIP_1, CLIP_2, "sequence-3-tick-78744-to-79128.mp4"]
+
+
 def test_the_enemy_view_records_no_break(world, both):
     world.scripts = [two_views_game(first=(1, 2, 3), second=(4, 5))]
     result = run(world, replace(both, breaks=(HALFTIME,)))

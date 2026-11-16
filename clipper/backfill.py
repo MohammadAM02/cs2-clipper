@@ -149,7 +149,8 @@ class StatsBackfill:
         if again != checksum:
             log.warning("demo #%s: its analysis is match %s, not %s", demo["id"], again, checksum)
             return
-        self.index.save_highlights(checksum, score_match(self.analyses.round_facts(checksum, self.cfg.subject_steamid)))
+        facts = self.analyses.round_facts(checksum, self.cfg.subject_steamid)
+        self.index.save_highlights(checksum, score_match(facts, deaths=self.cfg.clip_deaths))
         log.info("demo #%s: match %s analyzed again: its stats and hits worked out, its rounds scored again",
                  demo["id"], checksum)
         self.add_faceit(demo, checksum)

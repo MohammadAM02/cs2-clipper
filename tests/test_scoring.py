@@ -1,7 +1,9 @@
+from dataclasses import replace
+
 import pytest
 
 from clipper.model import RoundFacts
-from clipper.scoring import score_match, score_round
+from clipper.scoring import DEATH, score_match, score_round
 from tests.fixtures import MATCH_FACTS
 
 
@@ -88,3 +90,42 @@ def test_the_analyzed_match_lists_its_multi_frag_rounds_and_its_single_frag_thro
     scored = score_match(MATCH_FACTS)
     assert [h.round for h in scored if h.worthy] == [1, 3, 4, 5, 6, 7, 8, 10, 12, 14, 15, 18]
     assert [h.round for h in scored if not h.worthy] == [2, 9, 11]
+
+
+# --- your deaths (Settings: Clip your deaths) -------------------------------------------------------------------
+
+DIED_ONLY = RoundFacts(round=4, frag_ticks=(), round_start_tick=20000, round_end_tick=27000, death_tick=24000)
+
+
+def test_a_round_you_only_died_in_is_no_highlight_unless_your_deaths_are_clipped():
+    assert score_round(DIED_ONLY) is None
+    assert score_match([DIED_ONLY]) == []
+
+
+def test_with_your_deaths_clipped_a_round_you_only_died_in_is_a_death_worth_clipping_that_scores_nothing():
+    highlight = score_round(DIED_ONLY, deaths=True)
+    assert (highlight.round, highlight.type, highlight.score, highlight.reasons) == (4, DEATH, 0, ("death",))
+    assert (highlight.frag_ticks, highlight.round_start_tick, highlight.round_end_tick) == ((), 20000, 27000)
+    assert highlight.worthy is True
+
+
+def test_with_your_deaths_clipped_a_frag_round_you_died_in_is_worth_clipping_and_says_so_without_more_score():
+    facts = RoundFacts(round=2, frag_ticks=(100,), death_tick=300)
+    assert score_round(facts).worthy is False
+    highlight = score_round(facts, deaths=True)
+    assert (highlight.type, highlight.score, highlight.reasons, highlight.worthy) == ("FRAG", 5, ("frag", "death"), True)
+
+
+def test_clipping_your_deaths_changes_nothing_in_a_round_you_lived_through():
+    facts = RoundFacts(round=2, frag_ticks=(100,))
+    assert score_round(facts, deaths=True) == score_round(facts)
+    assert score_round(RoundFacts(round=3, frag_ticks=()), deaths=True) is None
+
+
+def test_with_your_deaths_clipped_the_match_lists_its_deaths_among_its_rounds_in_round_order():
+    died = replace(DIED_ONLY, round=13)                 # MATCH_FACTS has no round 13
+    scored = score_match([died, *MATCH_FACTS], deaths=True)
+    rounds = [h.round for h in scored]
+    assert rounds == sorted(rounds)
+    assert len(scored) == len(score_match(MATCH_FACTS)) + 1
+    assert next(h for h in scored if h.round == 13).type == DEATH

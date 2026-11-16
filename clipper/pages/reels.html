@@ -36,7 +36,7 @@
 // (paste it into Discord), an export that fits Discord, a 9:16 one, and Show in folder. On the PC a round not clipped
 // yet has a tick box, and Clip records the ticked ones. A match's Breaks (the talk at halftime and around each
 // overtime, both teams' voices) sit between its rounds, and are ticked and played the same way.
-const HEIGHT = {ACE: 36, "5K": 36, "4K": 30, "3K": 24, "2K": 18, "1K": 12};
+const HEIGHT = {ACE: 36, "5K": 36, "4K": 30, "3K": 24, "2K": 18, "1K": 12, DEATH: 6};
 // The two views a Reel can be rendered from: the words of its button and of the toasts about it.
 const VIEWS = {
   player: {ask: "Render your view", busy: "Rendering your view…", name: "Your view"},
@@ -66,10 +66,15 @@ if (!PC) {
 }
 document.querySelectorAll("[data-nugget-full]").forEach(n => { n.outerHTML = NUGGET.svg(n.dataset.nuggetFull, "Nugget, asleep on his egg"); });
 // Each Highlight's kind as a comic burst: an Ace is the loudest.
-const BURST_FILL = {ACE: "#FF5500", "5K": "#FF5500", "4K": "#F2EFEA", "3K": "#FFB27A", "2K": "#8F857A"};
+const BURST_FILL = {ACE: "#FF5500", "5K": "#FF5500", "4K": "#F2EFEA", "3K": "#FFB27A", "2K": "#8F857A", DEATH: "#FF3D2E"};
 const hitBurst = type => `<span class="hitb" title="${esc(type)}">${NUGGET.burst(type === "5K" ? "ACE!" : esc(type) + "!", BURST_FILL[type] || "#8F857A")}</span>`;
 let sumMood = "";
-const keep = h => filter === "all" || (filter === "hs" ? (h.reasons || []).some(r => /all headshots/i.test(r)) : typeOf(h) === filter);
+// What a filter chip keeps: Highlights of its Type, or with its reason (all headshots; your death, with Clip your
+// deaths on in Settings).
+const REASON_CHIPS = {hs: /all headshots/i, death: /^death$/i};
+const fits = (h, id) => id === "all"
+  || (REASON_CHIPS[id] ? (h.reasons || []).some(r => REASON_CHIPS[id].test(r)) : typeOf(h) === id);
+const keep = h => fits(h, filter);
 function resultLabel(result) { return result ? result.charAt(0).toUpperCase() + result.slice(1) : ""; }
 function rounds(score) {
   const parts = String(score).split(/[^0-9]+/).filter(Boolean).map(Number);
@@ -204,9 +209,10 @@ function matchBlock(m) {
 
 function renderFilters() {
   const all = data.flatMap(m => shownRows(m.highlights));
-  const defs = [["all", "All"], ["ACE", "Aces"], ["4K", "4K"], ["3K", "3K"], ["2K", "2K"], ["hs", "All headshots"]];
+  const defs = [["all", "All"], ["ACE", "Aces"], ["4K", "4K"], ["3K", "3K"], ["2K", "2K"], ["hs", "All headshots"],
+    ["death", "Deaths"]];
   document.getElementById("filters").innerHTML = defs.map(([id, label]) => {
-    const n = all.filter(h => id === "all" || (id === "hs" ? (h.reasons || []).some(r => /all headshots/i.test(r)) : typeOf(h) === id)).length;
+    const n = all.filter(h => fits(h, id)).length;
     return n || id === "all" ? `<button class="chip${filter === id ? " on" : ""}" data-filter="${id}" aria-pressed="${filter === id}">${label}<span class="n">${n}</span></button>` : "";
   }).join("");
 }

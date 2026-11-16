@@ -79,9 +79,9 @@ def test_parse_marker_ignores_anything_else(line):
     assert hlae_plan.parse_marker(line) is None
 
 
-def kills_plan(kills, *, before=2.0, after=2.0, perspective="player", rounds=(), **options):
+def kills_plan(kills, *, before=2.0, after=2.0, perspective="player", rounds=(), deaths=False, **options):
     return build_sequences(inputs(kills, **options), SUBJECT, event="kills", perspective=perspective,
-                           rounds=rounds, padding_before_s=before, padding_after_s=after)
+                           rounds=rounds, padding_before_s=before, padding_after_s=after, deaths=deaths)
 
 
 # Sequences from Kills: CS:DM's build-players-event-sequences.ts, at 64 tick with 2 s before and after
@@ -204,6 +204,47 @@ def test_rounds_limit_the_kills():
     assert [s.start_tick for s in kills_plan(kills, rounds=(2,))] == [5000 - 128]
     assert [s.start_tick for s in kills_plan(kills, rounds=(1, 3))] == [872, 9000 - 128]
     assert len(kills_plan(kills, rounds=())) == 3
+
+
+# --- your deaths (Settings: Clip your deaths) --------------------------------------------------------------------
+
+def test_your_death_is_a_sequence_only_when_your_deaths_are_clipped():
+    death = kill(5000, victim=SUBJECT, killer=ENEMY)
+    assert kills_plan([death]) == []
+    [sequence] = kills_plan([death], deaths=True)
+    assert (sequence.number, sequence.start_tick, sequence.end_tick) == (1, 5000 - 128, 5000 + 128)
+    assert sequence.cameras == ((5000 - 128, SUBJECT),)
+
+
+def test_the_enemy_perspective_of_your_death_follows_your_killer():
+    [sequence] = kills_plan([kill(5000, victim=SUBJECT, killer=ENEMY)], perspective="enemy", deaths=True)
+    assert sequence.cameras == ((5000 - 128, ENEMY),)
+
+
+@pytest.mark.parametrize("perspective", ["player", "enemy"])
+def test_a_death_to_the_world_or_by_your_own_hand_follows_you(perspective):
+    for killer in ("", SUBJECT):
+        [sequence] = kills_plan([kill(5000, victim=SUBJECT, killer=killer)], perspective=perspective, deaths=True)
+        assert sequence.cameras == ((5000 - 128, SUBJECT),)
+
+
+def test_a_death_soon_after_your_frag_carries_the_frag_on_into_it_and_the_enemy_view_turns_to_your_killer():
+    kills = [kill(1000, victim=ENEMY), kill(1300, victim=SUBJECT, killer=OTHER_ENEMY)]
+    [sequence] = kills_plan(kills, perspective="enemy", deaths=True)
+    assert (sequence.start_tick, sequence.end_tick) == (872, 1300 + 128)
+    assert sequence.cameras == ((872, ENEMY), (1150, OTHER_ENEMY))
+
+
+def test_a_death_long_after_your_frag_is_a_sequence_of_its_own():
+    kills = [kill(1000, victim=ENEMY), kill(9000, victim=SUBJECT, killer=ENEMY)]
+    assert [(s.number, s.start_tick) for s in kills_plan(kills, deaths=True)] == [(1, 872), (2, 9000 - 128)]
+
+
+def test_only_your_deaths_are_recorded_and_only_in_the_rounds_asked_for():
+    kills = [kill(5000, victim=MATE, killer=ENEMY, round_number=2),
+             kill(6000, victim=SUBJECT, killer=ENEMY, round_number=2),
+             kill(9000, victim=SUBJECT, killer=ENEMY, round_number=3)]
+    assert [s.start_tick for s in kills_plan(kills, rounds=(2,), deaths=True)] == [6000 - 128]
 
 
 def test_only_kills_and_rounds_events_and_two_perspectives_are_known():

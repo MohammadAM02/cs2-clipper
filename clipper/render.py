@@ -28,6 +28,7 @@ class RenderRequest:
     height: int = 1080
     checksum: str = ""          # the Demo's match, whose analysis the plan is made from
     breaks: tuple[Break, ...] = ()      # recorded too, in the player view, with every player's voice
+    deaths: bool = False        # the subject's deaths in `rounds` are recorded too (Clip your deaths)
 
     def __post_init__(self) -> None:
         if not 1 <= len(self.outputs) <= 2:

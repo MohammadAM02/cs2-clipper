@@ -17,7 +17,8 @@ A candidate moment in a Demo, identified by a Tick and a Highlight Type, that ma
 _Avoid_: Event, moment, play, spot
 
 **Highlight Type**:
-The classification of a Highlight, for example `ACE`, `CLUTCH_1V4`, `COLLATERAL`.
+The classification of a Highlight, for example `ACE`, `CLUTCH_1V4`, `COLLATERAL`. With Clip your deaths on in
+Settings, a round the subject only died in is a `DEATH`, and a round's Reel shows their death too.
 _Avoid_: Category, tag, kind
 
 **Kill**:

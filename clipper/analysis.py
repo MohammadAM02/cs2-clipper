@@ -88,25 +88,29 @@ def match_info(data: Data, steamid: str) -> MatchInfo | None:
 
 
 def round_facts(data: Data, steamid: str) -> list[RoundFacts]:
-    """What the subject did in each round where they got at least one Frag: every kill credited to them, without
-    team kills and suicides (same side), in a round csda has a row for."""
+    """What the subject did in each round where they got at least one Frag or died: every kill credited to them,
+    without team kills and suicides (same side), and their death, in a round csda has a row for."""
     team = _team_of(data, steamid)
     if team is None:
         return []
     rounds = {r["number"]: r for r in data["rounds"]}
     frags: dict[int, list[Data]] = defaultdict(list)
+    deaths: dict[int, int] = {}
     for kill in data["kills"]:
-        if (_steam_id(kill["killerSteamId"]) == steamid and kill["killerSide"] != kill["victimSide"]
-                and kill["roundNumber"] in rounds):
+        if kill["roundNumber"] not in rounds:
+            continue
+        if _steam_id(kill["killerSteamId"]) == steamid and kill["killerSide"] != kill["victimSide"]:
             frags[kill["roundNumber"]].append(kill)
+        if _steam_id(kill["victimSteamId"]) == steamid:
+            deaths[kill["roundNumber"]] = min(kill["tick"], deaths.get(kill["roundNumber"], kill["tick"]))
     hits = _hits_taken(data, steamid)
     clutches = {c["roundNumber"]: c["opponentCount"] for c in data.get("clutches", ())
                 if _steam_id(c["clutcherSteamId"]) == steamid and c["hasWon"]}
     facts = []
-    for number in sorted(frags):
-        kills, row = frags[number], rounds[number]
+    for number in sorted(frags.keys() | deaths.keys()):
+        kills, row = frags.get(number, []), rounds[number]
         lowest_hp = None
-        if hits is not None:
+        if hits is not None and kills:
             taken = hits.get(number, [])
             lowest_hp = max(1, min(FULL_HP - sum(damage for tick, damage in taken if tick <= k["tick"])
                                    for k in kills))   # a Frag made in the tick they die was made alive
@@ -127,6 +131,7 @@ def round_facts(data: Data, steamid: str) -> list[RoundFacts]:
             wallbang_frags=sum(1 for k in kills if (k.get("penetratedObjects") or 0) > 0),
             lowest_hp=lowest_hp,
             clutch_opponents=clutches.get(number, 0),
+            death_tick=deaths.get(number),
         ))
     return facts
 

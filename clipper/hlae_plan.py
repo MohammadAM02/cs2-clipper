@@ -187,14 +187,16 @@ def build_sequences(
     rounds: tuple[int, ...] = (),
     padding_before_s: float,
     padding_after_s: float,
+    deaths: bool = False,
 ) -> list[Sequence]:
     """The Sequences that record `steamid`'s request, numbered from 1 and in start order. `event` is
-    "kills" (a Sequence per Frag) or "rounds" (a whole round each); `rounds` limits it to those round numbers
-    (none: every round); the padding is in seconds. Raises ValueError for any other event or perspective."""
+    "kills" (a Sequence per Frag, and with `deaths` one for their death too) or "rounds" (a whole round each, which
+    ends at their death anyway); `rounds` limits it to those round numbers (none: every round); the padding is in
+    seconds. Raises ValueError for any other event or perspective."""
     if perspective not in ("player", "enemy"):
         raise ValueError(f"unknown perspective: {perspective!r}")
     if event == "kills":
-        sequences = _kills_sequences(inputs, steamid, perspective, rounds, padding_before_s, padding_after_s)
+        sequences = _kills_sequences(inputs, steamid, perspective, rounds, padding_before_s, padding_after_s, deaths)
     elif event == "rounds":
         sequences = _rounds_sequences(inputs, steamid, rounds, padding_before_s, padding_after_s)
     else:
@@ -209,9 +211,13 @@ def _kills_sequences(
     rounds: tuple[int, ...],
     padding_before_s: float,
     padding_after_s: float,
+    deaths: bool = False,
 ) -> list[Sequence]:
+    """A Sequence per Frag of `steamid`, and with `deaths` per death of theirs, each kill once (a suicide is both).
+    The Enemy POV follows the other player of each: whom they killed, or who killed them; nobody (the world), them."""
     kills = [kill for kill in inputs.kills
-             if (not rounds or kill.round_number in rounds) and kill.killer_steam_id == steamid]
+             if (not rounds or kill.round_number in rounds)
+             and (kill.killer_steam_id == steamid or deaths and kill.victim_steam_id == steamid)]
     notices = tuple(NoticePlayer(player.steam_id, player.name, player.steam_id == steamid)
                     for player in inputs.players)
     tickrate = inputs.tickrate
@@ -222,7 +228,8 @@ def _kills_sequences(
 
     drafts: list[_Draft] = []
     for index, kill in enumerate(kills):
-        followed = kill.victim_steam_id if perspective == "enemy" and kill.victim_steam_id else kill.killer_steam_id
+        other = kill.victim_steam_id if kill.killer_steam_id == steamid else kill.killer_steam_id
+        followed = other if perspective == "enemy" and other else steamid
         start = max(1, kill.tick - before)
         end = min(inputs.tick_count, kill.tick + after)
         if index + 1 < len(kills) and kill.tick + extend_within >= kills[index + 1].tick:

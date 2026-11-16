@@ -89,7 +89,7 @@ def cmd_highlights(cfg: Config, index: Index, key: str) -> int:
     except analysis.MissingAnalysis:
         print(f"the app has no analysis of match {checksum}")
         return 1
-    highlights = score_match(facts)
+    highlights = score_match(facts, deaths=cfg.clip_deaths)
     picked = {row["round"] for row in index.selected_highlights(checksum)}
     print(f"{'round':>6} {'type':<5} {'score':>5}  reasons")
     for h in highlights:

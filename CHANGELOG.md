@@ -3,6 +3,18 @@
 What changed in each release of CS2 Clipper. The release workflow publishes a version's section as the notes of
 its GitHub Release, and the app shows those notes on the Status page when it offers that version.
 
+## 0.15.0
+
+### Clip your deaths
+
+- **A new switch in Settings, under Picture.** Turn on **Clip your deaths** and every round you die in is listed on
+  Reels to pick, even one with no Frag of yours, which shows as a red DEATH.
+- **A round's Reel shows how you died.** With the switch on, each round you pick records your death too: after your
+  Frags, or carried straight on from one when you die within 10 seconds of it. The Enemy POV watches your killer.
+- **Your older matches too.** Turning the switch on lists the rounds you died in of every match the app still has,
+  and turning it off takes the ones you haven't picked off the list again. A death you picked still records.
+- **A Deaths chip on Reels** shows only the rounds with your death in them.
+
 ## 0.14.0
 
 ### Faster renders

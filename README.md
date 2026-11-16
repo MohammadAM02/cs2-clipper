@@ -30,18 +30,17 @@
   <sub>Round 9 on Dust2, the start of an Ace. The app found it, recorded it and joined the Reel on its own.</sub>
 </p>
 
-## What's new in 0.14.0
+## What's new in 0.15.0
 
-### Faster renders
+### Clip your deaths
 
-- **Both views in one CS2 launch.** Your view and the Enemy POV now record one after the other in a single CS2
-  launch, with one heads-up, where they used to take a launch each. That saves a CS2 start-up and a heads-up for
-  every match. If a launch records your view but stops before the Enemy POV, your Reels still come first and the
-  Enemy POV records again on its own.
-- **4:3 stretched Reels aren't encoded twice any more.** The stretch to 1920×1080 now happens while each Clip
-  records, so making the Reels is a quick copy instead of a second encode, which took a minute or two for each
-  view. The Reels come out a little sharper for it too.
-- **Status's time left** counts a launch that records both views once, rather than twice.
+- **A new switch in Settings, under Picture.** Turn on **Clip your deaths** and every round you die in is listed on
+  Reels to pick, even one with no Frag of yours, which shows as a red DEATH.
+- **A round's Reel shows how you died.** With the switch on, each round you pick records your death too: after your
+  Frags, or carried straight on from one when you die within 10 seconds of it. The Enemy POV watches your killer.
+- **Your older matches too.** Turning the switch on lists the rounds you died in of every match the app still has,
+  and turning it off takes the ones you haven't picked off the list again. A death you picked still records.
+- **A Deaths chip on Reels** shows only the rounds with your death in them.
 
 Every version before it is in the [changelog](CHANGELOG.md), and the app shows a version's notes when it offers
 the update.

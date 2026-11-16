@@ -325,7 +325,7 @@ class Index:
         round of the match the scoring no longer gives (a DEATH once Clip your deaths is off) is no longer worth
         clipping: still listed while picked."""
         highlights = list(highlights)
-        kept = [h.round for h in highlights]
+        kept = [h.key for h in highlights]
         self._db.execute(f"UPDATE highlights SET worthy = 0 WHERE match_checksum = ? AND round > 0"
                          f" AND round NOT IN ({', '.join('?' * len(kept))})", (checksum, *kept))
         for h in highlights:
@@ -336,9 +336,15 @@ class Index:
                 " score = excluded.score, reasons = excluded.reasons, frag_ticks = excluded.frag_ticks,"
                 " round_start_tick = excluded.round_start_tick, round_end_tick = excluded.round_end_tick,"
                 " worthy = excluded.worthy",
-                (checksum, h.round, h.type, h.score, json.dumps(list(h.reasons)),
+                (checksum, h.key, h.type, h.score, json.dumps(list(h.reasons)),
                  json.dumps(list(h.frag_ticks)), h.round_start_tick, h.round_end_tick, int(h.worthy)),
             )
+
+    def unpick(self, checksum: str, keys: Iterable[int]) -> None:
+        """The match's Highlights kept under `keys` (`Highlight.key`) are picked no more."""
+        for key in keys:
+            self._db.execute("UPDATE highlights SET selected = 0 WHERE match_checksum = ? AND round = ? AND round > 0",
+                             (checksum, key))
 
     def scored_matches(self) -> list[str]:
         """The checksum of every match with a Highlight."""

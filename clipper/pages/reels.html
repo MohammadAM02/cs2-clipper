@@ -36,7 +36,7 @@
 // (paste it into Discord), an export that fits Discord, a 9:16 one, and Show in folder. On the PC a round not clipped
 // yet has a tick box, and Clip records the ticked ones. A match's Breaks (the talk at halftime and around each
 // overtime, both teams' voices) sit between its rounds, and are ticked and played the same way.
-const HEIGHT = {ACE: 36, "5K": 36, "4K": 30, "3K": 24, "2K": 18, "1K": 12, DEATH: 6};
+const HEIGHT = {ACE: 36, "5K": 36, "4K": 30, "3K": 24, "2K": 18, "1K": 12};
 // The two views a Reel can be rendered from: the words of its button and of the toasts about it.
 const VIEWS = {
   player: {ask: "Render your view", busy: "Rendering your view…", name: "Your view"},
@@ -69,9 +69,9 @@ document.querySelectorAll("[data-nugget-full]").forEach(n => { n.outerHTML = NUG
 const BURST_FILL = {ACE: "#FF5500", "5K": "#FF5500", "4K": "#F2EFEA", "3K": "#FFB27A", "2K": "#8F857A", DEATH: "#FF3D2E"};
 const hitBurst = type => `<span class="hitb" title="${esc(type)}">${NUGGET.burst(type === "5K" ? "ACE!" : esc(type) + "!", BURST_FILL[type] || "#8F857A")}</span>`;
 let sumMood = "";
-// What a filter chip keeps: Highlights of its Type, or with its reason (all headshots; your death, with Clip your
-// deaths on in Settings).
-const REASON_CHIPS = {hs: /all headshots/i, death: /^death$/i};
+// What a filter chip keeps: Highlights of its Type (a DEATH is your death in a round, with Clip your deaths on in
+// Settings), or with its reason (all headshots).
+const REASON_CHIPS = {hs: /all headshots/i};
 const fits = (h, id) => id === "all"
   || (REASON_CHIPS[id] ? (h.reasons || []).some(r => REASON_CHIPS[id].test(r)) : typeOf(h) === id);
 const keep = h => fits(h, filter);
@@ -88,7 +88,7 @@ const doneMark = () => PC ? `<span class="mk done" title="Clipped">${ICON.check}
 // through (touches.js) is the same Reel. One not clipped yet is a row to tick (`pickRow`).
 function highlightRow(h, m) {
   const tags = reasonTags(h).map(t => `<span class="tag">${esc(t)}</span>`).join("");
-  if (!clipped(h)) return pickRow(m, `r:${+h.round}`, `Round ${+h.round}`, typeOf(h), tags, h.state);
+  if (!clipped(h)) return pickRow(m, `r:${+(h.key ?? h.round)}`, `Round ${+h.round}`, typeOf(h), tags, h.state);
   const first = h.player ?? h.enemy, secs = h.player !== null ? h.player_s : h.enemy_s;
   const views = [h.player !== null ? "Your view" : "", h.enemy !== null ? "Enemy POV" : ""].filter(Boolean).join(" · ");
   return `<div class="hl" data-round="${+h.round}" data-player="${h.player ?? ""}" data-enemy="${h.enemy ?? ""}"${first !== null ? ` data-scrub="${+first}" data-secs="${+secs || 0}"` : ""}>
@@ -123,11 +123,15 @@ function pickRow(m, key, label, burst, tags, state) {
   </div>`;
 }
 
-// What Clip records, as its button says it: "Clip 3 rounds", "Clip 2 rounds and the talk", "Clip the talk".
+// What Clip records, as its button says it: "Clip 3 rounds", "Clip 2 rounds, 1 death and the talk", "Clip the talk".
+// A death's key is its round plus 1000 (DEATH_KEYS in model.py).
 function clipLabel(keys) {
-  const rounds = [...keys].filter(k => k.startsWith("r:")).length, talk = [...keys].some(k => k.startsWith("b:"));
-  if (!rounds && !talk) return "Clip rounds";
-  return "Clip " + [rounds ? plural(rounds, "round") : "", talk ? "the talk" : ""].filter(Boolean).join(" and ");
+  const picked = [...keys].filter(k => k.startsWith("r:")), talk = [...keys].some(k => k.startsWith("b:"));
+  const deaths = picked.filter(k => +k.slice(2) > 1000).length, rounds = picked.length - deaths;
+  const parts = [rounds ? plural(rounds, "round") : "", deaths ? plural(deaths, "death") : "", talk ? "the talk" : ""]
+    .filter(Boolean);
+  if (!parts.length) return "Clip rounds";
+  return "Clip " + (parts.length > 1 ? parts.slice(0, -1).join(", ") + " and " + parts[parts.length - 1] : parts[0]);
 }
 
 // The footer's picking line (PC only): how many are ticked of those open, when picks record, and Clip; or why
@@ -177,17 +181,20 @@ function renderButtons(m) {
 
 function matchBlock(m) {
   const hs = shownRows(m.highlights), bs = shownRows(m.breaks);
-  const rows = [...hs.filter(keep).map(h => [h.round, highlightRow(h, m)]),          // each Break after its round
+  const rows = [...hs.filter(keep).map(h => [h.round + (typeOf(h) === "DEATH" ? 0.25 : 0), highlightRow(h, m)]),
+    // a round's death after its Frags, and each Break after its round
     ...(filter === "all" ? bs : []).map(b => [b.after_round + 0.5, breakRow(b, m)])]
     .sort((a, b) => a[0] - b[0]).map(([, html]) => html);
   const byRound = {};
-  hs.forEach(h => { byRound[h.round] = h; });
+  hs.forEach(h => { if (typeOf(h) !== "DEATH") byRound[h.round] = h; });      // the bars count Frags
   const cells = Array.from({length: rounds(m.score)}, (_, i) => {
     const h = byRound[i + 1];
     return h ? `<span class="cell ${keep(h) && clipped(h) ? "on" : "dim"}" style="height:${HEIGHT[typeOf(h)] || 18}px" title="Round ${i + 1}"></span>` : '<span class="cell"></span>';
   }).join("");
   const won = m.result === "win", ready = PC && m.ready && !m.pick_refusal, clips = hs.filter(clipped).length;
-  const sub = clips ? plural(clips, "Highlight") : `${plural(hs.filter(open).length, "round")} worth clipping`;
+  const unclipped = hs.filter(open), deaths = unclipped.filter(h => typeOf(h) === "DEATH").length;
+  const sub = clips ? plural(clips, "Highlight")
+    : `${plural(unclipped.length - deaths, "round")} worth clipping` + (deaths ? `, ${plural(deaths, "death")}` : "");
   const folder = clips || bs.some(clipped)
     ? `<button class="ghost" data-open="${esc(m.checksum)}">${ICON.folder}Open folder</button>` : "";
   return `<section class="mcard${PC ? " picking" : ""}${closed.has(m.checksum) ? "" : " open"}" data-checksum="${esc(m.checksum)}" aria-label="${esc(m.map)}, ${dateLabel(m.played_at)}">
@@ -210,7 +217,7 @@ function matchBlock(m) {
 function renderFilters() {
   const all = data.flatMap(m => shownRows(m.highlights));
   const defs = [["all", "All"], ["ACE", "Aces"], ["4K", "4K"], ["3K", "3K"], ["2K", "2K"], ["hs", "All headshots"],
-    ["death", "Deaths"]];
+    ["DEATH", "Deaths"]];
   document.getElementById("filters").innerHTML = defs.map(([id, label]) => {
     const n = all.filter(h => fits(h, id)).length;
     return n || id === "all" ? `<button class="chip${filter === id ? " on" : ""}" data-filter="${id}" aria-pressed="${filter === id}">${label}<span class="n">${n}</span></button>` : "";

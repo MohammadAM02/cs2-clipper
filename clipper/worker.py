@@ -27,9 +27,9 @@ from clipper.gate import CS2_REASON, FACEIT_REASON, STEAM_REASON, GateStatus
 from clipper.hlae_plan import RenderInputs
 from clipper.index import Index
 from clipper.join import JoinError, assign_clips
-from clipper.model import Break, MatchInfo, RoundFacts
+from clipper.model import Break, MatchInfo, RoundFacts, is_death, round_of
 from clipper.render import RenderProgress, RenderRequest, RenderResult
-from clipper.scoring import DEATH, score_match
+from clipper.scoring import score_match
 from clipper.state import AppState, Rendering, view_name, views_label
 
 log = logging.getLogger(__name__)
@@ -50,7 +50,7 @@ STUCK_TOAST_SECONDS = 120.0        # how long a Gate held only by what the playe
 _FIXES = {FACEIT_REASON: "close FACEIT AC", STEAM_REASON: "open Steam"}
 PICKS_FLAG = "picks"               # set once the index has moved from the top N to your picks (spec: Pick your rounds)
 READY_FLAG = "ready_to_pick:"      # + a Demo's id: its "ready to pick" toast went out
-DEATHS_FLAG = "scored_with_deaths" # "1" while every match is scored with Clip your deaths on; unset is "0"
+DEATHS_FLAG = "deaths_scored"      # "1" while every match is scored with Clip your deaths on; unset is "0"
 
 
 def _count(n: int, noun: str) -> str:
@@ -281,7 +281,7 @@ def rename_old_reels(index: Index, cfg: Config) -> int:
         old = cfg.load_path(reel["path"])
         if not _OLD_REEL.fullmatch(old.name) or not old.is_file():
             continue
-        new = reel_path(index, cfg, reel["checksum"], reel["round"], reel["type"], reel["perspective"])
+        new = reel_path(index, cfg, reel["checksum"], round_of(reel), reel["type"], reel["perspective"])
         try:
             new.parent.mkdir(parents=True, exist_ok=True)
             os.replace(old, new)
@@ -575,15 +575,18 @@ class Worker:
         flag = f"{READY_FLAG}{demo['id']}"
         if not checksum or self.index.get_flag(flag) is not None:
             return
-        rounds = [row for row in self.index.pick_rows(checksum) if row["worthy"] and not row["selected"]]
+        rows = [row for row in self.index.pick_rows(checksum) if row["worthy"] and not row["selected"]]
+        rounds = [row for row in rows if not is_death(row)]
         talk = ([row["label"] for row in self.index.breaks(checksum)]
                 if "player" in self.cfg.perspectives_to_render else [])
-        if not rounds and not talk:
+        if not rows and not talk:
             return
         self.index.set_flag(flag, "1")
         match = self.index.match(checksum)
+        died = f", {_count(len(rows) - len(rounds), 'death')}" if len(rows) > len(rounds) else ""
         also = f", and {_talk(talk)}" if talk else ""
-        self.services.notify(f"{match['map']} is ready to pick", f"{_count(len(rounds), 'round')} worth clipping{also}.",
+        self.services.notify(f"{match['map']} is ready to pick",
+                             f"{_count(len(rounds), 'round')} worth clipping{died}{also}.",
                              actions=(("Pick rounds", links.to_page(f"/reels?match={checksum}")),))
 
     # --- step 5: rendering -----------------------------------------------------------------------
@@ -731,7 +734,7 @@ class Worker:
         request = RenderRequest(
             demo_path=Path(demo["dem_path"]),
             outputs=outputs,
-            rounds=tuple(h["round"] for h in highlights),
+            rounds=tuple(h["round"] for h in highlights if not is_death(h)),
             log_path=log_path,
             steamid=self.cfg.subject_steamid,
             padding_before_s=self.cfg.padding_before_s,
@@ -741,7 +744,7 @@ class Worker:
             height=self.cfg.video_size[1],
             checksum=demo["match_checksum"],
             breaks=breaks,
-            deaths=self.cfg.clip_deaths or any(h["type"] == DEATH for h in highlights),   # a DEATH picked while on
+            deaths=tuple(round_of(h) for h in highlights if is_death(h)),
         )
         try:
             result = self.services.render(
@@ -783,21 +786,28 @@ class Worker:
             )
 
     def _save_clips(self, demo, highlights, job, result: RenderResult, breaks=()) -> str | None:
-        """Keeps the Clips `result` gives for `job`'s view, each under its Highlight. Returns why the view failed,
-        or None when its Clips are kept. A view the launch did not record fails with the launch's reason. A Break of
-        `breaks` your view did not record (`hlae_plan.add_breaks` had no room for it beside the rounds) is given back,
-        so it can be picked again rather than asked for in every launch."""
-        if job["perspective"] not in result.clips:
-            return result.failure or f"no Clips of the {job['perspective']} view"
+        """Keeps the Clips `result` gives for `job`'s view, each under its Highlight: a round's by where it falls
+        (`assign_clips`), a death's by the round it is the death in. Returns why the view failed, or None when its Clips
+        are kept. A view the launch did not record fails with the launch's reason. A Break of `breaks` your view did
+        not record (`hlae_plan.add_breaks` had no room for it beside the rounds) is given back, so it can be picked
+        again rather than asked for in every launch; so is a death the view has no Clip of."""
+        perspective = job["perspective"]
+        if perspective not in result.clips:
+            return result.failure or f"no Clips of the {perspective} view"
+        rounds = [h for h in highlights if not is_death(h)]
         try:
-            groups = assign_clips(result.clips[job["perspective"]],
-                                  [(h["round"], h["round_start_tick"]) for h in highlights])
+            groups = assign_clips(result.clips[perspective], [(h["round"], h["round_start_tick"]) for h in rounds])
         except JoinError as exc:
             return str(exc)
-        ids = {h["round"]: h["id"] for h in highlights}
+        ids = {h["round"]: h["id"] for h in rounds}
         for number, clips in groups.items():
             for clip in clips:
                 self.index.add_clip(job["id"], ids[number], clip, self.cfg.store_path(clip.path))
+        deaths = {round_of(h): h for h in highlights if is_death(h)}
+        for number, clip in result.deaths.get(perspective, ()):
+            if number in deaths:
+                self.index.add_clip(job["id"], deaths.pop(number)["id"], clip, self.cfg.store_path(clip.path))
+        self.index.unpick(demo["match_checksum"], [h["round"] for h in deaths.values()])   # no Clip: never will be
         if job["perspective"] == "player":            # a Break is recorded in your view only
             rows = {row["after_round"]: row["id"] for row in self.index.breaks(demo["match_checksum"])}
             recorded = set()
@@ -893,7 +903,7 @@ class Worker:
                          for row in self.index.clips_for(highlight["id"], perspective)]
                 if not clips:
                     continue                          # picked after this view last recorded, and not recorded since
-                out = reel_path(self.index, self.cfg, demo["match_checksum"], highlight["round"], highlight["type"],
+                out = reel_path(self.index, self.cfg, demo["match_checksum"], round_of(highlight), highlight["type"],
                                 perspective)
                 duration = self.services.join(clips, out)
                 self.index.save_reel(highlight["id"], perspective, self.cfg.store_path(out), duration)

@@ -3,8 +3,9 @@
 CS2 starts with `+exec cs2clipper`, and HLAE's `mirv_cmd addAtTick` runs the plan below at the right ticks.
 `build_sequences` ports the two Sequence builders of CS Demo Manager 3.20.1 (MIT), and `script` sends the
 commands its video export sends, so a request gives the same Sequences, Clip names and look. `script` writes
-the cfg files that record them, and those of a second view recorded in the same launch: the demo starts again
-for it (`AGAIN`), as CS Demo Manager restarted the demo for overlapping Sequences.
+the cfg files that record them, and those of each later pass of the same launch (a second view, or deaths that
+overlap a Frag's Sequence): the demo starts again for it (`AGAIN`), as CS Demo Manager restarted the demo for
+overlapping Sequences.
 
 Pure: no file, process or database access. The runner writes the cfg files, launches CS2, reads its
 console for the markers (`parse_marker`) and finds each Clip in `raw_folder`.
@@ -123,6 +124,7 @@ class Sequence:
     cameras: tuple[tuple[int, str], ...]        # (tick, steam id): whom the camera follows from that tick on
     notices: tuple[NoticePlayer, ...] = ()      # empty: every death notice shows
     all_voices: bool = False                    # every player's voice, whatever the settings say (a Break)
+    death_of: int = 0                           # the round whose death of the subject it records; 0: none
 
 
 class PlanError(Exception):
@@ -152,7 +154,7 @@ class VideoSettings:
 
 # CS2 writes `[InputService] execing <name>` to console.log for each cfg it runs; what an `echo` prints never gets
 # there. So the runner follows the plan by the names of the step files that mark how far it has got.
-_MARKER = re.compile(rf"execing\s+{ENTRY}_(?:(go2?|again)|s(\d+)_(prepare|start|end|quit))(?!\S)")
+_MARKER = re.compile(rf"execing\s+{ENTRY}_(?:(go[2-9]?|again[3-9]?)|s(\d+)_(prepare|start|end|quit))(?!\S)")
 _SEQUENCE_MARKERS = {"prepare": "ready", "start": "recording", "end": "done"}
 _DIGITS = re.compile(r"[0-9]+")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")      # what ends a cfg line or cannot be typed in one
@@ -187,16 +189,14 @@ def build_sequences(
     rounds: tuple[int, ...] = (),
     padding_before_s: float,
     padding_after_s: float,
-    deaths: bool = False,
 ) -> list[Sequence]:
     """The Sequences that record `steamid`'s request, numbered from 1 and in start order. `event` is
-    "kills" (a Sequence per Frag, and with `deaths` one for their death too) or "rounds" (a whole round each, which
-    ends at their death anyway); `rounds` limits it to those round numbers (none: every round); the padding is in
-    seconds. Raises ValueError for any other event or perspective."""
+    "kills" (a Sequence per Frag) or "rounds" (a whole round each); `rounds` limits it to those round numbers
+    (none: every round); the padding is in seconds. Raises ValueError for any other event or perspective."""
     if perspective not in ("player", "enemy"):
         raise ValueError(f"unknown perspective: {perspective!r}")
     if event == "kills":
-        sequences = _kills_sequences(inputs, steamid, perspective, rounds, padding_before_s, padding_after_s, deaths)
+        sequences = _kills_sequences(inputs, steamid, perspective, rounds, padding_before_s, padding_after_s)
     elif event == "rounds":
         sequences = _rounds_sequences(inputs, steamid, rounds, padding_before_s, padding_after_s)
     else:
@@ -211,13 +211,9 @@ def _kills_sequences(
     rounds: tuple[int, ...],
     padding_before_s: float,
     padding_after_s: float,
-    deaths: bool = False,
 ) -> list[Sequence]:
-    """A Sequence per Frag of `steamid`, and with `deaths` per death of theirs, each kill once (a suicide is both).
-    The Enemy POV follows the other player of each: whom they killed, or who killed them; nobody (the world), them."""
     kills = [kill for kill in inputs.kills
-             if (not rounds or kill.round_number in rounds)
-             and (kill.killer_steam_id == steamid or deaths and kill.victim_steam_id == steamid)]
+             if (not rounds or kill.round_number in rounds) and kill.killer_steam_id == steamid]
     notices = tuple(NoticePlayer(player.steam_id, player.name, player.steam_id == steamid)
                     for player in inputs.players)
     tickrate = inputs.tickrate
@@ -228,8 +224,7 @@ def _kills_sequences(
 
     drafts: list[_Draft] = []
     for index, kill in enumerate(kills):
-        other = kill.victim_steam_id if kill.killer_steam_id == steamid else kill.killer_steam_id
-        followed = other if perspective == "enemy" and other else steamid
+        followed = kill.victim_steam_id if perspective == "enemy" and kill.victim_steam_id else kill.killer_steam_id
         start = max(1, kill.tick - before)
         end = min(inputs.tick_count, kill.tick + after)
         if index + 1 < len(kills) and kill.tick + extend_within >= kills[index + 1].tick:
@@ -269,6 +264,66 @@ def _rounds_sequences(
 
 
 
+def death_sequences(
+    inputs: RenderInputs,
+    steamid: str,
+    *,
+    perspective: str = "player",
+    rounds: tuple[int, ...],
+    padding_before_s: float,
+    padding_after_s: float,
+) -> list[Sequence]:
+    """A Sequence for the death of `steamid` in each of `rounds` (the first, should csda give two), numbered from 1
+    in tick order, padded as a Frag's is. Each is a Clip of its own, never merged with a Frag's: Settings' Clip your
+    deaths gives every death its own Reel. The Enemy POV follows whoever killed them; the world or their own hand,
+    them. Raises ValueError for an unknown perspective."""
+    if perspective not in ("player", "enemy"):
+        raise ValueError(f"unknown perspective: {perspective!r}")
+    notices = tuple(NoticePlayer(player.steam_id, player.name, player.steam_id == steamid)
+                    for player in inputs.players)
+    before = _ticks(inputs.tickrate, padding_before_s)
+    after = _ticks(inputs.tickrate, padding_after_s)
+    sequences: list[Sequence] = []
+    done: set[int] = set()
+    for kill in inputs.kills:
+        if kill.victim_steam_id != steamid or kill.round_number not in rounds or kill.round_number in done:
+            continue
+        done.add(kill.round_number)
+        killer = kill.killer_steam_id
+        followed = killer if perspective == "enemy" and killer and killer != steamid else steamid
+        start = max(1, kill.tick - before)
+        sequences.append(Sequence(len(sequences) + 1, start, min(inputs.tick_count, kill.tick + after),
+                                  ((start, followed),), notices, death_of=kill.round_number))
+    return sequences
+
+
+def _room(tickrate: float) -> int:
+    """The ticks a Sequence needs after the end of the one before it in its pass, to be set up (`_sequence_files`)."""
+    return _ticks(tickrate, HANDOFF_S) + _ticks(tickrate, CAMERA_S) + 1
+
+
+def _has_room(sequence: Sequence, others: Iterable[Sequence], room: int) -> bool:
+    return all(sequence.start_tick >= other.end_tick + room or other.start_tick >= sequence.end_tick + room
+               for other in others)
+
+
+def add_deaths(sequences: Iterable[Sequence], deaths: Iterable[Sequence],
+               tickrate: float) -> tuple[list[Sequence], list[list[Sequence]]]:
+    """`sequences` with each of `deaths` that has room among them, numbered again from 1 in start order, and the later
+    passes the others are recorded in, after the demo starts again: a death that overlaps a Sequence, as one just
+    after a Frag does, goes to the first such pass it has room in. Their numbers are left to the caller."""
+    room = _room(tickrate)
+    passes: list[list[Sequence]] = [list(sequences)]
+    for death in sorted(deaths, key=lambda sequence: sequence.start_tick):
+        found = next((taken for taken in passes if _has_room(death, taken, room)), None)
+        if found is None:
+            passes.append([death])
+        else:
+            found.append(death)
+    first, *later = [sorted(taken, key=lambda sequence: sequence.start_tick) for taken in passes]
+    return [replace(sequence, number=number) for number, sequence in enumerate(first, start=1)], later
+
+
 def add_breaks(sequences: Iterable[Sequence], breaks: Iterable[Break], steamid: str,
                tickrate: float) -> tuple[list[Sequence], dict[int, Break]]:
     """`sequences` and a Sequence for each of `breaks`, numbered again from 1 in start order, and the Break each new
@@ -276,7 +331,7 @@ def add_breaks(sequences: Iterable[Sequence], breaks: Iterable[Break], steamid: 
     alive in the next round's freeze time), with every player's voice. It keeps clear of the other Sequences with room
     to set each up: a Break one runs into or out of is cut to its longest free stretch, and left out when that is
     shorter than MIN_BREAK_S."""
-    room = _ticks(tickrate, HANDOFF_S) + _ticks(tickrate, CAMERA_S) + 1     # after an end, till the next start
+    room = _room(tickrate)                      # after an end, till the next start
     placed: list[tuple[Sequence, Break | None]] = [(sequence, None) for sequence in sequences]
     for found in breaks:
         stretch = _free_stretch(found.start_tick, found.end_tick,
@@ -334,12 +389,14 @@ def script(
     raw_dir: Path,
     settings: VideoSettings = VideoSettings(),
     second_pass: Iterable[Sequence] = (),
+    later_passes: Iterable[Iterable[Sequence]] = (),
 ) -> dict[str, str]:
     """The cfg files (file name -> text) that record `sequences`, one after the other and in the order given,
     from the Demo at `demo_path` into `raw_folder(raw_dir, number)`. `second_pass` are recorded after them, in the same
     launch, for a second view: after the last of `sequences` the demo starts again (`AGAIN`), plays from its first tick
     (`SECOND_GO`) and records `second_pass` the way it records `sequences`. So a Sequence of the second pass may start
-    before the last of the first pass ends, as the demo is back at its beginning.
+    before the last of the first pass ends, as the demo is back at its beginning. Each of `later_passes` follows the
+    same way, each from the demo's start again (`_pass_cfgs`): deaths that overlap a Frag's Sequence of their view.
 
     CS2 starts with `+exec cs2clipper`, which plays the Demo, schedules `cs2clipper_resume` for tick 0 to take it out
     of a pause it may start in (`RESUME_TICK`) and `cs2clipper_go` for tick 96 (`playing`). That sends the pinned
@@ -353,10 +410,10 @@ def script(
     one with no room to be set up after the one before it in its pass (they overlap, or the first starts within the
     demo's first seconds), and a path or setting that cannot go inside quotes."""
     sequences = list(sequences)
-    second = list(second_pass)
+    passes = [sequences, *(taken for taken in (list(second_pass), *(list(later) for later in later_passes)) if taken)]
     if not sequences:
         raise PlanError("there is nothing to record")
-    numbers = [sequence.number for sequence in (*sequences, *second)]
+    numbers = [sequence.number for taken in passes for sequence in taken]
     if len(set(numbers)) < len(numbers):
         raise PlanError("two Sequences have the same number")
     demo = _quotable(str(demo_path), "the demo's path")
@@ -382,26 +439,25 @@ def script(
             f"exec {_stem(sequences[0])}",
         ),
     }
-    passes = [sequences]
-    if second:
-        files[f"{AGAIN}.cfg"] = _cfg(       # the entry cfg's lines, with the second view's resume and go
+    for index, taken in enumerate(passes[1:], start=1):
+        again, resume, go = _pass_cfgs(index)
+        files[f"{again}.cfg"] = _cfg(       # the entry cfg's lines, with this pass's resume and go
             "mirv_cmd clear",
             "mirv_cmd enabled 1",
-            f"mirv_cmd addAtTick {RESUME_TICK} exec {SECOND_RESUME}",
-            f"mirv_cmd addAtTick {FIRST_TICK} exec {SECOND_GO}",
+            f"mirv_cmd addAtTick {RESUME_TICK} exec {resume}",
+            f"mirv_cmd addAtTick {FIRST_TICK} exec {go}",
             "demo_ui_mode 0",       # as the entry cfg has it: the playback bar goes before the demo plays
             f'playdemo "{demo}"',
         )
-        files[f"{SECOND_RESUME}.cfg"] = _cfg("demo_resume")
-        files[f"{SECOND_GO}.cfg"] = _cfg(*_pinned_lines(settings), f"exec {_stem(second[0])}")
-        passes.append(second)
+        files[f"{resume}.cfg"] = _cfg("demo_resume")
+        files[f"{go}.cfg"] = _cfg(*_pinned_lines(settings), f"exec {_stem(taken[0])}")
     for index, pass_sequences in enumerate(passes):
         handoff = FIRST_TICK        # each pass starts with the demo at its first tick
         for position, sequence in enumerate(pass_sequences):
             if position + 1 < len(pass_sequences):
                 next_stem = _stem(pass_sequences[position + 1])
             elif index + 1 < len(passes):
-                next_stem = AGAIN
+                next_stem = _pass_cfgs(index + 1)[0]
             else:
                 next_stem = None
             files.update(_sequence_files(sequence, next_stem, handoff, inputs.tickrate, slots, raw_dir, settings))
@@ -452,6 +508,14 @@ def _sequence_files(
     files = {f"{stem}.cfg": _cfg(*lines)}
     files.update({f"{stem}_{step.name}.cfg": _cfg(*step.lines) for step in steps})
     return files
+
+
+def _pass_cfgs(index: int) -> tuple[str, str, str]:
+    """The cfgs that start pass `index` of a launch (1 is the second, 8 the last `parse_marker` reads): the demo starts
+    again, is resumed, and goes."""
+    if index == 1:
+        return AGAIN, SECOND_RESUME, SECOND_GO
+    return f"{AGAIN}{index + 1}", f"{RESUME}{index + 1}", f"{ENTRY}_go{index + 1}"
 
 
 def _stem(sequence: Sequence) -> str:
@@ -561,15 +625,15 @@ def _prepare_lines(sequence: Sequence, folder: str, settings: VideoSettings) -> 
 
 def parse_marker(line: str) -> tuple[str, int | None] | None:
     """The marker a console line holds, as (kind, Sequence number or None), or None when it holds none. A marker is
-    CS2 saying it runs a step file of the plan: `_go` and `_go2` are playing, `_again` is again (the demo starts again
-    for a second view), a Sequence's `_prepare`, `_start` and `_end` are ready, recording and done, and `_quit` is quit.
-    All but playing, again and quit name their Sequence."""
+    CS2 saying it runs a step file of the plan: `_go`, `_go2`, `_go3` ... are playing, `_again`, `_again3` ... are again
+    (the demo starts again for a later pass), a Sequence's `_prepare`, `_start` and `_end` are ready, recording and
+    done, and `_quit` is quit. All but playing, again and quit name their Sequence."""
     found = _MARKER.search(line)
     if found is None:
         return None
     word, number, step = found[1], found[2], found[3]
     if word is not None:
-        return ("again", None) if word == "again" else ("playing", None)
+        return ("again", None) if word.startswith("again") else ("playing", None)
     if step == "quit":
         return "quit", None
     return _SEQUENCE_MARKERS[step], int(number)

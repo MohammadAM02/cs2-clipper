@@ -302,6 +302,26 @@ def two_views_game(*, first=(1, 2), second=(3, 4), quits=True, closes=True) -> l
     return script
 
 
+def passes_game(*passes, quits=True, closes=True) -> list[tuple]:
+    """A game of several passes, as a plan with deaths that overlap a Frag has them: the demo starts again before each
+    pass after the first (`again` and `go2`, then `again3` and `go3`, ...)."""
+    script = [(2, "hlae_exits", 0), (4, "cs2_up"), (15, "line", ran("go"))]
+    at = 17
+    for index, numbers in enumerate(passes):
+        if index:
+            again, go = ("again", "go2") if index == 1 else (f"again{index + 1}", f"go{index + 1}")
+            script += [(at - 4, "line", ran(again)), (at - 2, "line", ran(go))]
+        for number in numbers:
+            script += sequence_events(number, at)
+            at += 15
+    if quits:
+        script.append((at, "line", ran(f"s{passes[-1][-1]}_quit")))
+        at += 2
+    if closes:
+        script.append((at, "cs2_down"))
+    return script
+
+
 @pytest.fixture
 def req(tmp_path):
     return RenderRequest(
@@ -401,14 +421,54 @@ def test_a_request_of_a_break_alone_records_the_break_and_no_round(world, req):
         (HALFTIME, "sequence-1-tick-80000-to-82240.mp4")]
 
 
-def test_a_request_with_your_deaths_records_your_death_in_the_rounds_asked_for_too(world, req):
-    """Clip your deaths: the subject dies in round 12 well after its Frag, so the death is a Sequence of its own."""
+def test_a_death_asked_for_comes_back_apart_from_the_views_clips(world, req):
+    """Clip your deaths: the subject dies in round 12 well after its Frag, so the death's Sequence has room in the pass.
+    Round 14's death is not asked for."""
     world.inputs = replace(INPUTS, kills=(*INPUTS.kills, Kill(79000, 12, ENEMY, SUBJECT), Kill(93000, 14, ENEMY, SUBJECT)))
     world.scripts = [game((1, 2, 3))]
-    result = run(world, replace(req, deaths=True))
+    result = run(world, replace(req, deaths=(12,)))
     assert result.ok
-    assert [clip.path.name for clip in result.clips["player"]] == [
-        CLIP_1, CLIP_2, "sequence-3-tick-78744-to-79128.mp4"]
+    assert [clip.path.name for clip in result.clips["player"]] == [CLIP_1, CLIP_2]
+    assert [(number, clip.path.name) for number, clip in result.deaths["player"]] == [
+        (12, "sequence-3-tick-78744-to-79128.mp4")]
+
+
+def test_a_death_just_after_a_frag_is_recorded_after_the_demo_starts_again(world, req):
+    """The subject dies in round 12 a second after its Frag at 76000: the death's Sequence overlaps the Frag's."""
+    world.inputs = replace(INPUTS, kills=(*INPUTS.kills, Kill(76064, 12, ENEMY, SUBJECT)))
+    world.scripts = [passes_game((1, 2), (3,))]
+    result = run(world, replace(req, deaths=(12,)))
+    assert result.ok
+    assert [clip.path.name for clip in result.clips["player"]] == [CLIP_1, CLIP_2]
+    assert [(number, clip.path.name) for number, clip in result.deaths["player"]] == [
+        (12, "sequence-3-tick-75808-to-76192.mp4")]
+    log = req.log_path.read_text(encoding="utf-8")
+    assert "then 1 Sequence of the player view, after the demo starts again" in log
+    assert "  Sequence 3: ticks 75808 to 76192, 1 camera, the death in round 12" in log
+
+
+def test_with_both_views_each_views_overlapping_deaths_follow_its_own_pass(world, both):
+    """Your view's Frags, then its death just after one, then the Enemy POV's, then its: four runs of the demo."""
+    world.inputs = replace(INPUTS, kills=(*INPUTS.kills, Kill(76064, 12, ENEMY, SUBJECT)))
+    world.scripts = [passes_game((1, 2), (3,), (4, 5), (6,))]
+    result, reports = run_reporting(world, replace(both, deaths=(12,)))
+    assert result.ok
+    assert [clip.sequence for clip in result.clips["player"]] == [1, 2]
+    assert [clip.sequence for clip in result.clips["enemy"]] == [4, 5]
+    assert [(number, clip.sequence) for number, clip in result.deaths["player"]] == [(12, 3)]
+    assert [(number, clip.sequence) for number, clip in result.deaths["enemy"]] == [(12, 6)]
+    restarts = [report[1] for report in reports if report[0] == "restarting"]
+    assert restarts == ["player", "enemy", "enemy"]         # each again: the view whose Sequences come next
+
+
+def test_a_death_picked_alone_is_recorded_alone(world, req):
+    world.inputs = replace(INPUTS, kills=(*INPUTS.kills, Kill(79000, 12, ENEMY, SUBJECT)))
+    world.scripts = [game((1,))]
+    result = run(world, replace(req, rounds=(), deaths=(12,)))
+    assert result.ok
+    assert result.clips["player"] == ()
+    assert [(number, clip.path.name) for number, clip in result.deaths["player"]] == [
+        (12, "sequence-1-tick-78744-to-79128.mp4")]
 
 
 def test_the_enemy_view_records_no_break(world, both):

@@ -18,7 +18,7 @@ _Avoid_: Event, moment, play, spot
 
 **Highlight Type**:
 The classification of a Highlight, for example `ACE`, `CLUTCH_1V4`, `COLLATERAL`. With Clip your deaths on in
-Settings, a round the subject only died in is a `DEATH`, and a round's Reel shows their death too.
+Settings, the subject's death in a round is a Highlight of its own, a `DEATH`, with a Reel of its own.
 _Avoid_: Category, tag, kind
 
 **Kill**:

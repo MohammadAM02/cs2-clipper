@@ -63,6 +63,7 @@ from clipper.faceit import FaceitError
 from clipper.faceit_oauth import OAuthError
 from clipper.footprint import Usage
 from clipper.index import Index, PickRefused
+from clipper.model import DEATH_KEYS, round_of
 from clipper.settings import FIELDS, SECRETS, Field, Loaded, json_values
 from clipper.state import Snapshot, summary, view_name
 
@@ -327,7 +328,7 @@ def reels_row(index: Index, match: sqlite3.Row, config: Config) -> dict:
         (job := index.latest_render(demo["id"], perspective)) is not None and job["state"] == "running"
         for perspective in PERSPECTIVES)
     highlights = [
-        {"round": h["round"], "type": h["type"], "reasons": json.loads(h["reasons"]),
+        {"round": round_of(h), "key": h["round"], "type": h["type"], "reasons": json.loads(h["reasons"]),
          "player": h["player_reel_id"], "enemy": h["enemy_reel_id"],
          "player_s": h["player_s"], "enemy_s": h["enemy_s"],             # how long each runs, for the hover scrub
          "state": _row_state(bool(h["selected"]), h["player_reel_id"] or h["enemy_reel_id"], recording)}
@@ -354,8 +355,9 @@ def reels_row(index: Index, match: sqlite3.Row, config: Config) -> dict:
 
 
 def _round_list(value: object) -> list[int] | None:
-    """A list of round numbers (whole numbers from 1), or None for anything else."""
-    if not isinstance(value, list) or any(type(item) is not int or not 1 <= item <= 999 for item in value):
+    """A list of round numbers (whole numbers from 1), a death's among them as the index keeps it (its round plus
+    `model.DEATH_KEYS`), or None for anything else."""
+    if not isinstance(value, list) or any(type(item) is not int or not 1 <= item < 2 * DEATH_KEYS for item in value):
         return None
     return value
 
@@ -883,8 +885,8 @@ def create_app(ctx: WebContext) -> Flask:
             return Response(status=404)
         reel, video = found
         config = ctx.load_settings().config
-        name = share.reel_name(reel["type"], reel["map"], reel["round"], config.faceit_nickname, reel["perspective"])
-        card = share.title(reel["type"], reel["map"], reel["round"], config.faceit_nickname) if config.title_card else None
+        name = share.reel_name(reel["type"], reel["map"], round_of(reel), config.faceit_nickname, reel["perspective"])
+        card = share.title(reel["type"], reel["map"], round_of(reel), config.faceit_nickname) if config.title_card else None
         out = share.export_path(config.data_root / "Exports", name, kind)
         try:
             out = ctx.export_reel(video, kind, out, duration_s=reel["duration_s"], ffmpeg=config.ffmpeg, card=card)

@@ -2,9 +2,25 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Any
+
+DEATH = "DEATH"         # the Type of a death's Highlight: the subject's death in a round, a Reel of its own
+DEATH_KEYS = 1000       # the index keeps a death's Highlight under its round plus this, beside its round's own Highlight
+
+
+def is_death(row: Mapping[str, Any]) -> bool:
+    """Whether a Highlight's index row is a death's."""
+    return row["type"] == DEATH
+
+
+def round_of(row: Mapping[str, Any]) -> int:
+    """The round a Highlight's index row is of: a death's row is kept under its round plus DEATH_KEYS."""
+    key = row["round"]
+    return key - DEATH_KEYS if key > DEATH_KEYS else key
 
 
 @dataclass(frozen=True)
@@ -36,8 +52,9 @@ class RoundFacts:
 
 @dataclass(frozen=True)
 class Highlight:
-    """A scored round: it becomes one Reel per Perspective once picked. `worthy`: it is worth clipping, so the Reels
-    page lists it to pick (spec: Pick your rounds)."""
+    """A scored round, or the subject's death in one (a DEATH, with Clip your deaths on): it becomes one Reel per
+    Perspective once picked. `worthy`: it is worth clipping, so the Reels page lists it to pick (spec: Pick your
+    rounds)."""
 
     round: int
     type: str
@@ -47,6 +64,12 @@ class Highlight:
     round_start_tick: int
     round_end_tick: int
     worthy: bool = False
+
+    @property
+    def key(self) -> int:
+        """What the index keeps it under: its round, or for a death its round plus DEATH_KEYS, as a round can have
+        both."""
+        return self.round + DEATH_KEYS if self.type == DEATH else self.round
 
 
 @dataclass(frozen=True)

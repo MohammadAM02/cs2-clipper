@@ -59,7 +59,7 @@ class Config:
     hlae_exe: str = ""              # blank: the HLAE Setup installs
     padding_before_s: float = 4.0
     padding_after_s: float = 2.0
-    clip_deaths: bool = False       # on: every round you die in is listed to pick, and its Reel shows your death
+    clip_deaths: bool = False       # on: each of your deaths is listed to pick, and becomes a Reel of its own
     stall_seconds: float = 180.0
     launch_timeout_seconds: float = 300.0
     min_free_gb: float = 5.0

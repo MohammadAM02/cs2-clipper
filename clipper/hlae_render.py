@@ -282,8 +282,11 @@ def _note(env: _Env, game: _Launch, kind: str, number: int | None, now: float) -
         view = _view_of(env, number)
         if view is not None:
             _report(env, game, "recording", view, now)
-    elif kind == "again" and len(env.views) > 1:
-        _report(env, game, "restarting", env.views[1][0], now)     # the second view starts from its first Sequence
+    elif kind == "again":           # the demo starts again for the next pass: of the first view not recorded whole
+        view = next((name for name, sequences in env.views
+                     if any(sequence.number not in game.done for sequence in sequences)), None)
+        if view is not None:
+            _report(env, game, "restarting", view, now)
     elif kind == "quit":
         game.quit_at = now
 
@@ -458,7 +461,9 @@ def render(
     result. `progress` is told how far the launch has got; one that raises is said once in the log, and the job goes
     on. `video` is what the cfg files record with (the HUD settings among them), which the mux has to expect too.
     Each of `req.breaks` is recorded in the player view (`hlae_plan.add_breaks`) and comes back with its Clip in the
-    result's `breaks`, not among the view's `clips`."""
+    result's `breaks`, not among the view's `clips`. Each of `req.deaths` is recorded in every view as a Clip of its own
+    (`hlae_plan.death_sequences`), in a later pass after the demo starts again when it overlaps one of the view's
+    Sequences (`hlae_plan.add_deaths`), and comes back in the result's `deaths`, not among the view's `clips`."""
     req.log_path.parent.mkdir(parents=True, exist_ok=True)
     with keep_awake(), open(req.log_path, "w", encoding="utf-8", errors="replace", newline="\n") as log_file:
 
@@ -468,6 +473,7 @@ def render(
 
         progress_failed = False
         recorded: dict[int, Break] = {}         # the Break each Sequence that records one records, by its number
+        died: dict[int, int] = {}               # the round each Sequence that records a death is the death in, likewise
 
         def report(update: RenderProgress) -> None:
             """Hands `update` to the caller. A callback that raises is said once, and the Render Job goes on."""
@@ -490,8 +496,8 @@ def render(
                         say(f"    {line}")
                 else:
                     say("nothing written to console.log since the launch")
-            kept, breaks = _breaks_apart(clips or {}, recorded)
-            return RenderResult(ok=False, failure=text, clips=kept, breaks=breaks)
+            kept, breaks, deaths = _apart(clips or {}, recorded, died)
+            return RenderResult(ok=False, failure=text, clips=kept, breaks=breaks, deaths=deaths)
 
         def join(views: list[tuple[str, list[Sequence]]]) -> tuple[dict[str, tuple[ClipFile, ...]], str | None]:
             """Joins what HLAE recorded for each of `views`, in order, into the Clips of its output folder. Returns the
@@ -536,38 +542,52 @@ def render(
             return fail("the app has no analysis of this Demo")
         raw_dir = req.outputs[req.perspectives[0]] / "raw"        # the first view's folder keeps the raw recordings
         planned: list[tuple[str, list[Sequence]]] = []          # each view's Sequences, in the order they are recorded
+        passes: list[list[Sequence]] = []                       # what each run of the demo records, in order
         try:
             for perspective in req.perspectives:
                 sequences = hlae_plan.build_sequences(
                     inputs, req.steamid, event=req.event, perspective=perspective, rounds=req.rounds,
-                    padding_before_s=req.padding_before_s, padding_after_s=req.padding_after_s, deaths=req.deaths,
-                ) if req.rounds else []         # no rounds is none, not every round: a Break picked alone
+                    padding_before_s=req.padding_before_s, padding_after_s=req.padding_after_s,
+                ) if req.rounds else []         # no rounds is none, not every round: a Break or a death picked alone
+                deaths = hlae_plan.death_sequences(
+                    inputs, req.steamid, perspective=perspective, rounds=req.deaths,
+                    padding_before_s=req.padding_before_s, padding_after_s=req.padding_after_s,
+                ) if req.deaths else []
+                sequences, later = hlae_plan.add_deaths(sequences, deaths, inputs.tickrate)
                 view_breaks: dict[int, Break] = {}
                 if perspective == "player" and req.breaks:
                     sequences, view_breaks = hlae_plan.add_breaks(sequences, req.breaks, req.steamid, inputs.tickrate)
                 if not sequences:
                     return fail("nothing to record")
-                if planned:         # the second view's Sequences are numbered on from the first view's
-                    offset = len(planned[0][1])
-                    sequences = [replace(sequence, number=sequence.number + offset) for sequence in sequences]
-                    view_breaks = {number + offset: view_breaks[number] for number in view_breaks}
-                recorded.update(view_breaks)
-                planned.append((perspective, sequences))
+                first = len(passes)
+                for position, taken in enumerate((sequences, *later)):     # numbered on from the passes before
+                    numbered = []
+                    for sequence in taken:
+                        number = sum(len(earlier) for earlier in passes) + len(numbered) + 1
+                        if position == 0 and sequence.number in view_breaks:
+                            recorded[number] = view_breaks[sequence.number]
+                        if sequence.death_of:
+                            died[number] = sequence.death_of
+                        numbered.append(replace(sequence, number=number))
+                    passes.append(numbered)
+                planned.append((perspective, [sequence for taken in passes[first:] for sequence in taken]))
             files = hlae_plan.script(
-                planned[0][1], inputs, demo_path=req.demo_path, raw_dir=raw_dir, settings=video,
-                second_pass=[sequence for _, sequences in planned[1:] for sequence in sequences])
+                passes[0], inputs, demo_path=req.demo_path, raw_dir=raw_dir, settings=video,
+                second_pass=passes[1] if len(passes) > 1 else (), later_passes=passes[2:])
         except (PlanError, ValueError) as exc:
             return fail(f"plan failed: {exc}")
         all_sequences = [sequence for _, sequences in planned for sequence in sequences]
-        for index, (perspective, sequences) in enumerate(planned):
+        view_of = {sequence.number: perspective for perspective, sequences in planned for sequence in sequences}
+        for index, taken in enumerate(passes):
             if index == 0:
-                say(f"plan: {_plural(len(sequences), 'Sequence')} of the {perspective} view")
+                say(f"plan: {_plural(len(taken), 'Sequence')} of the {view_of[taken[0].number]} view")
             else:
-                say(f"then {_plural(len(sequences), 'Sequence')} of the {perspective} view, "
+                say(f"then {_plural(len(taken), 'Sequence')} of the {view_of[taken[0].number]} view, "
                     f"after the demo starts again")
-            for sequence in sequences:
+            for sequence in taken:
+                death = f", the death in round {died[sequence.number]}" if sequence.number in died else ""
                 say(f"  Sequence {sequence.number}: ticks {sequence.start_tick} to {sequence.end_tick}, "
-                    f"{_plural(len(sequence.cameras), 'camera')}")
+                    f"{_plural(len(sequence.cameras), 'camera')}{death}")
 
         cfgs = cs2_paths.cfg_dir(cs2_exe)
         try:
@@ -621,15 +641,19 @@ def render(
         if problem is not None:
             return fail(problem, console, clips)
         say(f"done: {_plural(sum(len(found) for found in clips.values()), 'Clip')}")
-        kept, breaks = _breaks_apart(clips, recorded)
-        return RenderResult(ok=True, clips=kept, breaks=breaks)
+        kept, breaks, deaths = _apart(clips, recorded, died)
+        return RenderResult(ok=True, clips=kept, breaks=breaks, deaths=deaths)
 
 
-def _breaks_apart(clips: dict[str, tuple[ClipFile, ...]], recorded: dict[int, Break],
-                  ) -> tuple[dict[str, tuple[ClipFile, ...]], tuple[tuple[Break, ClipFile], ...]]:
-    """`clips` without the Clips of the Breaks, and each Break `recorded` names by its Sequence's number with its Clip."""
-    kept = {perspective: tuple(clip for clip in found if clip.sequence not in recorded)
+def _apart(clips: dict[str, tuple[ClipFile, ...]], recorded: dict[int, Break], died: dict[int, int],
+           ) -> tuple[dict[str, tuple[ClipFile, ...]], tuple[tuple[Break, ClipFile], ...],
+                      dict[str, tuple[tuple[int, ClipFile], ...]]]:
+    """`clips` without the Clips of the Breaks and the deaths; each Break `recorded` names by its Sequence's number,
+    with its Clip; and by view, the round of each death `died` names by its Sequence's number, with its Clip."""
+    kept = {perspective: tuple(clip for clip in found if clip.sequence not in recorded and clip.sequence not in died)
             for perspective, found in clips.items()}
     breaks = tuple((recorded[clip.sequence], clip) for found in clips.values() for clip in found
                    if clip.sequence in recorded)
-    return kept, breaks
+    deaths = {perspective: tuple((died[clip.sequence], clip) for clip in found if clip.sequence in died)
+              for perspective, found in clips.items()}
+    return kept, breaks, deaths

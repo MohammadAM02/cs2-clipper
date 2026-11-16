@@ -90,10 +90,10 @@ def cmd_highlights(cfg: Config, index: Index, key: str) -> int:
         print(f"the app has no analysis of match {checksum}")
         return 1
     highlights = score_match(facts, deaths=cfg.clip_deaths)
-    picked = {row["round"] for row in index.selected_highlights(checksum)}
+    picked = {row["round"] for row in index.selected_highlights(checksum)}      # what each is kept under
     print(f"{'round':>6} {'type':<5} {'score':>5}  reasons")
     for h in highlights:
-        mark = "*" if h.round in picked else "+" if h.worthy else " "
+        mark = "*" if h.key in picked else "+" if h.worthy else " "
         print(f"{h.round:>5}{mark} {h.type:<5} {h.score:>5}  {', '.join(h.reasons)}")
     print("+ = worth clipping, * = picked")
     return 0

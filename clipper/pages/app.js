@@ -332,7 +332,7 @@ const RANK = {ACE: 0, "5K": 0, "4K": 1, "3K": 2, "2K": 3};
 function bestHighlights(matches, n) {
   const all = [];
   matches.forEach((m, mi) => (m.highlights || []).forEach(h => {
-    if (h.player === null && h.enemy === null) return;
+    if (h.player === null && h.enemy === null || String(h.type).toUpperCase() === "DEATH") return;   // not a best
     all.push({...h, match: m, mi});
   }));
   all.sort((a, b) => (RANK[String(a.type).toUpperCase()] ?? 9) - (RANK[String(b.type).toUpperCase()] ?? 9)

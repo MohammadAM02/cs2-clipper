@@ -10,9 +10,9 @@ from clipper.config import Config
 from clipper.gate import GateStatus
 from clipper.hlae_plan import RenderInputs, Round
 from clipper.index import Index
-from clipper.model import Break, ClipFile, Highlight, MatchInfo, RoundFacts
+from clipper.model import DEATH, DEATH_KEYS, Break, ClipFile, Highlight, MatchInfo, RoundFacts, round_of
 from clipper.render import ABORTED, RenderProgress, RenderResult
-from clipper.scoring import DEATH, score_match
+from clipper.scoring import score_match
 from clipper.state import AppState
 from clipper.voice import VoiceError
 from clipper.worker import (
@@ -125,6 +125,17 @@ def breaks_of(request):
                  for n, found in enumerate(request.breaks))
 
 
+def deaths_of(request):
+    """What a render of `request` gives back for its deaths: each one's Clip, in the folder of each of its views."""
+    return {
+        perspective: tuple(
+            (r, ClipFile(sequence=200 + n, start_tick=ROUND_START.get(r, 0) + 3000, end_tick=ROUND_START.get(r, 0) + 3384,
+                         path=folder / f"sequence-{200 + n}.mp4", duration_s=6.0))
+            for n, r in enumerate(request.deaths, start=1))
+        for perspective, folder in request.outputs.items()
+    }
+
+
 class FakeRender:
     """Succeeds with one Clip per requested round, unless canned results are queued: a RenderResult, or a function
     of the request that gives one (for a partial result, whose Clips depend on the request)."""
@@ -138,7 +149,7 @@ class FakeRender:
         if self.results:
             result = self.results.pop(0)
             return result(request) if callable(result) else result
-        return RenderResult(ok=True, clips=clips_of(request), breaks=breaks_of(request))
+        return RenderResult(ok=True, clips=clips_of(request), breaks=breaks_of(request), deaths=deaths_of(request))
 
 
 class FakeClock:
@@ -1468,69 +1479,101 @@ DIED_ONLY = RoundFacts(round=13, frag_ticks=(), round_start_tick=81925, round_en
 
 
 @pytest.fixture
-def died_in_13(world, monkeypatch):
-    """The match's analysis has round 13, which the subject only died in; a render's Clip of it lands in it."""
-    world.facts.facts = (*MATCH_FACTS, DIED_ONLY)
-    monkeypatch.setitem(ROUND_START, DIED_ONLY.round, DIED_ONLY.round_start_tick)
+def deaths_too(world):
+    """The subject dies in round 3, a 3K, just after their last Frag, and in round 13, where they get no Frag."""
+    world.facts.facts = (*(replace(f, death_tick=f.frag_ticks[-1] + 64) if f.round == 3 else f for f in MATCH_FACTS),
+                         DIED_ONLY)
     return world
 
 
 def listed(world):
-    """The match's rounds the Reels page lists, with their Types."""
-    return {row["round"]: row["type"] for row in world.index.pick_rows(MATCH_CHECKSUM)}
+    """The match's Highlights the Reels page lists, as (round, Type), in the order the index keeps them."""
+    return [(round_of(row), row["type"]) for row in world.index.pick_rows(MATCH_CHECKSUM)]
 
 
-def test_with_your_deaths_off_a_round_you_only_died_in_is_not_listed_and_renders_leave_deaths_out(died_in_13):
-    demo_id = died_in_13.add_demo()
-    died_in_13.ticks(9)
-    assert died_in_13.index.demo(demo_id)["state"] == "done"
-    assert 13 not in listed(died_in_13)
-    assert [call.deaths for call in died_in_13.render.calls] == [False]
+def deaths_listed(world):
+    return [number for number, kind in listed(world) if kind == DEATH]
 
 
-def test_with_your_deaths_on_a_round_you_only_died_in_is_a_death_to_pick_that_records_with_your_deaths(died_in_13):
-    died_in_13.use(clip_deaths=True)
-    died_in_13.picks = {MATCH_CHECKSUM: (13,)}
-    demo_id = died_in_13.add_demo()
-    died_in_13.ticks(9)
-    assert died_in_13.index.demo(demo_id)["state"] == "done"
-    assert listed(died_in_13)[13] == DEATH
-    [call] = died_in_13.render.calls
-    assert (call.rounds, call.deaths) == ((13,), True)
-    assert died_in_13.index.reel_count(MATCH_CHECKSUM) == 2            # your view and the Enemy POV
+def test_with_your_deaths_off_no_death_is_listed_or_recorded(deaths_too):
+    demo_id = deaths_too.add_demo()
+    deaths_too.ticks(9)
+    assert deaths_too.index.demo(demo_id)["state"] == "done"
+    assert deaths_listed(deaths_too) == []
+    assert [call.deaths for call in deaths_too.render.calls] == [()]
 
 
-def test_turning_your_deaths_on_lists_the_rounds_you_died_in_of_matches_scored_before_and_off_again_unlists_them(
-        died_in_13):
-    died_in_13.picks = {}
-    died_in_13.add_demo()
-    died_in_13.ticks(5)
-    assert 13 not in listed(died_in_13)
+def test_with_your_deaths_on_a_picked_death_becomes_reels_of_its_own_beside_its_rounds(deaths_too):
+    deaths_too.use(clip_deaths=True)
+    deaths_too.picks = {MATCH_CHECKSUM: (3, DEATH_KEYS + 3, DEATH_KEYS + 13)}
+    demo_id = deaths_too.add_demo()
+    deaths_too.ticks(9)
+    assert deaths_too.index.demo(demo_id)["state"] == "done"
+    assert deaths_listed(deaths_too) == [3, 13]
+    [call] = deaths_too.render.calls
+    assert (call.rounds, call.deaths) == ((3,), (3, 13))
+    assert deaths_too.index.reel_count(MATCH_CHECKSUM) == 6          # the 3K and the two deaths, in both views
+    rows = {(round_of(row), row["type"]): row for row in deaths_too.index.pick_rows(MATCH_CHECKSUM)}
+    clip_names = {key: [Path(clip["path"]).name for clip in deaths_too.index.clips_for(rows[key]["highlight_id"], "player")]
+                  for key in ((3, "3K"), (3, DEATH), (13, DEATH))}
+    assert clip_names == {(3, "3K"): ["sequence-1.mp4"], (3, DEATH): ["sequence-201.mp4"],
+                          (13, DEATH): ["sequence-202.mp4"]}
+    reels = [Path(reel["path"]).name for reel in deaths_too.index.all_reel_details() if reel["type"] == DEATH]
+    assert len(reels) == 4 and all(" R3" in name or " R13" in name for name in reels)
+
+
+def test_with_your_deaths_on_the_ready_to_pick_toast_counts_deaths_apart_from_rounds(deaths_too):
+    deaths_too.use(clip_deaths=True)
+    deaths_too.picks = {}
+    deaths_too.add_demo()
+    deaths_too.ticks(5)
+    [body] = [body for title, body in deaths_too.notices if title.endswith("is ready to pick")]
+    worth = sum(h.worthy for h in score_match(MATCH_FACTS))
+    assert body.startswith(f"{worth} rounds worth clipping, 2 deaths")
+
+
+def test_turning_your_deaths_on_lists_the_deaths_of_matches_scored_before_and_off_again_unlists_them(deaths_too):
+    deaths_too.picks = {}
+    deaths_too.add_demo()
+    deaths_too.ticks(5)
+    assert deaths_listed(deaths_too) == []
     scored = []
-    facts_of = died_in_13.facts.round_facts
-    died_in_13.facts.round_facts = lambda checksum, steamid: scored.append(checksum) or facts_of(checksum, steamid)
-    died_in_13.use(clip_deaths=True)
-    died_in_13.ticks(1)
-    assert listed(died_in_13)[13] == DEATH
+    facts_of = deaths_too.facts.round_facts
+    deaths_too.facts.round_facts = lambda checksum, steamid: scored.append(checksum) or facts_of(checksum, steamid)
+    deaths_too.use(clip_deaths=True)
+    deaths_too.ticks(1)
+    assert deaths_listed(deaths_too) == [3, 13]
     assert scored == [MATCH_CHECKSUM]
-    died_in_13.use(clip_deaths=True)                  # the app starts again with the same settings
-    died_in_13.ticks(1)
+    deaths_too.use(clip_deaths=True)                  # the app starts again with the same settings
+    deaths_too.ticks(1)
     assert scored == [MATCH_CHECKSUM]                 # scored again once, not at every start
-    died_in_13.use(clip_deaths=False)
-    died_in_13.ticks(1)
-    assert 13 not in listed(died_in_13)
+    deaths_too.use(clip_deaths=False)
+    deaths_too.ticks(1)
+    assert deaths_listed(deaths_too) == []
 
 
-def test_a_death_picked_while_your_deaths_were_on_still_records_once_they_are_off(died_in_13):
-    died_in_13.use(clip_deaths=True)
-    died_in_13.picks = {}
-    demo_id = died_in_13.add_demo()
-    died_in_13.ticks(5)
-    died_in_13.pick([13])
-    died_in_13.use(clip_deaths=False)
-    died_in_13.ticks(9)
-    assert died_in_13.index.demo(demo_id)["state"] == "done"
-    [call] = died_in_13.render.calls
-    assert (call.rounds, call.deaths) == ((13,), True)
-    assert listed(died_in_13)[13] == DEATH            # picked, so still listed, with its Reels
-    assert died_in_13.index.reel_count(MATCH_CHECKSUM) == 2
+def test_a_death_picked_while_your_deaths_were_on_still_records_once_they_are_off(deaths_too):
+    deaths_too.use(clip_deaths=True)
+    deaths_too.picks = {}
+    demo_id = deaths_too.add_demo()
+    deaths_too.ticks(5)
+    deaths_too.pick([DEATH_KEYS + 13])
+    deaths_too.use(clip_deaths=False)
+    deaths_too.ticks(9)
+    assert deaths_too.index.demo(demo_id)["state"] == "done"
+    [call] = deaths_too.render.calls
+    assert (call.rounds, call.deaths) == ((), (13,))
+    assert deaths_listed(deaths_too) == [13]          # picked, so still listed, with its Reels
+    assert deaths_too.index.reel_count(MATCH_CHECKSUM) == 2
+
+
+def test_a_picked_death_the_render_has_no_clip_of_is_given_back_rather_than_asked_for_again(deaths_too):
+    deaths_too.use(clip_deaths=True)
+    deaths_too.picks = {MATCH_CHECKSUM: (DEATH_KEYS + 13,)}
+    deaths_too.render.results = [lambda request: RenderResult(ok=True, clips=clips_of(request))]
+    demo_id = deaths_too.add_demo()
+    deaths_too.ticks(9)
+    assert deaths_too.index.demo(demo_id)["state"] == "done"
+    assert len(deaths_too.render.calls) == 1
+    rows = {(round_of(row), row["type"]): row for row in deaths_too.index.pick_rows(MATCH_CHECKSUM)}
+    assert rows[(13, DEATH)]["selected"] == 0

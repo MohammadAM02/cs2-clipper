@@ -26,7 +26,7 @@ from clipper.faceit import FaceitError
 from clipper.faceit_oauth import OAuthError
 from clipper.footprint import Usage
 from clipper.index import Index
-from clipper.model import Break, ClipFile, FaceitStats, Highlight, MatchInfo
+from clipper.model import DEATH, DEATH_KEYS, Break, ClipFile, FaceitStats, Highlight, MatchInfo
 from clipper.packaged import PAGE_FILES
 from clipper.render import RenderProgress
 from clipper.settings import FIELDS, KEY_FIELD, SECRET_FIELD, STORED_KEY, Loaded, SettingsStore
@@ -1973,6 +1973,35 @@ def _share_app(tmp_path, **overrides):
     return app_for(tmp_path, **overrides).test_client(), reel_id, video
 
 
+def test_a_death_reel_is_exported_under_its_own_round(tmp_path):
+    made = []
+
+    def export(reel, kind, out, *, duration_s, ffmpeg, card):
+        made.append((out.name, card))
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"x")
+        return out
+
+    index = Index(tmp_path / "clipper.sqlite")
+    try:
+        _reels_index(index)                         # round 8, a 4K
+        index.save_highlights(REEL_MATCH.checksum, [Highlight(8, "4K", 40, ("4k",), (100,), 0, 5000),
+                                                    Highlight(8, DEATH, 0, (), (), 0, 5000, worthy=True)])
+        index.mark_picked(REEL_MATCH.checksum, {DEATH_KEYS + 8})
+        [death] = [row for row in index.selected_highlights(REEL_MATCH.checksum) if row["type"] == DEATH]
+        (tmp_path / "death.mp4").write_bytes(b"not really a video")
+        index.save_reel(death["id"], "player", tmp_path / "death.mp4", 6.0)
+        [reel_id] = [row["player_reel_id"] for row in index.match_reels(REEL_MATCH.checksum) if row["type"] == DEATH]
+    finally:
+        index.close()
+    config = Config(data_root=tmp_path, faceit_nickname="s1mple")
+    client = app_for(tmp_path, export_reel=export, copy_file=lambda path: None,
+                     load_settings=lambda: Loaded(config, ())).test_client()
+    response = pc_post(client, f"/api/reels/{reel_id}/export", headers=MARKED, json={"kind": "discord"})
+    assert response.status_code == 200
+    assert made == [("DEATH Mirage R8 s1mple (Discord).mp4", share.Title("DEATH", "s1mple · Mirage · Round 8"))]
+
+
 def test_copy_puts_the_reels_file_on_the_clipboard(tmp_path):
     copied = []
     client, reel_id, video = _share_app(tmp_path, copy_file=copied.append)
@@ -2078,6 +2107,20 @@ def test_api_reels_lists_a_match_ready_to_pick_with_its_rounds_worth_clipping(tm
         (3, "3K", ["3k"], "open", None), (7, "FRAG", ["frag", "deagle"], "open", None)]
     assert (match["ready"], match["pick_refusal"], match["recording_failed"]) == (True, None, None)
     assert match["pick_hint"] == "Records once CS2 and FACEIT AC are closed."
+
+
+def test_api_reels_lists_a_death_under_its_round_with_the_key_it_is_picked_by(tmp_path, index):
+    """Clip your deaths: the death in round 7 is a Highlight of its own, kept beside round 7's (`model.DEATH_KEYS`)."""
+    _ready_match(tmp_path, index)
+    index.save_highlights(REEL_MATCH.checksum, [
+        Highlight(3, "3K", 40, ("3k",), (100,), 0, 5000, worthy=True),
+        Highlight(7, "FRAG", 5, ("frag", "deagle"), (6000,), 5000, 9000, worthy=True),
+        Highlight(7, DEATH, 0, (), (), 5000, 9000, worthy=True)])
+    client = app_for(tmp_path).test_client()
+    assert [(h["round"], h["key"], h["type"], h["state"]) for h in _the_match(client)["highlights"]] == [
+        (3, 3, "3K", "open"), (7, 7, "FRAG", "open"), (7, DEATH_KEYS + 7, DEATH, "open")]
+    assert _pick(client, {"rounds": [DEATH_KEYS + 7]}).status_code == 202
+    assert [row["round"] for row in index.selected_highlights(REEL_MATCH.checksum)] == [DEATH_KEYS + 7]
 
 
 def test_api_reels_rows_say_whether_they_are_queued_recording_or_clipped(tmp_path, index):

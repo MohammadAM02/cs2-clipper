@@ -79,9 +79,9 @@ def test_parse_marker_ignores_anything_else(line):
     assert hlae_plan.parse_marker(line) is None
 
 
-def kills_plan(kills, *, before=2.0, after=2.0, perspective="player", rounds=(), deaths=False, **options):
+def kills_plan(kills, *, before=2.0, after=2.0, perspective="player", rounds=(), **options):
     return build_sequences(inputs(kills, **options), SUBJECT, event="kills", perspective=perspective,
-                           rounds=rounds, padding_before_s=before, padding_after_s=after, deaths=deaths)
+                           rounds=rounds, padding_before_s=before, padding_after_s=after)
 
 
 # Sequences from Kills: CS:DM's build-players-event-sequences.ts, at 64 tick with 2 s before and after
@@ -206,45 +206,105 @@ def test_rounds_limit_the_kills():
     assert len(kills_plan(kills, rounds=())) == 3
 
 
-# --- your deaths (Settings: Clip your deaths) --------------------------------------------------------------------
+# --- your deaths (Settings: Clip your deaths): each a Sequence of its own -----------------------------------------
 
-def test_your_death_is_a_sequence_only_when_your_deaths_are_clipped():
-    death = kill(5000, victim=SUBJECT, killer=ENEMY)
-    assert kills_plan([death]) == []
-    [sequence] = kills_plan([death], deaths=True)
+def deaths_plan(kills, *, rounds, perspective="player", before=2.0, after=2.0):
+    return hlae_plan.death_sequences(inputs(kills), SUBJECT, perspective=perspective, rounds=rounds,
+                                     padding_before_s=before, padding_after_s=after)
+
+
+def test_your_death_in_a_round_asked_for_is_a_sequence_of_its_own_padded_as_a_frag_is():
+    [sequence] = deaths_plan([kill(5000, victim=SUBJECT, killer=ENEMY, round_number=2)], rounds=(2,))
     assert (sequence.number, sequence.start_tick, sequence.end_tick) == (1, 5000 - 128, 5000 + 128)
-    assert sequence.cameras == ((5000 - 128, SUBJECT),)
+    assert (sequence.cameras, sequence.death_of) == (((5000 - 128, SUBJECT),), 2)
+    assert sequence.notices == kills_plan([kill(10363)])[0].notices         # the kill feed as a Frag's has it
+
+
+def test_a_frag_just_before_your_death_stays_out_of_its_sequence():
+    kills = [kill(4900, victim=ENEMY), kill(5000, victim=SUBJECT, killer=ENEMY)]
+    assert [(s.start_tick, s.end_tick) for s in deaths_plan(kills, rounds=(1,))] == [(5000 - 128, 5000 + 128)]
+    assert [(s.start_tick, s.end_tick) for s in kills_plan(kills)] == [(4900 - 128, 4900 + 128)]
 
 
 def test_the_enemy_perspective_of_your_death_follows_your_killer():
-    [sequence] = kills_plan([kill(5000, victim=SUBJECT, killer=ENEMY)], perspective="enemy", deaths=True)
+    [sequence] = deaths_plan([kill(5000, victim=SUBJECT, killer=ENEMY)], rounds=(1,), perspective="enemy")
     assert sequence.cameras == ((5000 - 128, ENEMY),)
 
 
 @pytest.mark.parametrize("perspective", ["player", "enemy"])
 def test_a_death_to_the_world_or_by_your_own_hand_follows_you(perspective):
     for killer in ("", SUBJECT):
-        [sequence] = kills_plan([kill(5000, victim=SUBJECT, killer=killer)], perspective=perspective, deaths=True)
+        [sequence] = deaths_plan([kill(5000, victim=SUBJECT, killer=killer)], rounds=(1,), perspective=perspective)
         assert sequence.cameras == ((5000 - 128, SUBJECT),)
 
 
-def test_a_death_soon_after_your_frag_carries_the_frag_on_into_it_and_the_enemy_view_turns_to_your_killer():
-    kills = [kill(1000, victim=ENEMY), kill(1300, victim=SUBJECT, killer=OTHER_ENEMY)]
-    [sequence] = kills_plan(kills, perspective="enemy", deaths=True)
-    assert (sequence.start_tick, sequence.end_tick) == (872, 1300 + 128)
-    assert sequence.cameras == ((872, ENEMY), (1150, OTHER_ENEMY))
-
-
-def test_a_death_long_after_your_frag_is_a_sequence_of_its_own():
-    kills = [kill(1000, victim=ENEMY), kill(9000, victim=SUBJECT, killer=ENEMY)]
-    assert [(s.number, s.start_tick) for s in kills_plan(kills, deaths=True)] == [(1, 872), (2, 9000 - 128)]
-
-
-def test_only_your_deaths_are_recorded_and_only_in_the_rounds_asked_for():
+def test_only_your_first_death_in_each_round_asked_for_is_recorded():
     kills = [kill(5000, victim=MATE, killer=ENEMY, round_number=2),
              kill(6000, victim=SUBJECT, killer=ENEMY, round_number=2),
+             kill(6100, victim=SUBJECT, killer=OTHER_ENEMY, round_number=2),     # csda giving a second one
              kill(9000, victim=SUBJECT, killer=ENEMY, round_number=3)]
-    assert [s.start_tick for s in kills_plan(kills, rounds=(2,), deaths=True)] == [6000 - 128]
+    assert [(s.number, s.start_tick, s.death_of) for s in deaths_plan(kills, rounds=(2,))] == [(1, 6000 - 128, 2)]
+    assert [(s.number, s.death_of) for s in deaths_plan(kills, rounds=(2, 3))] == [(1, 2), (2, 3)]
+    assert deaths_plan(kills, rounds=()) == []
+
+
+def test_a_death_sequence_stays_within_the_demo():
+    [sequence] = deaths_plan([kill(100, victim=SUBJECT, killer=ENEMY)], rounds=(1,))
+    assert sequence.start_tick == 1
+    [sequence] = hlae_plan.death_sequences(inputs([kill(5000, victim=SUBJECT, killer=ENEMY)], tick_count=5050),
+                                           SUBJECT, rounds=(1,), padding_before_s=2, padding_after_s=2)
+    assert sequence.end_tick == 5050
+
+
+def test_the_death_builder_knows_two_perspectives():
+    with pytest.raises(ValueError):
+        deaths_plan([kill(5000, victim=SUBJECT, killer=ENEMY)], rounds=(1,), perspective="spectator")
+
+
+# A death among its view's Sequences: one with room is recorded in the same pass; one that overlaps a Sequence, as a
+# death just after a Frag does, is recorded in a later pass, after the demo starts again.
+
+def death(start, end, round_number=9):
+    return Sequence(1, start, end, ((start, SUBJECT),), death_of=round_number)
+
+
+def test_a_death_with_room_joins_the_pass_which_is_numbered_again_in_start_order():
+    frags = [Sequence(1, 1000, 2000, ()), Sequence(2, 9000, 10000, ())]
+    first, later = hlae_plan.add_deaths(frags, [death(5000, 6000)], 64.0)
+    assert [(s.number, s.start_tick, s.death_of) for s in first] == [(1, 1000, 0), (2, 5000, 9), (3, 9000, 0)]
+    assert later == []
+
+
+@pytest.mark.parametrize("start, end, fits", [
+    (2065, 3000, True), (2064, 3000, False),        # 65 ticks after a Sequence's end, to set it up (at 64 tick)
+    (500, 935, True), (500, 936, False),            # and as many before the next one starts
+])
+def test_a_death_needs_the_room_a_sequence_needs_to_be_set_up(start, end, fits):
+    frags = [Sequence(1, 1000, 2000, ())]
+    first, later = hlae_plan.add_deaths(frags, [death(start, end)], 64.0)
+    assert (len(first), len(later)) == ((2, 0) if fits else (1, 1))
+
+
+def test_deaths_that_overlap_a_frags_sequence_share_a_later_pass_when_they_have_room_there():
+    frags = [Sequence(1, 1000, 2000, ()), Sequence(2, 9000, 10000, ())]
+    deaths = [death(1500, 2500, 1), death(9500, 10500, 2), death(20000, 21000, 3)]
+    first, later = hlae_plan.add_deaths(frags, deaths, 64.0)
+    assert [s.start_tick for s in first] == [1000, 9000, 20000]
+    assert [[s.death_of for s in taken] for taken in later] == [[1, 2]]
+
+
+def test_deaths_with_no_room_beside_each_other_take_a_later_pass_each():
+    """Long paddings: two deaths overlap each other as well as the Frag's Sequence between them."""
+    frags = [Sequence(1, 1000, 9000, ())]
+    first, later = hlae_plan.add_deaths(frags, [death(500, 5000, 1), death(4000, 8000, 2)], 64.0)
+    assert first == frags
+    assert [[s.death_of for s in taken] for taken in later] == [[1], [2]]
+
+
+def test_deaths_alone_are_one_pass():
+    first, later = hlae_plan.add_deaths([], [death(20000, 21000, 3), death(5000, 6000, 1)], 64.0)
+    assert [(s.number, s.death_of) for s in first] == [(1, 1), (2, 3)]
+    assert later == []
 
 
 def test_only_kills_and_rounds_events_and_two_perspectives_are_known():
@@ -837,6 +897,42 @@ def test_each_pass_is_checked_as_a_plan_of_its_own():
         passes_script([Sequence(1, 1000, 2000, ())], [Sequence(2, 5000, 6000, ()), Sequence(3, 5500, 7000, ())])
 
 
+def test_a_third_pass_follows_the_second_as_the_second_follows_the_first():
+    files = hlae_plan.script([Sequence(1, 10000, 12000, ((10000, SUBJECT),))], inputs(), demo_path=DEMO, raw_dir=RAW,
+                             second_pass=[Sequence(2, 3000, 4000, ((3000, SUBJECT),))],
+                             later_passes=[[Sequence(3, 11000, 11500, ((11000, SUBJECT),))]])
+    assert cfg_lines(files, "cs2clipper_s1_next") == ["exec cs2clipper_again"]
+    assert cfg_lines(files, "cs2clipper_s2_next") == ["exec cs2clipper_again3"]
+    assert cfg_lines(files, "cs2clipper_again3") == [
+        "mirv_cmd clear",
+        "mirv_cmd enabled 1",
+        "mirv_cmd addAtTick 0 exec cs2clipper_resume3",
+        "mirv_cmd addAtTick 96 exec cs2clipper_go3",
+        "demo_ui_mode 0",
+        r'playdemo "C:\Users\Some One\Demos\match 1.dem"',
+    ]
+    assert cfg_lines(files, "cs2clipper_resume3") == ["demo_resume"]
+    assert cfg_lines(files, "cs2clipper_go3")[:-1] == cfg_lines(files, "cs2clipper_go")[:-1]
+    assert cfg_lines(files, "cs2clipper_go3")[-1] == "exec cs2clipper_s3"
+    assert cfg_lines(files, "cs2clipper_s3_quit") == ["quit"]
+    assert "cs2clipper_s2_quit.cfg" not in files
+
+
+def test_an_empty_later_pass_is_left_out():
+    first, second = [Sequence(1, 10000, 12000, ((10000, SUBJECT),))], [Sequence(2, 3000, 4000, ((3000, SUBJECT),))]
+    assert passes_script(first, second, later_passes=[[]]) == passes_script(first, second)
+
+
+@pytest.mark.parametrize("line", ["[InputService] execing cs2clipper_again3", "[InputService] execing cs2clipper_again9"])
+def test_a_later_pass_starting_is_again(line):
+    assert hlae_plan.parse_marker(line) == ("again", None)
+
+
+@pytest.mark.parametrize("line", ["[InputService] execing cs2clipper_go3", "[InputService] execing cs2clipper_go9"])
+def test_a_later_pass_going_is_playing(line):
+    assert hlae_plan.parse_marker(line) == ("playing", None)
+
+
 def test_a_second_pass_of_nothing_is_the_plan_of_one_view():
     assert passes_script(two_sequences(), []) == plan_script(two_sequences())
     files = plan_script(two_sequences())
@@ -860,6 +956,14 @@ TWO_PASSES = {
     "second view early": lambda: ([Sequence(1, 10000, 12000, ((10000, SUBJECT),))],
                                   [Sequence(2, 3000, 4000, ((3000, SUBJECT),))]),
 }
+# Plans of more passes: deaths just after a Frag of each view, recorded after the demo starts again for each.
+MORE_PASSES = {
+    "deaths after frags": lambda: (
+        [Sequence(1, 9000, 10000, ((9000, SUBJECT),)), Sequence(2, 30000, 31000, ((30000, SUBJECT),))],
+        [Sequence(3, 9000, 10000, ((9000, ENEMY),)), Sequence(4, 30000, 31000, ((30000, ENEMY),))],
+        [[Sequence(5, 9800, 10300, ((9800, SUBJECT),), death_of=4)],
+         [Sequence(6, 9800, 10300, ((9800, ENEMY),), death_of=4)]]),
+}
 ALLOWED_COMMANDS = {
     # the pinned settings, the recording and the camera
     "sv_cheats", "volume", "cl_hud_telemetry_frametime_show", "cl_hud_telemetry_net_misdelivery_show",
@@ -872,8 +976,11 @@ ALLOWED_COMMANDS = {
 }
 
 
-@pytest.fixture(params=[*sorted(PLANS), *sorted(TWO_PASSES)])
+@pytest.fixture(params=[*sorted(PLANS), *sorted(TWO_PASSES), *sorted(MORE_PASSES)])
 def planned(request):
+    if request.param in MORE_PASSES:
+        first, second, later = MORE_PASSES[request.param]()
+        return plan_script(first, second_pass=second, later_passes=later)
     if request.param in TWO_PASSES:
         first, second = TWO_PASSES[request.param]()
         return plan_script(first, second_pass=second)
@@ -915,7 +1022,8 @@ def test_the_runner_can_follow_the_plan_by_the_cfg_files_cs2_says_it_runs(planne
     logged = [hlae_plan.parse_marker(f"[InputService] execing {name.removesuffix('.cfg')}") for name in planned]
     markers = [marker for marker in logged if marker is not None]
     numbers = sorted(int(name.split("_")[1][1:]) for name in planned if name.endswith("_start.cfg"))
-    again = ["again", "playing"] if "cs2clipper_again.cfg" in planned else []     # a second view plays once more
+    starts = sum(name.startswith("cs2clipper_again") for name in planned)
+    again = ["again", "playing"] * starts           # each later pass starts the demo again and plays once more
     assert sorted(kind for kind, _ in markers) == sorted(
         ["playing", "quit", *again, *(["ready", "recording", "done"] * len(numbers))])
     assert sorted(number for kind, number in markers if kind == "recording") == numbers

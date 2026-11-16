@@ -53,7 +53,7 @@ from clipper import (
 from clipper import notify as toasts
 from clipper.alerts import MatchAlerts, utc_now
 from clipper.backfill import StatsBackfill
-from clipper.config import Config
+from clipper.config import STRETCHED_SIZE, Config
 from clipper.faceit import FaceitClient, FaceitError
 from clipper.faceit_oauth import OAuthError
 from clipper.footprint import Footprint
@@ -62,7 +62,7 @@ from clipper.index import Index
 from clipper.intake import Intake
 from clipper.join import join_reel
 from clipper.lock import AlreadyRunning, single_instance
-from clipper.media import gpu_encoder, probe_duration
+from clipper.media import gpu_encoder, probe_duration, probe_size
 from clipper.procs import ProcessProbe, SystemProbe
 from clipper.settings import SettingsStore
 from clipper.state import AppState
@@ -186,7 +186,7 @@ _gpu_encoders: dict[str, tuple[str, str] | None] = {}    # FFmpeg -> the graphic
 
 def _video_settings(cfg: Config) -> hlae_plan.VideoSettings:
     """What a Render Job records with: the HUD settings, the encoder (the graphics card's, when Settings asks for it
-    and the PC has one), and the plan's own defaults for the rest."""
+    and the PC has one), the stretch of 4:3-stretched, and the plan's own defaults for the rest."""
     encoder = {}
     if cfg.encoder == "gpu":
         if cfg.ffmpeg not in _gpu_encoders:
@@ -197,7 +197,8 @@ def _video_settings(cfg: Config) -> hlae_plan.VideoSettings:
             encoder = {"video_codec": found[0], "output_parameters": found[1]}
     return hlae_plan.VideoSettings(
         show_xray=cfg.show_xray, show_assists=cfg.show_assists, show_only_death_notices=cfg.hud == "killfeed",
-        death_notices_duration=cfg.kill_feed_seconds, player_voices_enabled=cfg.player_voices, **encoder)
+        death_notices_duration=cfg.kill_feed_seconds, player_voices_enabled=cfg.player_voices,
+        scale_to=STRETCHED_SIZE if cfg.stretch else None, **encoder)
 
 
 def _program(name: str) -> Path | None:
@@ -244,7 +245,8 @@ def build_worker(cfg: Config, index: Index, *, state: AppState, stop: StopReques
         facts=analyses,
         gate=gate,
         render=render_job,
-        join=partial(join_reel, ffmpeg=cfg.ffmpeg, duration_of=duration_of, stretch=cfg.stretch),
+        join=partial(join_reel, ffmpeg=cfg.ffmpeg, duration_of=duration_of, stretch=cfg.stretch,
+                     size_of=partial(probe_size, ffprobe=cfg.ffprobe)),
         notify=toasts.notify,
         alerts=start_match_alerts(cfg, index, probe, page_url=page_url, pages_off=pages_off),
         stats_backfill=StatsBackfill(index, cfg, analyses, unpack, _faceit_stats(cfg, analyses),

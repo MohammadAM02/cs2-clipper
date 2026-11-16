@@ -166,7 +166,8 @@ def status_demos(index: Index, now: datetime | None = None, running_left: float 
     """Status's Demos list: every Demo not done or skipped, newest first, with the latest Render Job
     per Perspective (none before rendering has been queued) and, once its Highlights are scored, about how long
     until its Reels are made (`eta_s`): each view still to record, at the pace the last renders went -- or, for the
-    view recording now, what the render itself says is left (`running_left`), when it says."""
+    views recording now (one launch records both), what the launch itself says is left (`running_left`), once, when
+    it says."""
     now = now or utc_now()
     rows = [row for row in index.all_demos() if row["state"] not in NOT_LISTED]
     rows.reverse()
@@ -183,15 +184,20 @@ def status_demos(index: Index, now: datetime | None = None, running_left: float 
         if row["state"] in ("scored", "rendering") and match is not None:
             pace = pace if pace is not None else seconds_per_highlight(index)
             left = [job for job in jobs if job["state"] != "done"] or ([] if jobs else [None])
-            eta = 0.0
+            eta, launch, started = 0.0, None, None
             for job in left:                          # each view left records what it still lacks
                 view = len(index.highlights_to_record(row["match_checksum"], job["perspective"] if job else "player"))
                 view *= pace
-                if job is not None and job["state"] == "running" and running_left is not None:
-                    view = running_left
-                elif job is not None and job["state"] == "running" and job["started_at"]:
-                    view -= (now - datetime.fromisoformat(job["started_at"])).total_seconds()
-                eta += max(view, 30.0)
+                if job is not None and job["state"] == "running":     # the views running share one launch
+                    launch, started = (launch or 0.0) + view, started or job["started_at"]
+                else:
+                    eta += max(view, 30.0)
+            if launch is not None:
+                if running_left is not None:
+                    launch = running_left             # what the launch says is left, for every view it records
+                elif started:
+                    launch -= (now - datetime.fromisoformat(started)).total_seconds()
+                eta += max(launch, 30.0)
         demos.append({
             "id": row["id"], "file_name": row["file_name"], "state": row["state"],
             "map": map_label(match["map"]) if match is not None else None,

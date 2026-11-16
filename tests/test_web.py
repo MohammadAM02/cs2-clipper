@@ -444,6 +444,25 @@ def test_the_eta_counts_each_view_left_at_the_pace_of_the_last_renders(index):
     assert demo["eta_s"] == 70                        # what the render itself says is left
 
 
+def test_the_eta_of_a_launch_recording_both_views_counts_its_time_left_once(index):
+    demo_id = _add_demo(index)
+    index.save_match(MatchInfo(checksum=MATCH_CHECKSUM, map_name="de_mirage", played_at=NOW,
+                               team_score=13, opponent_score=5))
+    hls = [Highlight(round=r, type="3K", score=30, reasons=("3k",), frag_ticks=(1,), round_start_tick=0,
+                     round_end_tick=10) for r in (3, 7)]
+    index.save_highlights(MATCH_CHECKSUM, hls)
+    index.mark_picked(MATCH_CHECKSUM, {3, 7})
+    index.advance(demo_id, "rendering", match_checksum=MATCH_CHECKSUM)
+    for perspective in ("player", "enemy"):
+        job = index.queue_render(demo_id, perspective, attempt=1)
+        index.start_render(job, Path("E:/out"), Path("E:/demo-1-render-both-1.log"))
+        index._db.execute("UPDATE render_jobs SET started_at = ? WHERE id = ?", ("2026-10-13T10:00:00+00:00", job))
+    [demo] = status_demos(index, running_left=70.0)
+    assert demo["eta_s"] == 70                        # what the launch says is left, for both views
+    [demo] = status_demos(index, now=datetime(2026, 10, 13, 10, 0, 30, tzinfo=timezone.utc))
+    assert demo["eta_s"] == 2 * 2 * 45 - 30           # both views at 45 s a Highlight, less the 30 s it has run
+
+
 def test_the_eta_counts_only_what_each_view_still_lacks(index):
     """Round 3 has both views; round 7, picked later, is all that is left to record."""
     demo_id = _add_demo(index)

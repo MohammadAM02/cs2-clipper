@@ -113,7 +113,7 @@ open.
 | **Unpacked** | The `.dem.zst` FACEIT serves becomes a `.dem`. |
 | **Analyzed** | [csda](https://github.com/akiver/cs-demo-analyzer) reads every round; the app keeps what it needs as `analyses\<checksum>.json`, with the match's stats beside it. |
 | **Scored** | Each round with your Frags becomes a Highlight. The ones worth clipping wait on the Reels page for you to pick, and a toast says the match is ready; **Clip** sends the Demo on with your picks. |
-| **Rendering** | HLAE starts CS2 and a console script ([`hlae_plan.py`](clipper/hlae_plan.py)) records each Sequence at its exact ticks, one view per CS2 launch: your view first, whose Reels are joined and announced straight away, then the Enemy POV (or only the view Settings picks). CS2 and its encoder run below normal priority. |
+| **Rendering** | HLAE starts CS2 and a console script ([`hlae_plan.py`](clipper/hlae_plan.py)) records each Sequence at its exact ticks, both views in one CS2 launch: your view, then the demo starts again for the Enemy POV (or only the view Settings picks). For 4:3 stretched, HLAE's FFmpeg stretches each frame to 1920x1080 as it records, so joining Clips into Reels is a copy. CS2 and its encoder run below normal priority. |
 | **Joined** | FFmpeg joins each Highlight's Clips into one Reel per view. |
 | **Done** | The unpacked `.dem` is deleted, and a toast says the Reels are ready, with **Watch** and **Show in folder**. |
 

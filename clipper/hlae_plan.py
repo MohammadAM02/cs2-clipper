@@ -147,6 +147,7 @@ class VideoSettings:
     constant_rate_factor: int = 23
     output_parameters: str = ""             # FFmpeg output parameters; when set they replace the factor
     container: str = "mp4"
+    scale_to: tuple[int, int] | None = None     # the size FFmpeg scales each frame to, its pixels square; None: as drawn
 
 
 # CS2 writes `[InputService] execing <name>` to console.log for each cfg it runs; what an `echo` prints never gets
@@ -521,6 +522,9 @@ def _prepare_lines(sequence: Sequence, folder: str, settings: VideoSettings) -> 
     preset = f"{ENTRY}Preset{number}"       # one per Sequence, as each records into a folder of its own
     quality = settings.output_parameters or f"-crf {settings.constant_rate_factor:g}"      # either, not both
     voices = -1 if sequence.all_voices or settings.player_voices_enabled else 0     # -1: every player, both halves
+    # HLAE's command line has `-vf setsar=sar=1/1` before these options, and FFmpeg keeps only the last -vf: a scale
+    # replaces it, so it makes the pixels square itself.
+    scale = "" if settings.scale_to is None else f"-vf scale={settings.scale_to[0]}:{settings.scale_to[1]},setsar=1 "
     lines = [
         f"mirv_streams record startMovieWav {_flag(settings.record_audio)}",
         f'mirv_streams record name "{folder}"',
@@ -530,7 +534,7 @@ def _prepare_lines(sequence: Sequence, folder: str, settings: VideoSettings) -> 
         f"tv_listen_voice_indices {voices}",
         f"tv_listen_voice_indices_h {voices}",
         # the quotes inside the preset are {QUOTE}, and two backslashes come before the file
-        f'mirv_streams settings add ffmpeg {preset} "-c:v {settings.video_codec} -pix_fmt yuv420p {quality} '
+        f'mirv_streams settings add ffmpeg {preset} "{scale}-c:v {settings.video_codec} -pix_fmt yuv420p {quality} '
         f'{{QUOTE}}{folder}\\\\video.{settings.container}{{QUOTE}}"',
         f"mirv_streams record screen settings {preset}",
         f"mirv_streams record fps {settings.framerate:g}",

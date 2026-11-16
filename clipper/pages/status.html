@@ -307,7 +307,7 @@ function progressOf(d, overall) {
   let frac = index / 2;
   if (d.state === "rendering" && d.jobs.length) {
     const done = d.jobs.filter(j => j.state === "done").length;
-    const running = d.jobs.filter(j => j.state === "running").length;     // one view per CS2 launch
+    const running = d.jobs.filter(j => j.state === "running").length;     // the views of one launch share `overall`
     frac = (1 + (done + running * (overall ?? 0.35)) / d.jobs.length) / 2;
   } else if (d.state === "joined") frac = 0.95;
   return {index, frac: Math.min(1, frac)};

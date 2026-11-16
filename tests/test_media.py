@@ -3,7 +3,7 @@ import subprocess
 
 import pytest
 
-from clipper.media import MediaError, gpu_encoder, probe_duration
+from clipper.media import MediaError, gpu_encoder, probe_duration, probe_size
 
 
 def test_a_file_that_is_not_video_raises(tmp_path):
@@ -13,19 +13,31 @@ def test_a_file_that_is_not_video_raises(tmp_path):
     fake.write_bytes(b"fake video")
     with pytest.raises(MediaError, match="fake.mp4"):
         probe_duration(fake)
+    with pytest.raises(MediaError, match="fake.mp4"):
+        probe_size(fake)
 
 
-@pytest.mark.ffmpeg
-def test_a_real_clip_reports_its_duration(tmp_path):
+def _black_clip(folder):
+    """A one-second 320x240 clip, made by FFmpeg."""
     if shutil.which("ffmpeg") is None:
         pytest.skip("ffmpeg not on PATH")
-    clip = tmp_path / "clip.mp4"
+    clip = folder / "clip.mp4"
     subprocess.run(
         ["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:s=320x240:r=60:d=1",
          "-c:v", "libx264", "-pix_fmt", "yuv420p", str(clip)],
         check=True,
     )
-    assert probe_duration(clip) == pytest.approx(1.0, abs=0.05)
+    return clip
+
+
+@pytest.mark.ffmpeg
+def test_a_real_clip_reports_its_duration(tmp_path):
+    assert probe_duration(_black_clip(tmp_path)) == pytest.approx(1.0, abs=0.05)
+
+
+@pytest.mark.ffmpeg
+def test_a_real_clip_reports_its_frame_size(tmp_path):
+    assert probe_size(_black_clip(tmp_path)) == (320, 240)
 
 
 def _encodes_with(*working):

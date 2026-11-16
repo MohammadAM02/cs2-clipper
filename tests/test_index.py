@@ -813,6 +813,24 @@ def test_render_seconds_counts_the_highlights_each_render_recorded_not_all_those
     assert index.render_seconds() == [(100.0, 1)]
 
 
+def test_render_seconds_counts_a_launch_that_records_both_views_once(index):
+    demo_id = ready_demo(index, worth(3, 15259), worth(12, 72031))
+    index.mark_picked(MATCH.checksum, {3, 12})
+    ids = {h["round"]: h["id"] for h in index.selected_highlights(MATCH.checksum)}
+
+    def recorded(perspective, round_, started, finished):
+        job = index.queue_render(demo_id, perspective, attempt=1)
+        index.add_clip(job, ids[round_], ClipFile(1, 100, 400, Path(f"E:/{job}.mp4"), 4.0), f"{job}.mp4")
+        index.start_render(job, Path("E:/out"), Path("E:/demo-1-render-both-1.log"))
+        index._db.execute("UPDATE render_jobs SET state = 'done', started_at = ?, finished_at = ? WHERE id = ?",
+                          (started, finished, job))
+
+    recorded("player", 3, "2026-10-13T10:00:00+00:00", "2026-10-13T10:03:20+00:00")    # one launch, both views
+    recorded("enemy", 3, "2026-10-13T10:00:00+00:00", "2026-10-13T10:03:20+00:00")
+    recorded("player", 12, "2026-10-13T11:00:00+00:00", "2026-10-13T11:01:40+00:00")   # a later pick: the same log
+    assert index.render_seconds() == [(100.0, 1), (200.0, 2)]
+
+
 def test_lacks_reel_says_whether_a_picked_highlight_has_no_reel_of_a_view(index):
     index.save_highlights(MATCH.checksum, [worth(3, 15259), worth(12, 72031)])
     index.mark_picked(MATCH.checksum, {3})

@@ -1551,6 +1551,16 @@ def test_a_pc_without_a_graphics_card_encoder_records_with_x264(built, renderer,
     assert renderer.calls[-1][1]["video"].video_codec == "libx264"
 
 
+@pytest.mark.parametrize(("aspect_ratio", "scale_to"),
+                         [("4:3-stretched", (1920, 1080)), ("4:3", None), ("4:3-hd", None), ("16:9", None)])
+def test_only_4_3_stretched_records_its_frames_stretched_to_1920x1080(built, renderer, tmp_path, aspect_ratio,
+                                                                       scale_to):
+    renderer.cs2_exes = [None]
+    worker = built(aspect_ratio=aspect_ratio)
+    worker.services.render(_render_request(tmp_path), lambda: False, lambda report: None)
+    assert renderer.calls[-1][1]["video"].scale_to == scale_to
+
+
 # --- the first run: one screen, three things -------------------------------------------------------------------
 
 

@@ -604,13 +604,14 @@ class Worker:
             self.index.advance(demo["id"], "joined")
             return
         if self._ship_rendered_views(demo):
-            return                                    # one step per tick: the next view records on the next
-        self._try_render(demo, jobs[:1])              # one view per CS2 launch, yours first
+            return                                    # one step per tick: the view still to record goes on the next
+        self._try_render(demo, jobs)                  # one CS2 launch records every view still to record
 
     def _ship_rendered_views(self, demo) -> bool:
-        """A view recorded while another is still to come gets its Reels now, and a toast says so, rather than
-        waiting for the other: your view is ready before the Enemy POV records. True when it made any. The next
-        view's launch gets its heads-up, since the player may be watching these."""
+        """A view recorded while another is still to come (a launch that recorded your view whole, then stopped
+        before the Enemy POV) gets its Reels now, and a toast says so, rather than waiting for the other: your view
+        is ready before the Enemy POV records again. True when it made any. The next launch gets its heads-up,
+        since the player may be watching these."""
         rendered = [perspective for perspective in self._wanted(demo) if self._lacks_reels(demo, perspective)]
         if not rendered:
             return False

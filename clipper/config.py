@@ -14,13 +14,14 @@ from clipper.windows import downloads_dir
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# aspect_ratio -> (width, height, stretched to 1920x1080 when joining).
+# aspect_ratio -> (width, height, stretched to STRETCHED_SIZE as it records).
 RATIOS: dict[str, tuple[int, int, bool]] = {
     "16:9": (1920, 1080, False),
     "4:3": (1280, 960, False),
     "4:3-hd": (1440, 1080, False),
     "4:3-stretched": (1280, 960, True),
 }
+STRETCHED_SIZE = (1920, 1080)   # 4:3-stretched: each frame CS2 draws is scaled to this, its pixels square
 SEQUENCE_EVENTS = ("kills", "rounds")
 # perspectives -> the Perspectives each Demo is rendered from, in render order.
 PERSPECTIVE_CHOICES: dict[str, tuple[str, ...]] = {
@@ -117,7 +118,7 @@ class Config:
 
     @property
     def stretch(self) -> bool:
-        """Whether Reels are stretched to 1920x1080 when joining (4:3-stretched)."""
+        """Whether the Clips are stretched to STRETCHED_SIZE as they record (4:3-stretched)."""
         return RATIOS[self.aspect_ratio][2]
 
     @property

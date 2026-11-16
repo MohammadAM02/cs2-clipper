@@ -35,6 +35,23 @@ def probe_duration(path: Path, ffprobe: str = "ffprobe") -> float:
         raise MediaError(f"ffprobe gave no duration for {path.name}: {text[:50]}") from exc
 
 
+def probe_size(path: Path, ffprobe: str = "ffprobe") -> tuple[int, int]:
+    """The width and height of the file's video, or MediaError if ffprobe cannot read them."""
+    proc = subprocess.run(
+        [ffprobe, "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+         "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True, timeout=60, creationflags=subprocess.CREATE_NO_WINDOW,
+    )
+    text = proc.stdout.strip()
+    if proc.returncode != 0 or not text:
+        raise MediaError(f"ffprobe cannot read {path.name}: {proc.stderr.strip()[:200]}")
+    try:
+        width, height = (int(part) for part in text.split(","))
+    except ValueError as exc:
+        raise MediaError(f"ffprobe gave no frame size for {path.name}: {text[:50]}") from exc
+    return width, height
+
+
 def gpu_encoder(ffmpeg: str, run: Callable[..., subprocess.CompletedProcess] = subprocess.run) -> tuple[str, str] | None:
     """The first of GPU_ENCODERS this PC's graphics card can use, as (codec, options): each is tried on a tenth of a
     second of black. None when none can, and x264 records instead."""

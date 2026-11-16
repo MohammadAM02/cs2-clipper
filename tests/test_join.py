@@ -94,15 +94,37 @@ def test_a_reel_that_does_not_add_up_is_rejected(tmp_path, one_second_clip):
     assert not list(out.parent.glob("*.partial.mp4"))
 
 
+def frame_size(path):
+    """The width and height ffprobe reads, as "width,height"."""
+    return subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
+         "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
 @pytest.mark.ffmpeg
-def test_a_stretched_reel_is_re_encoded_to_1920x1080(tmp_path, one_second_clip):
+def test_a_stretched_reel_of_clips_recorded_unstretched_is_re_encoded_to_1920x1080(tmp_path, one_second_clip):
     (a,) = copies(tmp_path, one_second_clip, "a.mp4")
     out = tmp_path / "library" / "r12-player.mp4"
     duration = join_reel([a], out, ffmpeg="ffmpeg", duration_of=probe_duration, stretch=True)
-    size = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height",
-         "-of", "csv=p=0", str(out)],
-        capture_output=True, text=True, check=True,
-    ).stdout.strip()
-    assert size == "1920,1080"
+    assert frame_size(out) == "1920,1080"
     assert duration == pytest.approx(1.0, abs=0.1)
+
+
+@pytest.mark.ffmpeg
+def test_a_stretched_reel_of_clips_recorded_stretched_is_a_copy(tmp_path, one_second_clip):
+    a, b = copies(tmp_path, one_second_clip, "a.mp4", "b.mp4")
+    out = tmp_path / "library" / "r12-player.mp4"
+    join_reel([a, b], out, ffmpeg="ffmpeg", duration_of=probe_duration, stretch=True,
+              size_of=lambda path: (1920, 1080))     # as HLAE records them for 4:3-stretched
+    assert frame_size(out) == "320,240"               # the Clips' own frames: nothing scaled or encoded again
+
+
+@pytest.mark.ffmpeg
+def test_a_stretched_reel_with_one_clip_recorded_unstretched_is_re_encoded_whole(tmp_path, one_second_clip):
+    a, b = copies(tmp_path, one_second_clip, "a.mp4", "b.mp4")
+    out = tmp_path / "library" / "r12-player.mp4"
+    join_reel([a, b], out, ffmpeg="ffmpeg", duration_of=probe_duration, stretch=True,
+              size_of=lambda path: (1920, 1080) if path.name == "a.mp4" else (1280, 960))
+    assert frame_size(out) == "1920,1080"

@@ -653,25 +653,37 @@ class Index:
         )[0]
 
     def render_seconds(self, last: int = 10) -> list[tuple[float, int]]:
-        """The last `last` finished Render Jobs as (seconds from start to finish, Highlights recorded): what an
-        estimate of the next render's length goes on. A Job counts the Highlights it has Clips of, as a later pick
-        records only what it adds."""
+        """The CS2 launches of the last `last` finished Render Jobs as (seconds from start to finish, Highlights
+        recorded): what an estimate of the next render's length goes on. A Job counts the Highlights it has Clips of,
+        as a later pick records only what it adds. The Jobs of one launch (both views: one log, at one time) are one
+        launch, whose time counts once, for the Highlights of every view it recorded."""
         rows = self._all(
-            "SELECT j.started_at, j.finished_at, (SELECT COUNT(DISTINCT c.highlight_id) FROM clips c"
+            "SELECT j.log_path, j.started_at, j.finished_at, (SELECT COUNT(DISTINCT c.highlight_id) FROM clips c"
             " JOIN highlights h ON h.id = c.highlight_id WHERE c.render_job_id = j.id AND h.round > 0) AS highlights"
             " FROM render_jobs j"
             " WHERE j.state = 'done' AND j.started_at IS NOT NULL AND j.finished_at IS NOT NULL"
             " ORDER BY j.id DESC LIMIT ?",
             (last,),
         )
-        found = []
+        launches: list[dict] = []
         for row in rows:
             try:
-                seconds = (datetime.fromisoformat(row["finished_at"]) - datetime.fromisoformat(row["started_at"]))
+                started, finished = datetime.fromisoformat(row["started_at"]), datetime.fromisoformat(row["finished_at"])
             except ValueError:
                 continue
-            if row["highlights"] and seconds.total_seconds() > 0:
-                found.append((seconds.total_seconds(), row["highlights"]))
+            launch = next((launch for launch in launches if launch["log"] == row["log_path"]
+                           and started <= launch["finished"] and launch["started"] <= finished), None)
+            if launch is None:
+                launches.append({"log": row["log_path"], "started": started, "finished": finished,
+                                 "highlights": row["highlights"]})
+            else:                                       # a later pick that restarts the attempts reuses a log: not this
+                launch["started"], launch["finished"] = min(launch["started"], started), max(launch["finished"], finished)
+                launch["highlights"] += row["highlights"]
+        found = []
+        for launch in launches:
+            seconds = (launch["finished"] - launch["started"]).total_seconds()
+            if launch["highlights"] and seconds > 0:
+                found.append((seconds, launch["highlights"]))
         return found
 
     def best_reel(self, checksum: str, perspective: str) -> int | None:

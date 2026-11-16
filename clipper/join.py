@@ -9,13 +9,16 @@ import subprocess
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from clipper.config import STRETCHED_SIZE
+from clipper.media import probe_size
 from clipper.model import ClipFile
 
 BASE_TOLERANCE_S = 0.25
 PER_JOIN_TOLERANCE_S = 0.05   # joining two MP3-audio Clips measured +0.045 s on this machine
-# 4:3-stretched: bake the horizontal stretch into a 16:9 Reel. The only join that re-encodes.
-STRETCH_ARGS = ("-vf", "scale=1920:1080,setsar=1", "-c:v", "libx264", "-crf", "23", "-preset", "medium",
-                "-c:a", "copy")
+# 4:3-stretched: HLAE stretches each frame as it records, so those Clips join as a copy. A Clip recorded before it did
+# gets the stretch here, baked into a 16:9 Reel: the only join that re-encodes.
+STRETCH_ARGS = ("-vf", f"scale={STRETCHED_SIZE[0]}:{STRETCHED_SIZE[1]},setsar=1", "-c:v", "libx264", "-crf", "23",
+                "-preset", "medium", "-c:a", "copy")
 
 
 class JoinError(Exception):
@@ -47,11 +50,14 @@ def _concat_line(path: Path) -> str:
 
 
 def join_reel(clips: Sequence[Path], out_path: Path, *, ffmpeg: str,
-              duration_of: Callable[[Path], float], stretch: bool = False) -> float:
+              duration_of: Callable[[Path], float], stretch: bool = False,
+              size_of: Callable[[Path], tuple[int, int]] = probe_size) -> float:
     """Concatenate `clips` (already in Sequence order) into out_path — a stream copy, or a re-encode
-    to 1920x1080 when `stretch` — check the result's length, and return it in seconds."""
+    to 1920x1080 when `stretch` and a Clip is not that size yet (`size_of`) — check the result's length,
+    and return it in seconds."""
     if not clips:
         raise JoinError(f"no Clips for {out_path.name}")
+    stretch = stretch and any(size_of(clip) != STRETCHED_SIZE for clip in clips)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     expected = sum(duration_of(clip) for clip in clips)
     partial = out_path.with_name(out_path.stem + ".partial.mp4")

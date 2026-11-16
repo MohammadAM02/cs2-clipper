@@ -388,13 +388,21 @@ def test_output_parameters_take_the_place_of_the_crf():
                       '{QUOTE}' + RAW_1 + r'\\video.mp4{QUOTE}"')
 
 
+def test_a_stretched_recording_is_scaled_to_square_pixels_before_it_is_encoded():
+    files = plan_script(two_sequences(), settings=hlae_plan.VideoSettings(scale_to=(1920, 1080)))
+    [preset] = [line for line in cfg_lines(files, "cs2clipper_s1_prepare") if " settings add ffmpeg " in line]
+    # HLAE's command has a -vf of its own (setsar=sar=1/1) before these options: FFmpeg keeps the last one
+    assert preset == ('mirv_streams settings add ffmpeg cs2clipperPreset1 "-vf scale=1920:1080,setsar=1 -c:v libx264 '
+                      '-pix_fmt yuv420p -crf 23 {QUOTE}' + RAW_1 + r'\\video.mp4{QUOTE}"')
+
+
 def test_the_video_settings_default_to_what_every_render_records_with():
     settings = hlae_plan.VideoSettings()
     assert (settings.show_xray, settings.show_assists, settings.show_only_death_notices,
             settings.death_notices_duration, settings.player_voices_enabled, settings.record_audio,
             settings.true_view, settings.framerate, settings.video_codec, settings.constant_rate_factor,
-            settings.output_parameters, settings.container) == (
-        True, True, True, 5, True, True, False, 60, "libx264", 23, "", "mp4")
+            settings.output_parameters, settings.container, settings.scale_to) == (
+        True, True, True, 5, True, True, False, 60, "libx264", 23, "", "mp4", None)
 
 
 def test_a_sequences_cfg_schedules_its_steps_then_seeks_to_where_it_lands():

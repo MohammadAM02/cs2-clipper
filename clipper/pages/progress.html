@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Progress</title>
+<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/touches.css">
+</head>
+<body>
+<script src="/app.js"></script>
+<script src="/nugget.js"></script>
+<script src="/pixelscene.js"></script>
+<script src="/touches.js" defer></script>
+<script>renderNav("/progress");</script>
+<main>
+  <section class="pagehead rise">
+    <h1 class="title">Progress</h1>
+    <div class="saybox"><span data-nugget="rendering"></span><p class="say" id="say">Loading…</p></div>
+  </section>
+  <div class="toolbar" id="tools" hidden>
+    <span class="lbl">Your form over</span>
+    <span id="windows" role="group" aria-label="How many matches the form covers" style="display:contents"></span>
+    <span class="end" id="count"></span>
+  </div>
+  <div class="cards" id="cards" hidden>
+    <div id="kpis" style="display:contents"></div>
+    <section class="card w8" aria-labelledby="h-run">
+      <div class="chead"><h2 class="h3" id="h-run">Match by match</h2><span class="lbl" id="run-lbl">Rating 2.0, oldest first</span></div>
+      <div id="run" style="flex:1 1 190px;min-height:190px;position:relative"></div>
+      <div class="legend"><span><i style="--c:var(--accent)"></i>Win</span><span><i style="--c:#5E544B"></i>Loss</span><span><i style="--c:var(--cap)"></i>Tie</span><span><i style="--c:var(--line2)"></i>The dashed line is 1.00</span></div>
+    </section>
+    <section class="card w4" aria-labelledby="h-mis">
+      <div class="chead"><h2 class="h3" id="h-mis">Mistakes</h2><span class="lbl" id="mis-lbl"></span></div>
+      <ul class="mrows" id="mis"></ul>
+      <p class="note" id="mis-note" hidden></p>
+    </section>
+    <section class="card w8" aria-labelledby="h-maps">
+      <div class="chead"><h2 class="h3" id="h-maps">Maps</h2><span class="lbl">Every match with stats. A map's name opens its heatmap.</span></div>
+      <div class="wrap" id="maps"></div>
+    </section>
+    <section class="card w4" aria-labelledby="h-rec">
+      <div class="chead"><h2 class="h3" id="h-rec">Records</h2><span class="lbl">Your best match for each</span></div>
+      <ul class="recs" id="recs"></ul>
+    </section>
+  </div>
+  <div class="emptybig rise" id="empty" hidden>
+    <span data-nugget-full="idle"></span>
+    <h2 id="empty-h">Nothing to chart yet</h2>
+    <p id="empty-p">Progress fills in once a Demo of yours has been analyzed: your form, your maps, your Mistakes and your records, match after match.</p>
+  </div>
+</main>
+<script>
+// Progress (spec: Progress): how the player's game moves from match to match. Their form over their last matches
+// against the matches before, a bar a match, their Mistakes by kind, each map's numbers and their records. All of it
+// is worked out by the app (progress.py); the page draws it. PC-only, like everything but Demos to grab and Reels.
+const WINDOW_KEY = "clipper.progress.last";
+const WINDOWS = [[10, "10 matches"], [20, "20 matches"], [50, "50 matches"], [0, "All"]];
+const pct = v => `${Math.round(v * 10) / 10}%`;
+const two = v => Number(v).toFixed(2);
+const one = v => Number(v).toFixed(1);
+// The form's numbers: [key, what the page calls it, how its value is written, what follows a change ("pts" for a
+// percentage: 4.2 pts, not 4.2%)].
+const KPIS = [["win_pct", "Win rate", pct, " pts"], ["rating", "Rating 2.0", two, ""], ["kd", "K/D", two, ""],
+  ["adr", "ADR", one, ""], ["hs_pct", "HS%", pct, " pts"], ["kast_pct", "KAST", pct, " pts"],
+  ["opening_win_pct", "Opening duels won", pct, " pts"], ["mistakes", "Mistakes a match", one, ""]];
+let asked = 20;
+try { const kept = +localStorage.getItem(WINDOW_KEY); if (WINDOWS.some(([n]) => n === kept) && localStorage.getItem(WINDOW_KEY) !== null) asked = kept; } catch (e) { /* no storage: 20 */ }
+
+document.querySelectorAll("[data-nugget]").forEach(n => { n.outerHTML = NUGGET.head(n.dataset.nugget); });
+document.querySelectorAll("[data-nugget-full]").forEach(n => { n.outerHTML = NUGGET.svg(n.dataset.nuggetFull, "Nugget, asleep on his egg"); });
+
+function kpi([key, label, write, unit], form, span) {
+  const f = form[key];
+  const value = f.value === null ? "–" : write(f.value);
+  let moved = `<span>No earlier matches to compare</span>`;
+  if (f.delta !== null && f.previous !== null) {
+    const better = f.delta === 0 ? null : (f.delta > 0) === f.higher_is_better;
+    const amount = `${write(Math.abs(f.delta)).replace("%", "")}${unit}`;
+    moved = f.delta === 0 ? `<span>Level with the ${span} before</span>`
+      : `<span class="${better ? "up" : "down"}">${f.delta > 0 ? "▲" : "▼"} ${amount}</span> vs the ${span} before`;
+  }
+  return `<section class="card kpi w3"><div class="k">${esc(label)}</div><div class="v num">${value}</div><div class="d">${moved}</div>${spark(f.series)}</section>`;
+}
+
+// A bar a match, oldest first: its height is the match's Rating 2.0, its colour the result, and it opens the match's
+// Stats. Drawn for the box it is in, on a grid of 2 px like everything else, so it is drawn again when the box changes.
+const GUTTER = 40;      // room on the left for the line's "1.00"
+function run(recent, W, H) {
+  const matches = [...recent].reverse();
+  if (!matches.length || W < 120) return "";
+  const floor = H - 26, top = 12;
+  const most = Math.max(1.6, ...matches.map(m => m.rating || 0));
+  const slot = (W - GUTTER) / matches.length, bar = Math.max(4, Math.min(36, Math.floor(slot * 0.68 / 2) * 2));
+  const y = v => floor - Math.round((floor - top) * v / most / 2) * 2;
+  const bars = matches.map((m, i) => {
+    const x = GUTTER + Math.round((i * slot + (slot - bar) / 2) / 2) * 2, h = Math.max(2, floor - y(m.rating || 0));
+    const said = `${mapName(m.map)}, ${dateLabel(m.played_at)}: ${m.result} ${m.team_score}–${m.opponent_score}, Rating ${two(m.rating)}, ${m.kills}-${m.deaths}-${m.assists}, ${plural(m.mistakes, "Mistake")}`;
+    return `<a href="/stats?match=${esc(m.checksum)}" aria-label="${esc(said)}"><title>${esc(said)}</title><rect class="${esc(m.result)}" x="${x}" y="${floor - h}" width="${bar}" height="${h}"/>${slot >= 26 ? `<text x="${x + bar / 2}" y="${H - 6}" text-anchor="middle">${mapAbbr(mapName(m.map))}</text>` : ""}</a>`;
+  }).join("");
+  return `<svg class="bars" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Rating 2.0 in each of the last ${matches.length} matches">
+    ${bars}<line class="rule" x1="${GUTTER - 6}" x2="${W}" y1="${y(1)}" y2="${y(1)}"/><text x="0" y="${y(1) + 4}">1.00</text></svg>`;
+}
+let recent = [];
+function drawRun() { const box = $("#run"); box.innerHTML = run(recent, box.clientWidth, Math.max(190, box.clientHeight)); }
+
+function mistakeRows(rows, matches) {
+  if (!rows.length) return `<li><span class="t">None found</span><span class="n"></span><p class="tip" style="color:var(--muted)">Not one in ${plural(matches, "match", "matches")}. Clean.</p></li>`;
+  const most = rows[0].count;
+  return rows.map((r, i) => `<li><span class="t">${esc(r.title)}</span><span class="n"><b>${r.count}</b> · ${one(r.per_match)} a match</span>
+    <div class="pbar"><i style="width:${Math.max(4, Math.round(100 * r.count / most))}%"></i></div>${i === 0 ? `<p class="tip">${esc(r.tip)}</p>` : ""}</li>`).join("");
+}
+
+function mapsTable(rows) {
+  const cell = (v, write) => v === null || v === undefined ? "–" : write(v);
+  const body = rows.map(r => `<tr><td><a class="mapcell" href="/heatmaps?map=${encodeURIComponent(r.map)}" title="Open ${esc(mapName(r.map))} in Heatmaps">${maptile(mapName(r.map))}${esc(mapName(r.map))}</a></td>
+    <td class="num">${r.matches}</td><td class="num">${r.wins}–${r.losses}${r.ties ? `–${r.ties}` : ""}</td>
+    <td class="num"><b>${cell(r.win_pct, pct)}</b></td><td class="num">${cell(r.rounds_won_pct, pct)}</td>
+    <td class="num">${cell(r.kd, two)}</td><td class="num">${cell(r.adr, one)}</td><td class="num"><b>${cell(r.rating, two)}</b></td>
+    <td class="num">${cell(r.mistakes, one)}</td></tr>`).join("");
+  return `<table class="tbl" aria-label="Your numbers on each map"><thead><tr><th>Map</th><th>Played</th><th>W–L</th><th>Win %</th>
+    <th>Rounds %</th><th>K/D</th><th>ADR</th><th>Rating</th><th>Mistakes</th></tr></thead><tbody>${body}</tbody></table>`;
+}
+
+const RECORD_WRITE = {hs_pct: pct, kast_pct: pct, rating: two, adr: one};
+const records = rows => rows.map(r => `<li><span class="k">${esc(r.label)}</span><span class="v num">${(RECORD_WRITE[r.key] || String)(r.value)}</span>
+  <a href="/stats?match=${esc(r.checksum)}">${esc(mapName(r.map))}, ${esc(dateLabel(r.played_at))}</a></li>`).join("");
+
+function say(data) {
+  const rating = data.form.rating, span = data.window;
+  let line = `${plural(data.matches, "match", "matches")} with stats.`;
+  if (rating.delta !== null && rating.delta !== 0) line += ` Your Rating is ${rating.delta > 0 ? "up" : "down"} ${two(Math.abs(rating.delta))} over your last ${span}.`;
+  else if (rating.value !== null) line += ` Rating ${two(rating.value)} over your last ${span}.`;
+  return line;
+}
+
+function render(data) {
+  const empty = data.state !== "ready";
+  $("#empty").hidden = !empty;
+  $("#cards").hidden = $("#tools").hidden = empty;
+  if (empty) {
+    $("#say").textContent = data.subject ? "No match of yours has stats yet." : "I don't know who you are yet.";
+    if (!data.subject) {
+      $("#empty-h").textContent = "Whose progress?";
+      $("#empty-p").innerHTML = 'Look up your FACEIT nickname in <a href="/settings">Settings</a>, and your matches show up here.';
+    }
+    return;
+  }
+  asked = data.asked;
+  $("#say").textContent = say(data);
+  $("#windows").innerHTML = WINDOWS.map(([n, label]) => `<button class="chip${n === asked ? " on" : ""}" data-last="${n}" aria-pressed="${n === asked}">${label}</button>`).join("");
+  $("#count").textContent = data.left_out ? `${plural(data.left_out, "match", "matches")} left out: no stats yet` : "";
+  $("#kpis").innerHTML = KPIS.map(k => kpi(k, data.form, data.window)).join("");
+  recent = data.recent;
+  $("#mis-lbl").textContent = `Your last ${plural(data.window, "match", "matches")}`;
+  $("#mis").innerHTML = mistakeRows(data.mistakes, data.window);
+  const note = $("#mis-note");
+  note.hidden = !data.without_flashes;
+  note.textContent = data.without_flashes ? `${plural(data.without_flashes, "of these matches was", "of these matches were")} analyzed before the app kept flashes, so no team flash is counted in ${data.without_flashes === 1 ? "it" : "them"} yet. The app reads ${data.without_flashes === 1 ? "it" : "them"} again while CS2 is closed.` : "";
+  $("#maps").innerHTML = mapsTable(data.maps);
+  $("#recs").innerHTML = records(data.records);
+  drawRun();
+}
+if (typeof ResizeObserver === "function") new ResizeObserver(() => { if (recent.length) drawRun(); }).observe($("#run"));
+
+async function load() {
+  const r = await api(`/api/progress?last=${asked}`);
+  if (r.ok) render(await r.json());
+  else $("#say").textContent = "The app didn't answer. Trying again.";
+}
+$("#windows").addEventListener("click", e => {
+  const b = e.target.closest("[data-last]");
+  if (!b) return;
+  asked = +b.dataset.last;
+  try { localStorage.setItem(WINDOW_KEY, String(asked)); } catch (err) { /* no storage: it lasts this visit */ }
+  load();
+});
+every(60000, load, 120000);
+</script>
+</body>
+</html>

@@ -71,6 +71,8 @@ MATCH: dict[str, Any] = {
     "clutches": [{"roundNumber": 3, "clutcherSteamId": int(SUBJECT), "opponentCount": 2, "hasWon": True}],
     "damages": [{"tick": 3000, "roundNumber": 1, "attackerSteamId": int(SUBJECT), "victimSteamId": int(ENEMY),
                  "healthDamage": 100, "weaponName": "AK-47"}],
+    "playersFlashed": [{"tick": 2900, "roundNumber": 1, "flasherSteamId": int(SUBJECT), "flashedSteamId": int(ENEMY),
+                        "duration": 2.5, "flasherSide": T, "flashedSide": CT}],
     "playerPositions": [{"tick": 3000, "x": 1.0}],
     "grenadePositions": [],
     "shots": [{"tick": 2999}],

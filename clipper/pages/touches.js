@@ -7,7 +7,7 @@
 (() => {
 const PAGE = location.pathname;
 const PC = onThisPC();
-const PAGES = [["/status", "Status"], ["/demos", "Demos to grab"], ["/reels", "Reels"], ["/settings", "Settings"]];
+const PAGES = NAV_PAGES;           // app.js: the side rack's pages, in its order
 const MAP_TINT = MAP_TINTS;        // app.js: the map tiles wear the same colours
 const STRIP_FRAMES = 12;           // as many frames as the app cuts into a Reel's strip (web.py, STRIP_FRAMES)
 
@@ -246,7 +246,7 @@ addEventListener("pointermove", aimWheel, {passive: true});
 // --- the shortcut sheet (?) ----------------------------------------------------------------------------------------
 const KEYMAP = [
   ["Anywhere", [[["Tab"], "Hold for this week's scoreboard"], [["~"], "Console"], [["B"], "Hold for the quick wheel"],
-    [["1", "2", "3", "4"], "Go to a page"], [["Q"], "Back to the last page"], [["P"], "Pause or resume rendering"],
+    [["1", "…", "6"], "Go to a page"], [["Q"], "Back to the last page"], [["P"], "Pause or resume rendering"],
     [["?"], "All shortcuts"], [["Esc"], "Close whatever is open"]]],
   ["Status", [[["R"], "Retry what failed"]]],
   ["Demos to grab", [[["↑", "↓"], "Pick a match"], [["S"], "Skip it (or drag it left)"], [["Z"], "Undo the skip"]]],
@@ -717,7 +717,7 @@ document.addEventListener("keydown", e => {
   const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
   if (key === "b") { if (wheel && !wheel.held) hideWheel(); else showWheel(true); return; }
   if (key === "?") { toggleSheet(); return; }
-  if ("1234".includes(key) && key.length === 1) { const [path] = PAGES[+key - 1]; if (path !== PAGE) go(path); return; }
+  if ("123456".includes(key) && key.length === 1) { const [path] = PAGES[+key - 1]; if (path !== PAGE) go(path); return; }
   if (key === "q") { const prev = store.get("prev", null); if (prev && prev !== PAGE) go(prev); return; }
   if (key === "p") { doing(togglePause); return; }
   if (PAGE === "/status" && key === "r") { doing(retryFailed); return; }

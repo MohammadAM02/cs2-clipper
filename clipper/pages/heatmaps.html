@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Heatmaps</title>
+<link rel="stylesheet" href="/app.css">
+<link rel="stylesheet" href="/touches.css">
+</head>
+<body>
+<script src="/app.js"></script>
+<script src="/nugget.js"></script>
+<script src="/pixelscene.js"></script>
+<script src="/touches.js" defer></script>
+<script>renderNav("/heatmaps");</script>
+<main>
+  <section class="pagehead rise">
+    <h1 class="title">Heatmaps</h1>
+    <div class="saybox"><span data-nugget="rendering"></span><p class="say" id="say">Loading…</p></div>
+  </section>
+  <div id="tools" hidden style="display:flex;flex-direction:column;gap:10px">
+    <div class="toolbar" id="maps" role="group" aria-label="Map"></div>
+    <div class="toolbar">
+      <span class="lbl">Show</span><span id="kinds" role="group" aria-label="What to show" style="display:contents"></span>
+      <span class="gap"></span><span class="lbl">Side</span><span id="sides" role="group" aria-label="Your side" style="display:contents"></span>
+      <span class="gap"></span><span class="lbl">Matches</span><span id="spans" role="group" aria-label="Which matches" style="display:contents"></span>
+    </div>
+  </div>
+  <div class="heat" id="heat" hidden>
+    <div>
+      <div class="radar" id="radar"><canvas id="map" width="768" height="768" role="img" aria-label="Where your Frags and deaths happened on the map"></canvas><div class="tipbox" id="tip" hidden></div></div>
+      <p class="note" id="radar-note" style="margin-top:10px" hidden></p>
+    </div>
+    <div class="side">
+      <section class="card"><div class="chead"><h2 class="h3">On this map</h2><span class="lbl" id="over"></span></div><div class="duo" id="totals"></div>
+        <div class="legend"><span><i style="--c:var(--good)"></i>Where you stood for a Frag</span><span><i style="--c:var(--bad)"></i>Where you died</span></div>
+        <p class="note" style="font-size:13px">A cell is green where you win more fights than you lose, red where you lose more, and brighter the more happens in it. Point at a square to see it; click to open its match.</p></section>
+      <section class="card"><div class="chead"><h2 class="h3">By side</h2></div><div class="duo" id="bysides"></div></section>
+      <section class="card"><div class="chead"><h2 class="h3">Weapons</h2></div><div class="duo" id="weapons"></div></section>
+    </div>
+  </div>
+  <div class="emptybig rise" id="empty" hidden>
+    <span data-nugget-full="idle"></span>
+    <h2>No map to draw yet</h2>
+    <p>Heatmaps fill in once a Demo of yours has been analyzed: where you get your Frags and where you die, on each map.</p>
+  </div>
+</main>
+<script>
+// Heatmaps (spec: Progress): where the player's Frags and deaths happen on a map, over one match or many. The radar is
+// CS2's own picture of the map, read from the game on this PC; the heat is drawn over it in square cells, green
+// where they win more fights than they lose and red where they lose more, with a square for each Frag (where they
+// stood) and each death (where they died). PC-only, like everything but Demos to grab and Reels.
+const SIZE = 768, CELL = 24;                // the canvas and a heat cell, in canvas pixels
+const CROWD = 150;                          // with more places than this on the map, each one's square is drawn smaller
+const KINDS = [["both", "Both"], ["kill", "Frags"], ["death", "Deaths"]];
+const SIDES = [["", "Both"], ["T", "T"], ["CT", "CT"]];
+const SPANS = [[0, "All"], [10, "Last 10"], [20, "Last 20"]];
+const GOOD = "#8BE08B", BAD = "#FF7A66";
+const query = new URLSearchParams(location.search);
+const state = {map: query.get("map") || "", match: query.get("match") || "", kind: "both", side: "", last: 0};
+let data = null, picture = null, pictureOf = "", asked = new Set(), shown = [];
+const canvas = $("#map"), ctx = canvas.getContext("2d");
+
+document.querySelectorAll("[data-nugget]").forEach(n => { n.outerHTML = NUGGET.head(n.dataset.nugget); });
+document.querySelectorAll("[data-nugget-full]").forEach(n => { n.outerHTML = NUGGET.svg(n.dataset.nuggetFull, "Nugget, asleep on his egg"); });
+
+const chips = (list, on, name) => list.map(([value, label]) => `<button class="chip${value === on ? " on" : ""}" data-${name}="${esc(value)}" aria-pressed="${value === on}">${esc(label)}</button>`).join("");
+
+// Where a place in the world is on the canvas. With the radar it is the radar's own arithmetic (radar.py's
+// world_to_pixel); without one, the places are fitted to the canvas, to scale and the right way up.
+function placer(places) {
+  const r = data.radar;
+  if (r) {
+    const k = SIZE / r.width;
+    return (x, y) => {
+      const u = (x - r.pos_x) / r.scale, v = (r.pos_y - y) / r.scale;
+      return r.rotate === 1 ? [(r.height - v) * k, u * k] : [u * k, v * k];
+    };
+  }
+  if (!places.length) return () => [SIZE / 2, SIZE / 2];
+  const xs = places.map(p => p.x), ys = places.map(p => p.y);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const k = (SIZE - 96) / Math.max(x1 - x0, y1 - y0, 1);
+  const ox = (SIZE - (x1 - x0) * k) / 2, oy = (SIZE - (y1 - y0) * k) / 2;
+  return (x, y) => [ox + (x - x0) * k, oy + (y1 - y) * k];
+}
+
+const visible = () => data.places.filter(p => (state.kind === "both" || p.kind === state.kind) && (!state.side || p.side === state.side));
+
+function draw() {
+  const places = visible(), at = placer(data.places);
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, SIZE, SIZE);
+  ctx.fillStyle = "#0A0807";
+  ctx.fillRect(0, 0, SIZE, SIZE);
+  if (picture && pictureOf === data.map && data.radar) { ctx.globalAlpha = 0.5; ctx.drawImage(picture, 0, 0, SIZE, SIZE); ctx.globalAlpha = 1; }
+  // the heat: each cell's Frags and deaths, the commoner of the two its colour, and the more there are the stronger
+  const cells = new Map();
+  shown = places.map(p => { const [px, py] = at(p.x, p.y); return {...p, px, py}; });
+  for (const p of shown) {
+    if (p.px < 0 || p.py < 0 || p.px >= SIZE || p.py >= SIZE) continue;
+    const key = Math.floor(p.px / CELL) + "," + Math.floor(p.py / CELL);
+    const cell = cells.get(key) || {kill: 0, death: 0};
+    cell[p.kind] += 1;
+    cells.set(key, cell);
+  }
+  const most = Math.max(1, ...[...cells.values()].map(c => c.kill + c.death));
+  for (const [key, c] of cells) {
+    const [cx, cy] = key.split(",").map(Number), total = c.kill + c.death;
+    const level = Math.min(4, 1 + Math.floor(3.999 * (total - 1) / Math.max(1, most - 1)));     // four steps, no blur
+    ctx.globalAlpha = [0, 0.2, 0.34, 0.5, 0.68][level];
+    ctx.fillStyle = c.kill === c.death ? "#F2E7CF" : c.kill > c.death ? GOOD : BAD;
+    ctx.fillRect(cx * CELL, cy * CELL, CELL, CELL);
+  }
+  ctx.globalAlpha = 1;
+  const DOT = shown.length > CROWD ? 4 : 6, edge = shown.length > CROWD ? 1 : 2;
+  for (const p of shown) {
+    const x = Math.round(p.px - DOT / 2), y = Math.round(p.py - DOT / 2);
+    ctx.fillStyle = "#0D0A08";
+    ctx.fillRect(x - edge, y - edge, DOT + 2 * edge, DOT + 2 * edge);
+    ctx.fillStyle = p.kind === "kill" ? GOOD : BAD;
+    ctx.fillRect(x, y, DOT, DOT);
+  }
+  sums(places);
+}
+
+const share = (n, of) => of ? `${Math.round(100 * n / of)}%` : "–";
+const topWeapons = (places, n = 3) => {
+  const counts = new Map();
+  for (const p of places) counts.set(p.weapon || "?", (counts.get(p.weapon || "?") || 0) + 1);
+  return [...counts].sort((a, b) => b[1] - a[1]).slice(0, n).map(([weapon, count]) => `${esc(weapon)} ${count}`).join("<br>") || "–";
+};
+function sums(places) {
+  const frags = places.filter(p => p.kind === "kill"), deaths = places.filter(p => p.kind === "death");
+  const cell = (k, v, d = "") => `<div><div class="k">${k}</div><div class="v num">${v}</div><div class="d">${d}</div></div>`;
+  const kd = (f, d) => d ? (f / d).toFixed(2) : f ? "∞" : "–";
+  $("#totals").innerHTML = cell("Frags", frags.length, `${share(frags.filter(p => p.headshot).length, frags.length)} headshots`)
+    + cell("Deaths", deaths.length, `K/D ${kd(frags.length, deaths.length)}`);
+  const on = side => [frags.filter(p => p.side === side).length, deaths.filter(p => p.side === side).length];
+  const [tf, td] = on("T"), [cf, cd] = on("CT");
+  $("#bysides").innerHTML = cell("T side", `${tf}–${td}`, `Frags–deaths, K/D ${kd(tf, td)}`) + cell("CT side", `${cf}–${cd}`, `Frags–deaths, K/D ${kd(cf, cd)}`);
+  $("#weapons").innerHTML = `<div><div class="k">Your Frags with</div><div class="d" style="color:var(--ink2)">${topWeapons(frags)}</div></div>
+    <div><div class="k">You died to</div><div class="d" style="color:var(--ink2)">${topWeapons(deaths)}</div></div>`;
+}
+
+function render() {
+  const empty = data.state !== "ready";
+  $("#empty").hidden = !empty;
+  $("#heat").hidden = empty;
+  $("#tools").hidden = empty;
+  if (empty) { $("#say").textContent = "No match of yours has been analyzed yet."; return; }
+  state.map = data.map;
+  const name = mapName(data.map), one = data.match && data.matches[0];
+  $("#maps").innerHTML = data.maps.map(m => `<button class="chip${m.map === data.map ? " on" : ""}" data-map="${esc(m.map)}" aria-pressed="${m.map === data.map}">${esc(mapName(m.map))} <span class="n">${m.matches}</span></button>`).join("");
+  $("#kinds").innerHTML = chips(KINDS, state.kind, "kind");
+  $("#sides").innerHTML = chips(SIDES, state.side, "side");
+  $("#spans").innerHTML = one
+    ? `<button class="chip on" data-clear="1" title="Show every match on ${esc(name)}">${esc(dateLabel(one.played_at))}, ${one.team_score}–${one.opponent_score} ✕</button>`
+    : chips(SPANS, state.last, "last");
+  const frags = data.places.filter(p => p.kind === "kill").length, deaths = data.places.length - frags;
+  $("#over").textContent = one ? "This match" : plural(data.matches.length, "match", "matches");
+  $("#say").textContent = `${name}: ${plural(frags, "Frag")} and ${plural(deaths, "death")} over ${one ? "this match" : plural(data.matches.length, "match", "matches")}.`;
+  const note = $("#radar-note");
+  note.hidden = Boolean(data.radar);
+  note.textContent = data.radar ? "" : `The picture of ${name} is read from your CS2 the next time CS2 and FACEIT AC are both closed. Until then the places are drawn to scale without it.`;
+  if (data.radar && pictureOf !== data.map) {
+    const img = new Image();
+    img.onload = () => { picture = img; pictureOf = data.map; draw(); };
+    img.src = `/radar/${encodeURIComponent(data.map)}.png`;
+  }
+  if (!data.radar && !asked.has(data.map)) { asked.add(data.map); api(`/api/radar/${encodeURIComponent(data.map)}`, {method: "POST"}).catch(() => {}); }
+  history.replaceState(null, "", `/heatmaps?map=${encodeURIComponent(data.map)}${data.match ? `&match=${encodeURIComponent(data.match)}` : ""}`);
+  draw();
+}
+
+async function load() {
+  const ask = new URLSearchParams();
+  if (state.map) ask.set("map", state.map);
+  if (state.match) ask.set("match", state.match);
+  if (state.last) ask.set("last", state.last);
+  const r = await api(`/api/heatmap?${ask}`);
+  if (!r.ok) { $("#say").textContent = "The app didn't answer. Trying again."; return; }
+  const next = await r.json(), text = JSON.stringify(next);
+  if (text === load.last) return;
+  load.last = text;
+  data = next;
+  render();
+}
+
+$("#tools").addEventListener("click", e => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  if (b.dataset.map !== undefined) { state.map = b.dataset.map; state.match = ""; load(); }
+  else if (b.dataset.clear) { state.match = ""; load(); }
+  else if (b.dataset.last !== undefined) { state.last = +b.dataset.last; load(); }
+  else if (b.dataset.kind !== undefined) { state.kind = b.dataset.kind; render(); }
+  else if (b.dataset.side !== undefined) { state.side = b.dataset.side; render(); }
+});
+
+// The place under the pointer, if one is within reach: what it was, and a click opens its match's Stats.
+function under(e) {
+  const box = canvas.getBoundingClientRect(), k = SIZE / box.width;
+  const x = (e.clientX - box.left) * k, y = (e.clientY - box.top) * k;
+  let best = null, reach = 14 * 14;
+  for (const p of shown) { const d = (p.px - x) ** 2 + (p.py - y) ** 2; if (d < reach) { best = p; reach = d; } }
+  return best;
+}
+canvas.addEventListener("pointermove", e => {
+  const p = under(e), tip = $("#tip");
+  tip.hidden = !p;
+  canvas.style.cursor = p ? "pointer" : "";
+  if (!p) return;
+  const m = data.matches[p.m], box = $("#radar").getBoundingClientRect();
+  tip.innerHTML = `<b>${p.kind === "kill" ? "Frag" : "Death"}</b>${p.side ? ` as ${esc(p.side)}` : ""}, round ${p.round}<br>${esc(p.weapon)}${p.headshot ? ", headshot" : ""}<br>${esc(dateLabel(m.played_at))}, ${m.team_score}–${m.opponent_score}`;
+  const left = e.clientX - box.left, topAt = e.clientY - box.top;
+  tip.style.left = `${Math.min(left + 14, box.width - tip.offsetWidth - 6)}px`;
+  tip.style.top = `${Math.min(topAt + 14, box.height - tip.offsetHeight - 6)}px`;
+});
+canvas.addEventListener("pointerleave", () => { $("#tip").hidden = true; });
+canvas.addEventListener("click", e => { const p = under(e); if (p) location.href = `/stats?match=${encodeURIComponent(data.matches[p.m].checksum)}`; });
+
+every(8000, load, 60000);
+</script>
+</body>
+</html>

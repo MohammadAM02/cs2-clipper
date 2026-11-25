@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from clipper import analysis, stats
+from clipper import analysis, mistakes, review, stats
 from clipper.hlae_plan import Kill, Player, Round
 from clipper.model import MatchInfo, RoundFacts
 from tests.csda_json import (ALLY, BRAVO, CHECKSUM, CT, DEMO_NAME, ENEMY, MATCH, OTHER_ENEMY, SUBJECT, T, kill,
@@ -181,6 +181,110 @@ def test_has_hits_says_whether_the_kept_analysis_has_them(tmp_path, dem):
     assert store.has_hits(CHECKSUM) is False
     analysis.Analyses(tmp_path / "analyses", tmp_path / "csda.exe", run=FakeCsda()).analyze(dem, tmp_path / "a.log")
     assert store.has_hits(CHECKSUM) is True
+
+
+def test_the_kept_copy_keeps_each_flash_with_only_what_the_mistakes_are_worked_out_from():
+    assert analysis.trim(MATCH)["playersFlashed"] == [
+        {"tick": 2900, "roundNumber": 1, "flasherSteamId": int(SUBJECT), "flashedSteamId": int(ENEMY),
+         "duration": 2.5}]
+    assert analysis.trim(match(playersFlashed=None))["playersFlashed"] == []      # csda wrote null: no flashes
+
+
+def test_has_flashes_says_whether_the_kept_analysis_has_them(tmp_path, dem):
+    old = match()
+    del old["playersFlashed"]
+    store = analysis.Analyses(tmp_path / "analyses", tmp_path / "csda.exe", run=FakeCsda(old))
+    store.analyze(dem, tmp_path / "analyze.log")
+    assert store.has_flashes(CHECKSUM) is False
+    analysis.Analyses(tmp_path / "analyses", tmp_path / "csda.exe", run=FakeCsda()).analyze(dem, tmp_path / "a.log")
+    assert store.has_flashes(CHECKSUM) is True
+
+
+# --- what the Mistakes and the Heatmaps are worked out from (spec: Progress) ------------------------------
+
+def test_the_review_match_is_the_teams_rounds_kills_and_kept_flashes():
+    worked = analysis.review_match(analysis.trim(MATCH))
+    assert worked.tickrate == 64.0
+    assert worked.teams == {SUBJECT: "team_Alpha", ALLY: "team_Alpha", ENEMY: "team_Bravo", OTHER_ENEMY: "team_Bravo"}
+    assert worked.rounds == (mistakes.Round(1, 1000), mistakes.Round(2, 9500), mistakes.Round(3, 18500))
+    assert mistakes.Kill(11500, 2, "", SUBJECT, "AK-47", False) in worked.kills           # the world, as nobody
+    assert worked.flashes == (mistakes.Flash(2900, 1, SUBJECT, ENEMY, 2.5),)
+
+
+def test_a_victim_csda_says_was_blind_is_blind_and_an_analysis_without_flashes_has_none():
+    old = match(kills=[kill(3000, 1, ENEMY, SUBJECT, killer_side=CT, victim_side=T, is_victim_blinded=True)])
+    del old["playersFlashed"]
+    worked = analysis.review_match(old)
+    assert worked.kills == (mistakes.Kill(3000, 1, ENEMY, SUBJECT, "AK-47", True),)
+    assert worked.flashes is None
+
+
+def placed(tick: int, round_number: int, killer: str | None, victim: str, **fields):
+    where = {"killerX": 100.0, "killerY": 200.0, "killerZ": 0.0, "victimX": -300.5, "victimY": 400.25, "victimZ": 0.0}
+    return kill(tick, round_number, killer, victim, **{**where, **fields})
+
+
+def test_the_places_are_where_the_subject_stood_for_a_frag_and_where_they_died():
+    data = match(kills=[
+        placed(3100, 1, SUBJECT, ENEMY, isHeadshot=True),
+        placed(3000, 1, ENEMY, SUBJECT, killer_side=CT, victim_side=T, weaponName="AWP"),
+    ])
+    death, frag = analysis.places(data, SUBJECT)
+    assert death == review.Place("death", 1, 3000, "T", -300.5, 400.25, 100.0, 200.0, "AWP", False)
+    assert frag == review.Place("kill", 1, 3100, "T", 100.0, 200.0, -300.5, 400.25, "AK-47", True)
+
+
+def test_team_kills_the_world_other_players_and_kills_without_a_place_or_a_round_are_left_out():
+    data = match(kills=[
+        placed(3000, 1, SUBJECT, ALLY, victim_side=T),                    # a team kill
+        placed(3100, 1, None, SUBJECT, killer_side=0, victim_side=T),     # the world
+        placed(3200, 1, ENEMY, ALLY, killer_side=CT, victim_side=T),      # not the subject's
+        kill(3300, 1, SUBJECT, ENEMY),                                    # csda gave no place
+        placed(30000, 4, SUBJECT, ENEMY),                                 # a round with no row
+    ])
+    assert analysis.places(data, SUBJECT) == []
+
+
+def review_store(tmp_path, dem, data=MATCH):
+    store = analysis.Analyses(tmp_path / "analyses", tmp_path / "csda.exe", run=FakeCsda(data))
+    store.analyze(dem, tmp_path / "analyze.log")
+    return store
+
+
+def test_the_review_is_worked_out_once_and_kept_beside_the_analysis(tmp_path, dem):
+    store = review_store(tmp_path, dem)
+    first = store.review(CHECKSUM, SUBJECT)
+    assert first["line"]["kills"] == 4 and [m["type"] for m in first["mistakes"]] == ["TEAM_KILL", "OWN_DEATH"]
+    kept = tmp_path / "analyses" / f"{CHECKSUM}.review.json"
+    assert json.loads(kept.read_text(encoding="utf-8")) == first
+    kept.write_text(json.dumps({**first, "places": ["read from the kept copy"]}), encoding="utf-8")
+    assert store.review(CHECKSUM, SUBJECT)["places"] == ["read from the kept copy"]
+
+
+def test_the_review_is_worked_out_again_when_the_stats_change_the_subject_changes_or_the_copy_is_damaged(tmp_path, dem):
+    store = review_store(tmp_path, dem)
+    assert store.review(CHECKSUM, SUBJECT)["line"]["source"] == "demo"
+    store.add_faceit(CHECKSUM, {SUBJECT: {"nickname": "sub", "stats": {"Kills": "21", "Deaths": "15", "Assists": "4",
+                                                                   "ADR": "88.5", "Headshots %": "48"}}})
+    assert store.review(CHECKSUM, SUBJECT)["line"]["source"] == "faceit"
+    assert store.review(CHECKSUM, ENEMY)["subject"] == ENEMY
+    (tmp_path / "analyses" / f"{CHECKSUM}.review.json").write_text("{not json", encoding="utf-8")
+    assert store.review(CHECKSUM, SUBJECT)["subject"] == SUBJECT
+
+
+def test_a_match_without_stats_has_a_review_without_a_line_and_one_without_an_analysis_has_none(tmp_path, dem):
+    store = review_store(tmp_path, dem)
+    (tmp_path / "analyses" / f"{CHECKSUM}.stats.json").unlink()
+    made = store.review(CHECKSUM, SUBJECT)
+    assert made["line"] is None and len(made["mistakes"]) == 2
+    assert store.review("abc", SUBJECT) is None
+
+
+def test_forgetting_a_match_removes_its_review(tmp_path, dem):
+    store = review_store(tmp_path, dem)
+    store.review(CHECKSUM, SUBJECT)
+    store.forget(CHECKSUM)
+    assert not (tmp_path / "analyses" / f"{CHECKSUM}.review.json").exists()
 
 
 # --- running csda and keeping its analysis ----------------------------------------------------------------

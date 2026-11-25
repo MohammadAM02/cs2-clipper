@@ -1,9 +1,9 @@
-"""The Flask app: the four pages (Status, Demos to grab, Reels, Settings), their JSON endpoints, and the
-reach and action guards (spec: Pages, Reach from other devices). Every route is PC-only except the Demos
-to grab page, its list and its actions, the Reels page with what it reads (its list, each Reel's video, frame and
-scrub strip: watch and download, nothing else), and the stylesheets and scripts those load; every POST, PUT and
-DELETE, those included, must carry the marker header. What the pages need from the app comes in through
-`WebContext`, so a test builds one with only the fields it exercises.
+"""The Flask app: the pages (Status, Demos to grab, Reels, Progress, Heatmaps, Settings, and a match's Stats and
+Replay), their JSON endpoints, and the reach and action guards (spec: Pages, Reach from other devices). Every route is
+PC-only except the Demos to grab page, its list and its actions, the Reels page with what it reads (its list, each
+Reel's video, frame and scrub strip: watch and download, nothing else), and the stylesheets and scripts those load;
+every POST, PUT and DELETE, those included, must carry the marker header. What the pages need from the app comes in
+through `WebContext`, so a test builds one with only the fields it exercises.
 
 Structure adapted from thelifeofsuleyman/cs2-clipper's `aegis/web.py` (a single Flask app factory);
 `WebServer` adapts `_serve` from `aegis/app.py` (waitress on a background thread), replacing its
@@ -53,10 +53,10 @@ from flask import Flask, Response, jsonify, redirect, request, send_file
 from waitress.server import create_server
 from werkzeug.routing import BaseConverter
 
-from clipper import applog, links, share, stats_view
+from clipper import analysis, applog, links, progress, radar, share, stats_view
 from clipper.alerts import LINK_LIFETIME, map_label, utc_now
 from clipper.analysis import Analyses
-from clipper.backfill import replay_request, request_replay
+from clipper.backfill import replay_request, request_radar, request_replay
 from clipper.checks import Check
 from clipper.config import Config
 from clipper.faceit import FaceitError
@@ -99,8 +99,8 @@ _PHONE_ENDPOINTS = frozenset({"demos_page", "demos_json", "demos_action", "app_c
 # cannot send (`_plain_host`), since what they show is the player's own clips.
 _WATCH_ENDPOINTS = frozenset({"reels_page", "api_reels", "reel_video", "reel_frame", "reel_strip"})
 # The fonts the pages load from /fonts/ (their licences sit next to them and are not served).
-_FONTS = frozenset({"Silkscreen-Regular.woff2", "Silkscreen-Bold.woff2", "PixelifySans-Regular.woff2",
-                    "PixelifySans-Medium.woff2", "PixelifySans-SemiBold.woff2", "PixelifySans-Bold.woff2"})
+_FONTS = frozenset({"Silkscreen-Regular.woff2", "Silkscreen-Bold.woff2", "SpaceGrotesk-Variable.woff2"})
+MOST_MATCHES = 500                             # the most matches one heatmap is asked over
 
 
 class _MatchIdConverter(BaseConverter):
@@ -736,6 +736,58 @@ def create_app(ctx: WebContext) -> Flask:
         if not path.is_file():
             return _no_store(jsonify(error="no radar yet")), 404
         return send_file(path, mimetype="image/png", conditional=True)
+
+    @app.post("/api/radar/<name>")
+    def api_request_radar(name: str):
+        """Asks for the radar of a map the player has a match on (Heatmaps asks when it has none): read from CS2 once
+        CS2 and FACEIT AC are both closed."""
+        index = Index(ctx.index_path)
+        try:
+            if not radar.MAP_NAME.fullmatch(name) or all(row["map"] != name for row in index.all_matches()):
+                return _no_store(jsonify(error="no match on that map")), 404
+            request_radar(index, name, utc_now())
+        finally:
+            index.close()
+        return _no_store(jsonify(requested=True)), 202
+
+    @app.get("/progress")
+    def progress_page():
+        return _no_store(Response((PAGES_DIR / "progress.html").read_bytes(), mimetype="text/html"))
+
+    @app.get("/api/progress")
+    def api_progress():
+        """`last`: how many of the last matches the form covers (one of progress.WINDOWS, or 0 for all)."""
+        config = ctx.load_settings().config
+        index = Index(ctx.index_path)
+        try:
+            body = stats_view.progress_view(index, Analyses(config.analyses_dir, config.csda_exe),
+                                            config.subject_steamid,
+                                            request.args.get("last", default=progress.DEFAULT_WINDOW, type=int))
+        finally:
+            index.close()
+        return _no_store(jsonify(body))
+
+    @app.get("/heatmaps")
+    def heatmaps_page():
+        return _no_store(Response((PAGES_DIR / "heatmaps.html").read_bytes(), mimetype="text/html"))
+
+    @app.get("/api/heatmap")
+    def api_heatmap():
+        """`map`: the map to show (the most played without it); `match`: one match's checksum, for that match alone;
+        `last`: how many of the last matches on the map (0, or nothing, for all). Anything malformed is left out."""
+        config = ctx.load_settings().config
+        map_name, checksum = request.args.get("map", ""), request.args.get("match", "")
+        last = request.args.get("last", default=0, type=int)
+        index = Index(ctx.index_path)
+        try:
+            body = stats_view.heatmap_view(
+                index, Analyses(config.analyses_dir, config.csda_exe), config.subject_steamid, config.radar_dir,
+                map_name=map_name if radar.MAP_NAME.fullmatch(map_name) else None,
+                checksum=checksum if analysis.is_checksum(checksum) else None,
+                last=min(max(last, 0), MOST_MATCHES))
+        finally:
+            index.close()
+        return _no_store(jsonify(body))
 
     @app.get("/reels")
     def reels_page():

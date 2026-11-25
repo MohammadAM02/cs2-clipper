@@ -10,8 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from clipper import analysis
-from clipper.backfill import DONE, StatsBackfill
+from clipper import analysis, radar
+from clipper.backfill import DONE, StatsBackfill, radar_requested, request_radar
 from clipper.config import Config
 from clipper.index import Index
 from clipper.intake import faceit_match_id
@@ -53,7 +53,8 @@ class FakeCsda:
 def world(tmp_path):
     cfg = Config(data_root=tmp_path / "clips", index_path=tmp_path / "index.sqlite", logs_dir=tmp_path / "logs",
                  analyses_dir=tmp_path / "analyses", tools_dir=tmp_path / "tools", cs2_settings_dir=tmp_path / "cs2",
-                 downloads_dir=tmp_path / "downloads", subject_steamid="76561190000000001")
+                 downloads_dir=tmp_path / "downloads", radar_dir=tmp_path / "radar",
+                 subject_steamid="76561190000000001")
     archive = cfg.downloads_dir / f"{DEMO_NAME}.dem.zst"
     archive.parent.mkdir(parents=True)
     archive.write_bytes(b"compressed")
@@ -152,6 +153,91 @@ def test_the_faceit_match_id_is_read_from_a_demo_file_name():
     assert faceit_match_id(f"{DEMO_NAME}.dem.zst") == MATCH_ID_OF_DEMO
     assert faceit_match_id("1-00000000-0000-4000-8000-0000000000aa-1-1.dem") == MATCH_ID_OF_DEMO
     assert faceit_match_id("my-demo.dem.zst") is None
+
+
+# --- the flashes the Mistakes are worked out from (spec: Progress) ----------------------------------------
+
+def _analyzed_before_flashes_were_kept(world):
+    """The match as the app kept it before it kept flashes: its analysis with its hits, its stats and its FACEIT
+    line, all there."""
+    old = match()
+    del old["playersFlashed"]
+    world.cfg.analyses_dir.mkdir(parents=True, exist_ok=True)
+    (world.cfg.analyses_dir / f"{CHECKSUM}.json").write_text(json.dumps(analysis.trim(old)), encoding="utf-8")
+    (world.cfg.analyses_dir / f"{CHECKSUM}.stats.json").write_text("{}", encoding="utf-8")
+    world.index.set_flag(f"faceit_stats:{CHECKSUM}", DONE)
+
+
+def test_a_match_analyzed_before_flashes_were_kept_is_analyzed_again_once(world):
+    _analyzed_before_flashes_were_kept(world)
+    assert world.analyses.has_hits(CHECKSUM) and not world.analyses.has_flashes(CHECKSUM)
+    world.backfill.tick(lambda: True)
+    assert world.csda.calls == 1
+    assert world.analyses.has_flashes(CHECKSUM)
+    world.backfill.tick(lambda: True)
+    assert world.csda.calls == 1
+
+
+def test_flashes_wait_for_the_game_to_close(world):
+    _analyzed_before_flashes_were_kept(world)
+    world.backfill.tick(lambda: False)
+    assert world.csda.calls == 0
+
+
+# --- a radar asked for by Heatmaps (spec: Progress) -------------------------------------------------------
+
+def _settled(world):
+    """The match with everything the backfill would add already there, so only a radar is left to do."""
+    world.cfg.analyses_dir.mkdir(parents=True, exist_ok=True)
+    (world.cfg.analyses_dir / f"{CHECKSUM}.json").write_text(json.dumps(analysis.trim(match())), encoding="utf-8")
+    (world.cfg.analyses_dir / f"{CHECKSUM}.stats.json").write_text("{}", encoding="utf-8")
+    world.index.set_flag(f"faceit_stats:{CHECKSUM}", DONE)
+
+
+def test_a_radar_asked_for_is_read_from_cs2_once_the_game_is_closed(world, monkeypatch):
+    _settled(world)
+    built = []
+
+    def build(name, csgo, out_dir):
+        built.append((name, csgo, out_dir))
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / f"{name}.png").write_bytes(b"png")
+        (out_dir / f"{name}.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr("clipper.backfill.radar.build", build)
+    world.backfill.radar_source = lambda: Path("C:/cs2/game/csgo")
+    request_radar(world.index, "de_mirage", world.clock())
+    assert radar_requested(world.index, "de_mirage")
+    world.backfill.tick(lambda: False)
+    assert built == [] and radar_requested(world.index, "de_mirage")       # held while the game is open
+    world.backfill.tick(lambda: True)
+    assert built == [("de_mirage", Path("C:/cs2/game/csgo"), world.cfg.radar_dir)]
+    assert not radar_requested(world.index, "de_mirage")
+    world.backfill.tick(lambda: True)
+    assert len(built) == 1
+
+
+def test_a_radar_that_is_already_there_or_cannot_be_read_is_asked_for_no_longer(world, monkeypatch):
+    _settled(world)
+    monkeypatch.setattr("clipper.backfill.radar.build", lambda *args: (_ for _ in ()).throw(OSError("no vpk")))
+    request_radar(world.index, "de_mirage", world.clock())
+    world.backfill.tick(lambda: True)                                      # no CS2 found: dropped
+    assert not radar_requested(world.index, "de_mirage")
+    world.backfill.radar_source = lambda: Path("C:/cs2/game/csgo")
+    request_radar(world.index, "de_mirage", world.clock())
+    world.backfill.tick(lambda: True)                                      # CS2's files unreadable: dropped
+    assert not radar_requested(world.index, "de_mirage")
+    world.cfg.radar_dir.mkdir(parents=True, exist_ok=True)
+    (world.cfg.radar_dir / "de_nuke.png").write_bytes(b"png")
+    (world.cfg.radar_dir / "de_nuke.json").write_text("{}", encoding="utf-8")
+    request_radar(world.index, "de_nuke", world.clock())
+    world.backfill.tick(lambda: True)                                      # already built: nothing to read
+    assert not radar_requested(world.index, "de_nuke")
+
+
+def test_only_a_map_name_can_be_asked_for(world):
+    with pytest.raises(radar.RadarError):
+        request_radar(world.index, "../etc", world.clock())
 
 
 # --- the hits a low HP is worked out from (spec: Pick your rounds, HP at a Frag) -----------------------

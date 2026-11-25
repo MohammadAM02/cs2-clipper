@@ -59,3 +59,9 @@ def test_run_from_source_a_link_starts_the_package_without_a_console(monkeypatch
     (tmp_path / "pythonw.exe").write_bytes(b"")
     monkeypatch.setattr(sys, "executable", str(tmp_path / "python.exe"))
     assert links.command() == f'"{tmp_path / "pythonw.exe"}" -m clipper --link "%1"'
+
+
+def test_progress_and_heatmaps_are_pages_the_window_shows():
+    assert links.parse("cs2clipper://progress") == Link("open", "/progress")
+    assert links.parse("cs2clipper://heatmaps") == Link("open", "/heatmaps")
+    assert links.parse("cs2clipper://heatmaps?map=de_mirage") is None      # only the page itself

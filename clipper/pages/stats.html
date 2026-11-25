@@ -7,29 +7,14 @@
 <link rel="stylesheet" href="/app.css">
 <link rel="stylesheet" href="/touches.css">
 <style>
-  /* The Stats page's own pieces; the colours, type and frames are app.css's. */
-  .back { color: var(--muted); text-decoration: none; font: 700 14px var(--ui); letter-spacing: .06em; text-transform: uppercase; }
-  .back:hover { color: var(--ink); }
+  /* The Stats page's own pieces; the colours, type, frames, tables and Mistakes are app.css's. */
   .scorecard { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 6px 0 18px; }
   .tile { background: var(--panel); border: 2px solid var(--line); border-radius: 0; padding: 12px 14px; min-width: 0; clip-path: var(--notch); }
-  .tile .k { font: 700 13px var(--ui); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
-  .tile .v { font: 800 30px var(--ui); color: var(--ink); margin-top: 2px; white-space: nowrap; }
-  .tile .d { font: 700 14px var(--ui); margin-top: 2px; min-height: 18px; color: var(--dim); }
-  .arrow.good { color: #8BE08B; } .arrow.bad { color: #FF7A66; }
+  .tile .k { font: 700 12px var(--ui); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+  .tile .v { font: 700 30px var(--ui); color: var(--ink); margin-top: 2px; white-space: nowrap; }
+  .tile .d { font: 600 13px var(--ui); margin-top: 2px; min-height: 18px; color: var(--dim); }
+  .arrow.good { color: var(--good); } .arrow.bad { color: var(--bad); }
   .src { font: 700 11px var(--ui); letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
-  .wrap { overflow-x: auto; border: 2px solid var(--line); border-radius: 0; background: var(--panel); clip-path: var(--notch); }
-  table.tbl { width: 100%; border-collapse: collapse; font: 600 15px var(--ui); white-space: nowrap; }
-  .tbl th, .tbl td { padding: 9px 10px; text-align: right; border-bottom: 2px solid var(--line); }
-  .tbl th:first-child, .tbl td:first-child { text-align: left; }
-  .tbl thead th { color: var(--muted); font-size: 13px; letter-spacing: .06em; text-transform: uppercase; background: var(--panel2); }
-  .tbl .grp th { font-size: 11px; color: var(--dim); background: var(--panel); border-bottom: 0; padding-top: 6px; }
-  .tbl button.sort { all: unset; cursor: pointer; color: inherit; }
-  .tbl button.sort:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .tbl button.sort[aria-sort="ascending"]::after { content: " ▲"; color: var(--accent); }
-  .tbl button.sort[aria-sort="descending"]::after { content: " ▼"; color: var(--accent); }
-  .tbl tr.you td { background: rgba(255, 85, 0, .09); }
-  .tbl .team { display: inline-block; width: 4px; height: 16px; border-radius: 0; margin-right: 8px; vertical-align: -3px; background: var(--line2); }
-  .tbl .team.a { background: var(--accent); }
   .round { border: 2px solid var(--line); border-radius: 0; background: var(--panel); margin-bottom: 10px; clip-path: var(--notch); }
   .round summary { cursor: pointer; padding: 12px 16px; font: 700 17px var(--ui); letter-spacing: .04em; }
   .round[open] summary { border-bottom: 2px solid var(--line); }
@@ -42,7 +27,7 @@
   .events .watch { margin-left: auto; color: var(--accent); text-decoration: none; font-weight: 700; }
   .events .watch:hover { text-decoration: underline; }
   .events .noclip { margin-left: auto; color: var(--dim); font-size: 13px; }
-  .note { color: var(--dim); font: 500 14px var(--body); margin: 8px 0 14px; }
+  main .note { margin: 8px 0 14px; }
   @media (max-width: 640px) { .tile .v { font-size: 26px; } }
 </style>
 </head>
@@ -61,9 +46,10 @@
   <div id="body"></div>
 </main>
 <script>
-// Stats (spec: Stats): one match. The scorecard is your player; the table is all ten; the timeline is each round,
-// and each kill links to its Reel at the kill's moment when the Reel has it. Nothing here runs anything: the page
-// reads the match's stats, and the stats were worked out when the match was analyzed.
+// Stats (spec: Stats): one match. The scorecard is your player; under it are your Mistakes, each with what to try
+// next time; the table is all ten; the timeline is each round, and each kill links to its Reel at the kill's moment
+// when the Reel has it. Nothing here runs anything: the page reads the match's stats, and the stats were worked out
+// when the match was analyzed.
 const checksum = new URLSearchParams(location.search).get("match") || "";
 let view = null;
 let sortKey = "kills", sortDir = -1;
@@ -195,10 +181,30 @@ function timeline() {
   }).join("");
 }
 
+// Your Mistakes in the match, in the order they happened: when, what it was, what happened, and what to try next time.
+// Watch plays the moment in a Reel that has it (a death's own, with Clip your deaths on); Replay draws the round.
+function mistakes() {
+  const m = view.mistakes;
+  if (!m) return "";
+  const heat = `<a class="more" href="/heatmaps?match=${encodeURIComponent(checksum)}">Heatmap of this match ${ICON.next}</a>`;
+  const late = m.flashes_kept ? "" : `<p class="note">This match was analyzed before the app kept flashes, so no team flash is looked for in it yet. The app reads it again while CS2 is closed.</p>`;
+  if (!m.list.length) {
+    return `<div class="sechead"><h2 class="h2">Mistakes</h2><span class="lbl">None found in this match</span>${heat}</div>${late || '<p class="note">Not one. Clean.</p>'}`;
+  }
+  const items = m.list.map(x => {
+    const clip = x.clips && x.clips[0];
+    return `<li class="mistake"><div class="when"><b>Round ${+x.round}</b>${mmss(x.t)} in</div>
+      <div><h3>${esc(x.title)}</h3><p>${esc(x.detail)}</p><p class="tip">${esc(x.tip)}</p></div>
+      <div class="acts">${clip ? `<a href="/reels?play=${+clip.reel_id}&t=${clip.seconds}">Watch</a>` : ""}<a href="/replay?match=${encodeURIComponent(checksum)}&round=${+x.round}">Replay</a></div></li>`;
+  }).join("");
+  return `<div class="sechead"><h2 class="h2">Mistakes</h2><span class="lbl">${plural(m.list.length, "moment")} that cost you, and what to try next time</span>${heat}</div>
+    <ul class="mlist" style="margin:8px 0 ${late ? 8 : 22}px">${items}</ul>${late}`;
+}
+
 function render() {
   const body = document.getElementById("body");
   const title = document.getElementById("title"), say = document.getElementById("say");
-  title.textContent = `${view.map}, ${dateLabel(view.played_at)}`;
+  title.textContent = `${mapName(view.map)}, ${dateLabel(view.played_at)}`;
   const won = view.result === "win";
   if (view.state !== "ready") {
     say.textContent = "This match's stats are still being worked out.";
@@ -213,6 +219,7 @@ function render() {
     const c = view.comparison;
     parts.push(`<div class="sechead"><h2 class="h2">You</h2><span class="lbl">${c && c.count ? `Against your last ${plural(c.count, "match", "matches")} with stats` : "No earlier matches with stats to compare with"}</span></div>`);
     parts.push(scorecard(you));
+    parts.push(mistakes());
   } else {
     parts.push(`<p class="note">Set your SteamID in Settings to see your scorecard here.</p>`);
   }

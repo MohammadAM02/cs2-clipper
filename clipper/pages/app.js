@@ -2,7 +2,10 @@
 "use strict";
 
 const MARKER_HEADER = "X-CS2-Clipper";
-const NAV_PAGES = [["/status", "Status"], ["/demos", "Demos to grab"], ["/reels", "Reels"], ["/settings", "Settings"]];
+const NAV_PAGES = [["/status", "Status"], ["/demos", "Demos to grab"], ["/reels", "Reels"], ["/progress", "Progress"],
+  ["/heatmaps", "Heatmaps"], ["/settings", "Settings"]];
+// The side rack's two groups, each named above its first page; Settings sits apart, at the foot.
+const NAV_GROUPS = {"/status": "Clips", "/progress": "Your game"};
 
 // fetch() that never caches and marks every non-GET request so the server knows it is one of ours
 // (spec: Reach from other devices -- a page on another site can never send this header).
@@ -64,6 +67,16 @@ const ICON = {
   chev: '<svg class="chev" width="24" height="24" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="M0 2h1v1h-1zM7 2h1v1h-1zM0 3h2v1h-2zM6 3h2v1h-2zM1 4h2v1h-2zM5 4h2v1h-2zM2 5h4v1h-4zM3 6h2v1h-2z"/></svg>',
   skip: '<svg width="16" height="16" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="M0 0h1v1h-1zM6 0h2v1h-2zM0 1h2v1h-2zM6 1h2v1h-2zM0 2h3v1h-3zM6 2h2v1h-2zM0 3h4v1h-4zM6 3h2v1h-2zM0 4h3v1h-3zM6 4h2v1h-2zM0 5h2v1h-2zM6 5h2v1h-2zM0 6h1v1h-1zM6 6h2v1h-2z"/></svg>',
 };
+// The side rack's icons, one per page, at 3 px a pixel.
+const navIcon = d => `<svg width="24" height="24" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="${d}"/></svg>`;
+const NAV_ICONS = {
+  "/status": navIcon("M0 0h8v1h-8zM0 1h1v4h-1zM7 1h1v4h-1zM3 2h2v2h-2zM0 5h8v1h-8zM3 6h2v1h-2zM2 7h4v1h-4z"),
+  "/demos": navIcon("M3 0h2v3h-2zM1 3h6v1h-6zM2 4h4v1h-4zM3 5h2v1h-2zM0 5h1v2h-1zM7 5h1v2h-1zM0 7h8v1h-8z"),
+  "/reels": navIcon("M0 0h8v1h-8zM0 1h1v6h-1zM7 1h1v6h-1zM3 2h1v4h-1zM4 3h1v2h-1zM5 3h1v2h-1zM0 7h8v1h-8z"),
+  "/progress": navIcon("M0 5h2v3h-2zM3 3h2v5h-2zM6 0h2v8h-2z"),
+  "/heatmaps": navIcon("M3 0h2v2h-2zM3 6h2v2h-2zM0 3h2v2h-2zM6 3h2v2h-2zM3 3h2v2h-2z"),
+  "/settings": navIcon("M0 2h8v1h-8zM1 1h2v3h-2zM0 5h8v1h-8zM5 4h2v3h-2z"),
+};
 const BADGE = {ACE: "b-ace", "5K": "b-ace", "4K": "b-4k", "3K": "b-3k", "2K": "b-2k"};
 const badge = type => `<span class="badge ${BADGE[String(type).toUpperCase()] || "b-2k"}">${esc(String(type).toUpperCase())}</span>`;
 const mapAbbr = map => { const m = String(map || "?").replace(/[^A-Za-z0-9]/g, ""); const d = m.match(/\d/); return esc((d ? m[0] + d[0] : m.slice(0, 2)).toUpperCase()); };
@@ -75,6 +88,24 @@ const maptile = (map, style = "") => {
   const css = [tint ? `--tint:${tint}` : "", style].filter(Boolean).join(";");
   return `<span class="maptile${tint ? " tinted" : ""}"${css ? ` style="${css}"` : ""}>${mapAbbr(map || "?")}</span>`;
 };
+
+// A map as people say it: "de_inferno" is Inferno (alerts.py's map_label, for the pages the app labels itself).
+const mapName = map => String(map || "").replace(/^(de|cs)_/, "").split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+
+// A run of numbers as a stepped line (app.css, .spark), oldest first: each value holds until the next, the way the
+// rest of the app moves. A gap (null) holds the value before it. Nothing is drawn for fewer than two values.
+function spark(values) {
+  const known = values.filter(v => v !== null && v !== undefined);
+  if (known.length < 2) return '<svg class="spark" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><path class="base" d="M0 17H100"/></svg>';
+  const low = Math.min(...known), high = Math.max(...known), span = high - low || 1, step = 100 / values.length;
+  const y = v => (30 - 26 * (v - low) / span).toFixed(1);
+  let last = known[0], d = `M0 ${y(last)}`;
+  values.forEach((v, i) => {
+    if (v !== null && v !== undefined) last = v;
+    d += `V${y(last)}H${((i + 1) * step).toFixed(1)}`;
+  });
+  return `<svg class="spark" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><path d="${d}"/></svg>`;
+}
 
 // --- updating lists without replaying everything ------------------------------------------------------
 // Every page polls and gets the whole picture back. `sync` keeps each row's element while its HTML is
@@ -201,46 +232,38 @@ function setSweep(mode) {
 let navPill = null;
 let navCount = null;
 
-// The nav bar every page puts at its top -- only on the PC, since a phone gets 403 from the rest.
+// The shell every page stands in: the side rack with the pages, and the strip along the top with the page's name,
+// the status pill and the window's buttons (app.css). Only on the PC, since a phone gets 403 from the rest.
 function renderNav(current) {
   if (!onThisPC()) return;
+  document.body.classList.add("has-nav");
   const nav = document.createElement("nav");
   nav.className = "nav";
   nav.setAttribute("aria-label", "Pages");
   const face = typeof NUGGET !== "undefined" ? NUGGET.head("rendering") : MARK;
-  nav.innerHTML = `<a class="brand" href="/status" aria-label="CS2 Clipper"><span class="face">${face}</span><span>CS2 Clipper</span></a>
-    <div class="tabs"><span class="navhover"></span><span class="navline"></span>
-    ${NAV_PAGES.map(([href, label]) => `<a class="tab${href === current ? " on" : ""}" href="${href}"${href === current ? ' aria-current="page"' : ""}>${label}${href === "/demos" ? '<span class="count" hidden></span>' : ""}</a>`).join("")}</div>
+  const tab = ([href, label], i) => {
+    const group = NAV_GROUPS[href];
+    const cls = ["tab", href === current ? "on" : "", group && i ? "sep" : "", href === "/settings" ? "foot" : ""].filter(Boolean).join(" ");
+    return `${group ? `<div class="navgroup">${group}</div>` : ""}<a class="${cls}" href="${href}" title="${label}"${href === current ? ' aria-current="page"' : ""}>${NAV_ICONS[href] || ""}<span>${label}</span>${href === "/demos" ? '<span class="count" hidden></span>' : ""}</a>`;
+  };
+  nav.innerHTML = `<a class="brand" href="/status" aria-label="CS2 Clipper"><span class="face">${face}</span><span>CS2<br>Clipper</span></a>
+    <div class="tabs">${NAV_PAGES.map(tab).join("")}</div>`;
+  const bar = document.createElement("header");
+  bar.className = "topbar";
+  bar.innerHTML = `<div class="crumb">${esc((NAV_PAGES.find(([href]) => href === current) || ["", ""])[1])}</div>
     <div class="spacer pywebview-drag-region"></div>
     <div class="navpill" hidden><span class="dot"></span><span></span></div>
     <span class="winctl"></span>`;
-  document.body.insertBefore(nav, document.body.firstChild);
-  navPill = $(".navpill", nav);
+  document.body.insertBefore(bar, document.body.firstChild);
+  document.body.insertBefore(nav, bar);
+  navPill = $(".navpill", bar);
   navCount = $(".count", nav);
-
-  const tabs = $(".tabs", nav), hover = $(".navhover", nav), line = $(".navline", nav);
-  const at = el => ({left: el.offsetLeft, width: el.offsetWidth});
-  const active = () => $(".tab.on", tabs) || $(".tab", tabs);
-  const place = (el, show) => {
-    const p = at(el);
-    line.style.left = (p.left + 16) + "px"; line.style.width = Math.max(0, p.width - 32) + "px";
-    hover.style.left = (p.left + 4) + "px"; hover.style.width = (p.width - 8) + "px";
-    hover.style.opacity = show ? "1" : "0";
-  };
-  tabs.addEventListener("pointerover", e => { const t = e.target.closest(".tab"); if (t) place(t, true); });
-  tabs.addEventListener("focusin", e => { const t = e.target.closest(".tab"); if (t) place(t, true); });
-  tabs.addEventListener("pointerleave", () => place(active(), false));
-  tabs.addEventListener("focusout", () => place(active(), false));
-  const settle = () => place(active(), false);
-  settle();
-  document.fonts?.ready.then(settle);
-  addEventListener("resize", settle);
 
   // Our own window buttons, once the window is frameless and the window API has them.
   addEventListener("pywebviewready", () => {
     const w = window.pywebview?.api;
     if (!w?.minimize) return;
-    const ctl = $(".winctl", nav);
+    const ctl = $(".winctl", bar);
     ctl.style.display = "flex";
     ctl.innerHTML = `<button class="winbtn" data-w="minimize" aria-label="Minimize"><svg width="12" height="12" viewBox="0 0 12 12" stroke="currentColor" stroke-width="1.2"><line x1="1" y1="6" x2="11" y2="6"/></svg></button>
       <button class="winbtn" data-w="toggle_maximize" aria-label="Maximize"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1.5" y="1.5" width="9" height="9"/></svg></button>

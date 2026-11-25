@@ -1,32 +1,33 @@
 /* Shared by every page (spec: Pages). The look is the 16-bit Press Box: Nugget's world drawn in pixels (Silkscreen
-   lettering, his speech bubbles and sound effects, square halftone dots, hard stepped shadows on the things that
-   matter) laid out like a broadcast desk (one top bar, pixel caps for labels, notched panels, numbers that line up).
+   lettering for titles, buttons and the pages' names, his speech bubbles and sound effects, square halftone dots,
+   hard stepped shadows on the things that matter) laid out like a broadcast desk (the pages down a side rack, a slim
+   strip along the top, notched panels in a grid, numbers that line up). Everything that is read rather than glanced
+   at (sentences, labels, tables, every number) is set in Space Grotesk, a plain face whose figures line up.
    One art pixel is 2 px. Nothing is rounded, rotated or blurred, and motion moves in steps. Each colour means one
    thing: orange is working or "act on this", blue is "this needs you", cream is done or Nugget talking, and the red
    square is the recording light. Motion only plays when something actually changes. */
 /* Silkscreen is drawn on an 8-pixel em: it stays crisp at 16, 24, 32 and 40 px, so those are the only sizes it is set at */
 @font-face{font-family:"Silkscreen";src:url("/fonts/Silkscreen-Regular.woff2") format("woff2");font-weight:400;font-style:normal;font-display:swap}
 @font-face{font-family:"Silkscreen";src:url("/fonts/Silkscreen-Bold.woff2") format("woff2");font-weight:700;font-style:normal;font-display:swap}
-@font-face{font-family:"Pixelify Sans";src:url("/fonts/PixelifySans-Regular.woff2") format("woff2");font-weight:400;font-style:normal;font-display:swap}
-@font-face{font-family:"Pixelify Sans";src:url("/fonts/PixelifySans-Medium.woff2") format("woff2");font-weight:500;font-style:normal;font-display:swap}
-@font-face{font-family:"Pixelify Sans";src:url("/fonts/PixelifySans-SemiBold.woff2") format("woff2");font-weight:600;font-style:normal;font-display:swap}
-@font-face{font-family:"Pixelify Sans";src:url("/fonts/PixelifySans-Bold.woff2") format("woff2");font-weight:700;font-style:normal;font-display:swap}
+/* Space Grotesk is one file for every weight from 300 to 700 */
+@font-face{font-family:"Space Grotesk";src:url("/fonts/SpaceGrotesk-Variable.woff2") format("woff2");font-weight:300 700;font-style:normal;font-display:swap}
 @view-transition{navigation:auto}
 
 :root{--bg:#0D0A08;--panel:#120E0B;--panel2:#1A1411;--line:#2A221D;--line2:#4A4038;--ink:#F2EFEA;--ink2:#D6CBBE;
   --muted:#A89C90;--dim:#8F857A;--accent:#FF5500;--accent2:#FF8A3D;--accent3:#FFB27A;--ember:#1F1009;--emberline:#5A2A12;
   --k:#0D0A08;--cap:#F2E7CF;--paper:#EFE4CC;--blue:#7CC4FF;--blueink:#0E1A24;--rec:#FF3D2E;
-  --burn:#B33C00;--raised:#262224;
+  --burn:#B33C00;--raised:#262224;--good:#8BE08B;--bad:#FF7A66;
   --display:"Silkscreen","Courier New",monospace;
-  --ui:"Pixelify Sans","Segoe UI",sans-serif;
-  --body:"Pixelify Sans","Segoe UI",system-ui,sans-serif;--mono:"Cascadia Mono",Consolas,monospace;
+  --ui:"Space Grotesk","Segoe UI",system-ui,sans-serif;
+  --body:"Space Grotesk","Segoe UI",system-ui,sans-serif;--mono:"Cascadia Mono",Consolas,monospace;
+  --side:0px;--top:0px;
   --spring:steps(3,end);--soft:cubic-bezier(.22,1,.36,1);--sweep:16s;color-scheme:dark;
   --notch:polygon(2px 0,calc(100% - 2px) 0,calc(100% - 2px) 2px,100% 2px,100% calc(100% - 2px),calc(100% - 2px) calc(100% - 2px),calc(100% - 2px) 100%,2px 100%,2px calc(100% - 2px),0 calc(100% - 2px),0 2px,2px 2px);
   --notch4:polygon(4px 0,calc(100% - 4px) 0,calc(100% - 4px) 4px,100% 4px,100% calc(100% - 4px),calc(100% - 4px) calc(100% - 4px),calc(100% - 4px) 100%,4px 100%,4px calc(100% - 4px),0 calc(100% - 4px),0 4px,4px 4px)}
 *{box-sizing:border-box}
 [hidden]{display:none !important}   /* must win over any display a class sets */
 html{scroll-behavior:smooth}
-body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--body);min-height:100vh;overflow-x:hidden}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--body);font-variant-numeric:tabular-nums;min-height:100vh;overflow-x:hidden}
 a{color:var(--accent2)}a:hover{color:var(--accent3)}
 button,input,select{font:inherit;color:inherit}
 button{cursor:pointer}button:disabled{cursor:default}
@@ -34,7 +35,9 @@ button{cursor:pointer}button:disabled{cursor:default}
 .disp{font-family:var(--display);font-weight:700;letter-spacing:0}
 .num{font-variant-numeric:tabular-nums}
 .muted{color:var(--muted)}.warn{color:var(--accent3)}
-main{position:relative;z-index:1;max-width:1240px;margin:0 auto;padding:26px 28px 56px;display:flex;flex-direction:column;gap:24px}
+/* the page is a container: what is in it lays itself out by the room the page has, whether or not the side rack is
+   beside it (the phone has none), not by the window's width */
+main{position:relative;z-index:1;max-width:1280px;margin:0 auto;padding:26px 28px 56px;display:flex;flex-direction:column;gap:24px;container:page / inline-size}
 .brand{display:flex;align-items:center;gap:10px;margin:0;font:700 24px/1 var(--display);letter-spacing:0;color:var(--ink)}
 .brand svg{flex-shrink:0}
 h1.title{margin:0;font:700 40px/1.1 var(--display);letter-spacing:0}
@@ -104,31 +107,50 @@ h1.title{margin:0;font:700 40px/1.1 var(--display);letter-spacing:0}
 .bg[data-weather="night"] .w-c{right:-456px;--dx:-456px;animation:bgwMove 120s steps(228,end) var(--wt,0s) infinite;background:conic-gradient(at 4px 4px,transparent 75%,#F2E7CF 75%) 120px 90px/456px 420px,conic-gradient(at 2px 2px,transparent 75%,#F2E7CF 75%) 330px 236px/456px 380px,conic-gradient(at 2px 2px,transparent 75%,#D6CBBE 75%) 40px 300px/228px 460px,conic-gradient(at 4px 4px,transparent 75%,#D6CBBE 75%) 400px 20px/456px 520px,conic-gradient(at 2px 2px,transparent 75%,#F2E7CF 75%) 210px 400px/456px 500px}
 .bg[data-weather="night"] .w-bit{background:#7D736F}
 
-/* --- nav: only ever drawn in on the PC (app.js's onThisPC()) --------------------------------------- */
-/* Press Box: a broadcast top bar. The brand is an orange plate with a stepped edge and Nugget's head on it, the
-   tabs are pixel caps with an orange underline on the current one, and the status pill never leaves the bar. */
-.nav{position:sticky;top:0;z-index:20;height:64px;display:flex;align-items:stretch;gap:0;padding:0;background:var(--panel);border-bottom:2px solid var(--line)}
-.nav .brand{display:flex;align-items:center;gap:12px;margin:0 8px 0 0;padding:0 44px 0 18px;background:var(--accent);color:var(--k);text-decoration:none;white-space:nowrap;
-  clip-path:polygon(0 0,100% 0,100% 16px,calc(100% - 8px) 16px,calc(100% - 8px) 32px,calc(100% - 16px) 32px,calc(100% - 16px) 48px,calc(100% - 24px) 48px,calc(100% - 24px) 100%,0 100%);
+/* --- the shell: only ever drawn in on the PC (app.js's onThisPC()) ---------------------------------- */
+/* Press Box: a broadcast desk's side rack. The brand is an orange plate with a stepped corner and Nugget's head on
+   it; under it the pages are pixel caps in two groups, the current one lit with an orange edge, and Settings sits at
+   the foot. A slim strip along the top is the window's handle: the page's name, the status pill, which never leaves
+   it, and the window's buttons. Below 1264 px the rack folds to a rail of icons, so the page keeps its room. */
+body.has-nav{--side:248px;--top:44px;padding:var(--top) 0 0 var(--side)}
+.nav{position:fixed;left:0;top:0;bottom:0;z-index:21;width:var(--side);display:flex;flex-direction:column;background:var(--panel);border-right:2px solid var(--line)}
+.nav .brand{display:flex;align-items:center;gap:12px;height:88px;flex-shrink:0;margin:0;padding:0 18px 8px;background:var(--accent);color:var(--k);text-decoration:none;
+  clip-path:polygon(0 0,100% 0,100% calc(100% - 24px),calc(100% - 8px) calc(100% - 24px),calc(100% - 8px) calc(100% - 16px),calc(100% - 16px) calc(100% - 16px),calc(100% - 16px) calc(100% - 8px),calc(100% - 24px) calc(100% - 8px),calc(100% - 24px) 100%,0 100%);
   font:700 24px/1 var(--display);letter-spacing:0}
 .nav .brand:hover{color:var(--k)}
 .nav .brand .face{width:42px;height:42px;flex-shrink:0;display:grid;place-items:center;overflow:hidden;background:var(--k);clip-path:var(--notch)}
 .nav .brand .face .nhead{width:34px;height:34px}
-.tabs{position:relative;display:flex;align-items:stretch;gap:0;height:64px}
-.tab{position:relative;z-index:1;display:flex;align-items:center;padding:0 16px;border:0;background:transparent;color:var(--muted);text-decoration:none;
-  font:400 16px/1 var(--display);letter-spacing:0;text-transform:uppercase;white-space:nowrap;transition:color .2s steps(1,end),box-shadow .2s steps(1,end)}
-.tabs a.tab:hover{color:var(--ink);box-shadow:inset 0 -4px 0 var(--line2)}
-.tabs a.tab.on{color:var(--ink);box-shadow:inset 0 -4px 0 var(--accent)}
-.tab .count{margin-left:8px;min-width:22px;padding:2px 6px;background:var(--blue);color:var(--k);font:700 16px/1 var(--display);letter-spacing:0;text-align:center;clip-path:var(--notch);animation:pop .3s .2s var(--spring) both}
-.navhover,.navline{display:none}
-.navpill{align-self:center;display:flex;align-items:center;gap:10px;min-height:40px;padding:0 14px;margin-right:14px;max-width:380px;background:var(--ember);color:var(--accent3);
+.tabs{display:flex;flex-direction:column;gap:2px;flex-grow:1;min-height:0;padding:10px 8px 12px;overflow-y:auto;scrollbar-width:none}
+.navgroup{margin:14px 14px 6px;font:700 12px/1 var(--ui);letter-spacing:.12em;text-transform:uppercase;color:var(--dim);white-space:nowrap}
+.tab{position:relative;display:flex;align-items:center;gap:12px;height:44px;flex-shrink:0;padding:0 10px 0 14px;border:0;background:transparent;color:var(--muted);text-decoration:none;
+  font:400 16px/1 var(--display);letter-spacing:0;text-transform:uppercase;white-space:nowrap;transition:color .2s steps(1,end),background-color .2s steps(1,end),box-shadow .2s steps(1,end)}
+.tab svg{flex-shrink:0}
+.tabs a.tab:hover{color:var(--ink);background:var(--panel2);box-shadow:inset 4px 0 0 var(--line2)}
+.tabs a.tab.on{color:var(--ink);background:var(--ember);box-shadow:inset 4px 0 0 var(--accent)}
+.tabs a.tab.on svg{color:var(--accent2)}
+.tab.foot{margin-top:auto}
+.tab .count{margin-left:auto;min-width:22px;padding:2px 6px;background:var(--blue);color:var(--k);font:700 16px/1 var(--display);letter-spacing:0;text-align:center;clip-path:var(--notch);animation:pop .3s .2s var(--spring) both}
+.topbar{position:fixed;left:var(--side);right:0;top:0;z-index:20;height:var(--top);display:flex;align-items:stretch;background:var(--bg);border-bottom:2px solid var(--line)}
+.crumb{display:flex;align-items:center;padding:0 28px;font:700 12px/1 var(--ui);letter-spacing:.12em;text-transform:uppercase;color:var(--dim);white-space:nowrap}
+.navpill{align-self:center;display:flex;align-items:center;gap:10px;height:30px;padding:0 12px;margin-right:12px;min-width:0;max-width:420px;background:var(--ember);color:var(--accent3);
   border:2px solid var(--accent);clip-path:var(--notch);font:400 16px/1 var(--display);letter-spacing:0;text-transform:uppercase}
 .navpill.bad{background:var(--blueink);color:var(--blue);border-color:var(--blue)}
 .navpill.hold{background:var(--panel2);color:var(--ink2);border-color:var(--line2)}
 .navpill span:last-child{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.winbtn{width:46px;height:62px;border:0;background:transparent;color:#8F857A;display:flex;align-items:center;justify-content:center}
+.winctl{display:none}
+.winbtn{width:46px;height:42px;border:0;background:transparent;color:#8F857A;display:flex;align-items:center;justify-content:center}
 .winbtn:hover{background:#1E1713;color:var(--ink)}
 .winbtn.x:hover{background:#C42B1C;color:#fff}
+@media (max-width:1263px){
+  body.has-nav{--side:72px}
+  .nav .brand{justify-content:center;padding:0 0 8px}
+  .nav .brand > span:last-child,.tab > span:not(.count),.navgroup{display:none}
+  .tabs{padding:10px 8px 12px}
+  .tab{justify-content:center;padding:0}
+  .tab.sep{margin-top:14px}
+  .tab .count{position:absolute;right:2px;top:2px;min-width:18px;padding:1px 3px;font-size:16px}
+}
+@media (max-width:1000px){.navpill span:last-child{display:none}.navpill{padding:0 9px}.crumb{padding:0 16px}}
 .spacer{flex-grow:1;align-self:stretch}
 
 /* --- controls ------------------------------------------------------------------------------------- */
@@ -440,7 +462,7 @@ h1.title{margin:0;font:700 40px/1.1 var(--display);letter-spacing:0}
 .emptybig h2{margin:0;font:700 32px/1.1 var(--display);letter-spacing:0}
 .emptybig p{margin:0;font-size:15px;color:#CFC5BA;max-width:420px}
 .emptybig .nugget{width:176px;height:176px;margin-bottom:-6px}
-@media (max-width:1000px){
+@container page (max-width:1000px){
   .dhead{display:none}
   .dgrid{grid-template-columns:minmax(0,1fr) auto;gap:12px}
   .drow{padding:16px}
@@ -527,7 +549,7 @@ video{display:block;width:calc(100% - 40px);margin:0 20px 18px;background:#000;b
 /* --- Settings --------------------------------------------------------------------------------------- */
 .sgrid{display:flex;gap:32px;align-items:flex-start}
 /* the section list says where you are (settings.html marks the section on screen) */
-.snav{display:flex;flex-direction:column;position:sticky;top:90px;width:200px;flex-shrink:0;background:var(--panel);border:2px solid var(--line);clip-path:var(--notch)}
+.snav{display:flex;flex-direction:column;position:sticky;top:calc(var(--top) + 26px);width:200px;flex-shrink:0;background:var(--panel);border:2px solid var(--line);clip-path:var(--notch)}
 .snav a{display:flex;align-items:center;gap:10px;min-height:44px;padding:0 14px;border-top:2px solid var(--line);color:var(--ink2);text-decoration:none;font:400 16px/1 var(--display);letter-spacing:0;text-transform:uppercase;transition:background-color .2s steps(1,end),color .2s steps(1,end)}
 .snav a:first-child{border-top:0}
 .snav a:hover{color:var(--ink);background:var(--panel2)}
@@ -535,7 +557,7 @@ video{display:block;width:calc(100% - 40px);margin:0 20px 18px;background:#000;b
 .snav a.on{background:var(--ember);color:var(--accent3)}
 .snav a.on i{background:var(--accent)}
 .groups{flex-grow:1;min-width:0;display:flex;flex-direction:column;gap:20px}
-.group{background:var(--panel);border:2px solid var(--line);padding:22px 24px 26px;display:flex;flex-direction:column;gap:22px;scroll-margin-top:84px;clip-path:var(--notch)}
+.group{background:var(--panel);border:2px solid var(--line);padding:22px 24px 26px;display:flex;flex-direction:column;gap:22px;scroll-margin-top:calc(var(--top) + 20px);clip-path:var(--notch)}
 .group:focus-within{border-color:var(--line2)}
 .gtitle{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
 details.advanced>summary{cursor:pointer;list-style:none}
@@ -645,16 +667,121 @@ input[type=range]{width:100%;accent-color:var(--accent)}
   .asleep .mini.n.live::before,.asleep .art #elapsed::before{animation-play-state:paused !important}
 .asleep .bg *{animation-play-state:paused !important}
 
-/* Narrower windows keep the status in the bar (its words go, its light stays) and the monitor beside the rundown
-   down to the window's 900 px minimum; below that the monitor stacks and keeps its shape, so Nugget stays in frame. */
-@media (max-width:1000px){.navpill span:last-child{display:none}.navpill{padding:0 13px;margin-right:10px}.nav .brand{padding-right:36px}.nav .brand > span:last-child{display:none}.tab{padding:0 10px}
+/* --- the desk: panels in a grid (Progress, Heatmaps, Stats) ------------------------------------------ */
+/* A page of numbers is a grid of twelve columns, and each panel says how many it spans (w3 ... w8; twelve without).
+   A panel has a pixel-caps head, and what is in it is set in the reading face. With less room the panels pair up,
+   then stack. */
+.cards{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:16px;align-items:stretch}
+.card{grid-column:span 12;min-width:0;display:flex;flex-direction:column;gap:12px;padding:16px 18px 18px;background:var(--panel);border:2px solid var(--line);clip-path:var(--notch)}
+.card.w3{grid-column:span 3}.card.w4{grid-column:span 4}.card.w5{grid-column:span 5}.card.w6{grid-column:span 6}.card.w7{grid-column:span 7}.card.w8{grid-column:span 8}
+.chead{display:flex;align-items:baseline;gap:4px 12px;flex-wrap:wrap}
+.h3{margin:0;font:700 16px/1.25 var(--display);letter-spacing:0;text-transform:uppercase}
+.chead .lbl{font-size:12px;letter-spacing:.08em}
+.chead .more{min-height:0;font-size:16px}
+.toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.toolbar .lbl{margin-right:4px;font-size:12px;letter-spacing:.1em}
+.toolbar .gap{width:16px}
+.toolbar .end{margin-left:auto;color:var(--dim);font-size:14px}
+/* one number, how it has moved, and its last matches as a stepped line */
+.kpi{gap:2px;padding:14px 16px 12px}
+.kpi .k{font:700 12px/1.2 var(--ui);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.kpi .v{font:700 32px/1.15 var(--ui);letter-spacing:-.01em;color:var(--ink);white-space:nowrap}
+.kpi .v small{margin-left:2px;font-size:18px;font-weight:600;color:var(--muted)}
+.kpi .d{min-height:20px;font:600 13px/1.4 var(--ui);color:var(--dim)}
+.up{color:var(--good)}.down{color:var(--bad)}
+.spark{display:block;width:100%;height:34px;margin-top:8px;overflow:visible}
+.spark path{fill:none;stroke:var(--accent);stroke-width:2;shape-rendering:crispEdges;vector-effect:non-scaling-stroke}
+.spark .base{stroke:var(--line2);stroke-dasharray:2 4}
+/* a bar a match: its height is the number, its colour the result */
+.bars{position:absolute;inset:0;display:block;overflow:visible}
+.bars rect{shape-rendering:crispEdges}
+.bars .win{fill:var(--accent)}.bars .loss{fill:#5E544B}.bars .tie{fill:var(--cap)}
+.bars a:hover rect,.bars a:focus-visible rect{fill:var(--ink)}
+.bars .rule{stroke:var(--ink2);stroke-width:2;stroke-dasharray:2 6;opacity:.55;shape-rendering:crispEdges;pointer-events:none}
+.bars text{font:600 12px var(--ui);fill:var(--dim)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font:600 13px/1.3 var(--ui);color:var(--muted)}
+.legend i{display:inline-block;width:10px;height:10px;margin-right:6px;vertical-align:-1px;background:var(--c,var(--line2))}
+/* tables of numbers: names on the left, figures lined up on the right */
+.back{color:var(--muted);text-decoration:none;font:700 13px/1 var(--ui);letter-spacing:.08em;text-transform:uppercase}
+.back:hover{color:var(--ink)}
+.note{margin:0;color:var(--dim);font:500 14px/1.5 var(--body)}
+.wrap{overflow-x:auto;border:2px solid var(--line);background:var(--panel);clip-path:var(--notch)}
+.card > .wrap{margin:0 -18px -18px;border-width:2px 0 0;clip-path:none}
+table.tbl{width:100%;border-collapse:collapse;font:500 14px/1.3 var(--ui);white-space:nowrap}
+.tbl th,.tbl td{padding:9px 9px;text-align:right;border-bottom:2px solid var(--line)}
+.tbl tbody tr:last-child td{border-bottom:0}
+.tbl th:first-child,.tbl td:first-child{padding-left:16px;text-align:left}
+.tbl th:last-child,.tbl td:last-child{padding-right:16px}
+.tbl thead th{color:var(--muted);font-weight:700;font-size:12px;letter-spacing:.08em;text-transform:uppercase;background:var(--panel2)}
+.tbl .grp th{font-size:11px;color:var(--dim);background:var(--panel);border-bottom:0;padding-top:6px}
+.tbl td b{font-weight:700;color:var(--ink)}
+.tbl button.sort{all:unset;cursor:pointer;color:inherit}
+.tbl button.sort:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.tbl button.sort[aria-sort="ascending"]::after{content:" \25B2";color:var(--accent)}
+.tbl button.sort[aria-sort="descending"]::after{content:" \25BC";color:var(--accent)}
+.tbl tr.you td{background:rgba(255,85,0,.09)}
+.tbl tbody tr.go{cursor:pointer}
+.tbl tbody tr.go:hover td{background:var(--panel2)}
+.tbl .team{display:inline-block;width:4px;height:16px;margin-right:8px;vertical-align:-3px;background:var(--line2)}
+.tbl .team.a{background:var(--accent)}
+.tbl .mapcell{display:flex;align-items:center;gap:10px;font-weight:700;color:var(--ink)}
+.tbl a.mapcell:hover{color:var(--accent2);text-decoration:none}
+.tbl .maptile{width:32px;height:32px}
+.tbl a{color:var(--accent2);font-weight:700;text-decoration:none}
+.tbl a:hover{text-decoration:underline}
+/* a Mistake: when it was, what it was, what happened, and what to try next time */
+.mlist{display:flex;flex-direction:column;gap:10px;margin:0;padding:0;list-style:none}
+.mistake{display:grid;grid-template-columns:116px minmax(0,1fr) auto;gap:4px 16px;align-items:start;padding:12px 16px;background:var(--panel);border:2px solid var(--line);clip-path:var(--notch)}
+.mistake .when{font:700 13px/1.4 var(--ui);letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.mistake .when b{display:block;font:700 16px/1.3 var(--display);letter-spacing:0;color:var(--bad)}
+.mistake h3{margin:0;font:700 16px/1.3 var(--ui);color:var(--ink)}
+.mistake p{margin:2px 0 0;font-size:14px;color:var(--ink2)}
+.mistake .tip{color:var(--accent3)}
+.mistake .tip::before{content:"Next time: ";font-weight:700;color:var(--muted)}
+.mistake .acts{display:flex;flex-direction:column;align-items:flex-end;gap:4px;font:700 14px/1.4 var(--ui);white-space:nowrap}
+.mistake .acts a{color:var(--accent2);text-decoration:none}
+.mistake .acts a:hover{text-decoration:underline}
+/* how often each kind of Mistake happens: a row a kind, the commonest first */
+.mrows{display:flex;flex-direction:column;gap:12px;margin:0;padding:0;list-style:none}
+.mrows li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;align-items:baseline}
+.mrows .t{font:700 14px/1.3 var(--ui);color:var(--ink)}
+.mrows .n{font:700 14px/1.3 var(--ui);color:var(--muted)}
+.mrows .n b{color:var(--ink);font-size:16px}
+.mrows .pbar{grid-column:1 / -1;height:8px}
+.mrows .pbar > i{background:repeating-linear-gradient(90deg,var(--bad) 0 6px,transparent 6px 8px)}
+.mrows .tip{grid-column:1 / -1;margin:0;font-size:13px;color:var(--accent3)}
+.recs{display:flex;flex-direction:column;margin:0;padding:0;list-style:none}
+.recs li{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:0 12px;align-items:center;padding:9px 0;border-bottom:2px dashed var(--line)}
+.recs li:last-child{border-bottom:0;padding-bottom:0}
+.recs .k{font:700 12px/1.3 var(--ui);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.recs a{font:500 13px/1.3 var(--ui);color:var(--dim);text-decoration:none}
+.recs a:hover{color:var(--accent2)}
+.recs .v{grid-row:span 2;font:700 24px/1 var(--ui);color:var(--ink)}
+/* a map from above (Heatmaps): the radar, the heat in square cells over it, and a square for each Frag or death */
+.heat{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;align-items:start}
+.radar{position:relative;aspect-ratio:1 / 1;background:#0A0807;border:2px solid var(--line);clip-path:var(--notch);overflow:hidden}
+.radar canvas{position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated}
+.radar .tipbox{position:absolute;z-index:2;max-width:240px;padding:6px 10px;background:var(--cap);color:var(--k);font:600 13px/1.35 var(--ui);pointer-events:none;box-shadow:0 -2px 0 0 var(--k),0 2px 0 0 var(--k),-2px 0 0 0 var(--k),2px 0 0 0 var(--k)}
+.heat .side{display:flex;flex-direction:column;gap:16px;min-width:0}
+.duo{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.duo .k{font:700 12px/1.2 var(--ui);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.duo .v{font:700 26px/1.15 var(--ui);color:var(--ink)}
+.duo .d{font:500 13px/1.3 var(--ui);color:var(--dim)}
+@container page (max-width:1000px){.card.w3{grid-column:span 6}.card.w4,.card.w5,.card.w6,.card.w7,.card.w8{grid-column:span 12}
+  .heat{grid-template-columns:minmax(0,1fr)}.heat .side{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}}
+@container page (max-width:640px){.card.w3{grid-column:span 12}.heat .side{grid-template-columns:minmax(0,1fr)}
+  .mistake{grid-template-columns:minmax(0,1fr)}.mistake .acts{flex-direction:row;gap:14px}}
+
+/* With less room the monitor stays beside the rundown down to the narrowest the page gets in the window (its 900 px
+   minimum, less the rail); below that the monitor stacks and keeps its shape, so Nugget stays in frame. */
+@container page (max-width:1000px){
   .art{align-self:start;aspect-ratio:1 / 1;min-height:0}
   .cols{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.cols > section:last-child{grid-column:1 / -1}}
-@media (max-width:900px){.stage{grid-template-columns:minmax(0,1.3fr) minmax(270px,1fr)}}
-@media (max-width:760px){main{padding:20px 16px 40px}h1.title{font-size:32px}.fgrid{grid-template-columns:minmax(0,1fr)}.snav{display:none}.ar{grid-template-columns:repeat(2,minmax(0,1fr))}
+@container page (max-width:900px){.stage{grid-template-columns:minmax(0,1.3fr) minmax(270px,1fr)}}
+@container page (max-width:760px){h1.title{font-size:32px}.fgrid{grid-template-columns:minmax(0,1fr)}.snav{display:none}.ar{grid-template-columns:repeat(2,minmax(0,1fr))}
   .stage{grid-template-columns:minmax(0,1fr)}.art{min-height:0;aspect-ratio:16 / 10}
-  .ob{grid-template-columns:44px minmax(0,1fr)}.ob-ok{display:none}.tab{padding:0 8px}.ob-head{max-width:none;padding-right:24px}}
-@media (max-width:600px){.nav .brand{padding:0 30px 0 12px;margin-right:4px}.tabs{overflow-x:auto;scrollbar-width:none}.tab{padding:0 8px}}
+  .ob{grid-template-columns:44px minmax(0,1fr)}.ob-ok{display:none}.ob-head{max-width:none;padding-right:24px}}
+@media (max-width:760px){main{padding:20px 16px 40px}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none !important;transition:none !important}html{scroll-behavior:auto}}
 
 /* --- 16-bit: the parts every box shares ------------------------------------------------------------------------
@@ -665,7 +792,6 @@ input[type=range]{width:100%;accent-color:var(--accent)}
 .sechead{flex-wrap:wrap;row-gap:4px}
 .wanted .mid{flex-wrap:wrap;row-gap:8px}
 .dstate{width:auto;min-width:84px;white-space:nowrap}
-.navpill{min-width:0}
 .hl{grid-template-columns:104px 78px minmax(0,1fr) auto}
 .primary:focus-visible{outline:2px solid var(--ink);outline-offset:6px}
 .panel{clip-path:var(--notch)}

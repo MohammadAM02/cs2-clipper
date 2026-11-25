@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from clipper import paths, replay, stats, winjob
+from clipper import mistakes, paths, replay, review, stats, winjob
 from clipper.hlae_plan import Kill, Player, RenderInputs, Round
 from clipper.model import MatchInfo, RoundFacts
 
@@ -30,8 +30,10 @@ log = logging.getLogger(__name__)
 ANALYZE_TIMEOUT_SECONDS = 600      # csda reads a Demo in seconds; it never launches CS2, so stopping it orphans nothing
 KEPT = ("checksum", "date", "mapName", "tickrate", "tickCount", "demoFileName", "source", "type", "serverName",
         "buildNumber", "networkProtocol", "maxRounds", "overtimeCount", "duration", "winner", "teamA", "teamB",
-        "players", "rounds", "kills", "clutches", "damages")
+        "players", "rounds", "kills", "clutches", "damages", "playersFlashed")
 HIT_FIELDS = ("tick", "roundNumber", "victimSteamId", "healthDamage")    # what a kept hit keeps: HP is worked out of it
+# what a kept flash keeps: who blinded whom and for how long, which the Mistakes are worked out of
+FLASH_FIELDS = ("tick", "roundNumber", "flasherSteamId", "flashedSteamId", "duration")
 FULL_HP = 100                      # every round of competitive CS2 starts on it
 DEAGLE = "Desert Eagle"            # csda's weaponName for it
 _CHECKSUM = re.compile(r"[0-9a-f]{1,16}")
@@ -51,11 +53,14 @@ def is_checksum(text: str) -> bool:
 
 
 def trim(data: Data) -> dict[str, Any]:
-    """The part of csda's output the app keeps: the match, its teams and players, its rounds, kills and clutches, and
-    its hits, each cut to HIT_FIELDS."""
+    """The part of csda's output the app keeps: the match, its teams and players, its rounds, kills and clutches,
+    its hits, each cut to HIT_FIELDS, and its flashes, each cut to FLASH_FIELDS."""
     kept = {key: data[key] for key in KEPT if key in data}
     if "damages" in kept:
         kept["damages"] = [{field: hit[field] for field in HIT_FIELDS if field in hit} for hit in kept["damages"]]
+    if "playersFlashed" in kept:
+        kept["playersFlashed"] = [{field: flash[field] for field in FLASH_FIELDS if field in flash}
+                                  for flash in kept["playersFlashed"] or ()]
     return kept
 
 
@@ -201,6 +206,48 @@ def stats_match(data: Data) -> stats.Match:
                                     bool(c["hasWon"]))
                        for c in data.get("clutches", ())),
     )
+
+
+def review_match(data: Data) -> mistakes.Match:
+    """What the subject's Mistakes are worked out from: the players' teams, the rounds, the kills, and the flashes
+    when the analysis kept them (one made before the app kept flashes has none). The kept copy is enough."""
+    flashes = None
+    if "playersFlashed" in data:
+        flashes = tuple(mistakes.Flash(f["tick"], f["roundNumber"], _steam_id(f["flasherSteamId"]),
+                                       _steam_id(f["flashedSteamId"]), float(f["duration"]))
+                        for f in data["playersFlashed"] or () if all(field in f for field in FLASH_FIELDS))
+    return mistakes.Match(
+        tickrate=float(data["tickrate"]),
+        teams={_steam_id(p["steamId"]): p["team"]["name"] for p in data["players"].values()},
+        rounds=tuple(mistakes.Round(r["number"], r["startTick"]) for r in data["rounds"]),
+        kills=tuple(mistakes.Kill(k["tick"], k["roundNumber"], _steam_id(k["killerSteamId"]),
+                                  _steam_id(k["victimSteamId"]), str(k.get("weaponName", "")),
+                                  bool(k.get("is_victim_blinded")))
+                    for k in data["kills"]),
+        flashes=flashes,
+    )
+
+
+def places(data: Data, steamid: str) -> list[review.Place]:
+    """Where each of the subject's Frags and deaths happened, in Tick order: their own place, and the other player's.
+    Team kills and deaths to the world are left out, as is a kill csda gives no place for, and one in a round csda
+    has no row for."""
+    rounds = {r["number"] for r in data["rounds"]}
+    found = []
+    for kill in sorted(data["kills"], key=lambda k: k["tick"]):
+        killer, victim = _steam_id(kill["killerSteamId"]), _steam_id(kill["victimSteamId"])
+        if kill["roundNumber"] not in rounds or not killer or kill["killerSide"] == kill["victimSide"]:
+            continue
+        if steamid not in (killer, victim) or any(kill.get(f) is None for f in ("killerX", "killerY", "victimX",
+                                                                                "victimY")):
+            continue
+        mine, theirs = ("killer", "victim") if killer == steamid else ("victim", "killer")
+        found.append(review.Place(
+            kind="kill" if killer == steamid else "death", round=kill["roundNumber"], tick=kill["tick"],
+            side=review.SIDES.get(kill[f"{mine}Side"], ""), x=float(kill[f"{mine}X"]), y=float(kill[f"{mine}Y"]),
+            other_x=float(kill[f"{theirs}X"]), other_y=float(kill[f"{theirs}Y"]),
+            weapon=str(kill.get("weaponName", "")), headshot=bool(kill.get("isHeadshot"))))
+    return found
 
 
 def iter_array(path: Path, key: str, piece: int = PIECE) -> Iterator[dict[str, Any]]:
@@ -374,10 +421,47 @@ class Analyses:
         analyzed before the app kept them has none."""
         return "damages" in self._load(checksum)
 
+    def has_flashes(self, checksum: str) -> bool:
+        """Whether the kept analysis of the match has its flashes, which the team-flash Mistakes are worked out
+        from: one analyzed before the app kept them has none."""
+        return "playersFlashed" in self._load(checksum)
+
     def forget(self, checksum: str) -> None:
         self._path(checksum).unlink(missing_ok=True)
         self._stats_path(checksum).unlink(missing_ok=True)
         self._positions_path(checksum).unlink(missing_ok=True)
+        self._review_path(checksum).unlink(missing_ok=True)
+
+    def _review_path(self, checksum: str) -> Path:
+        return self._path(checksum).with_name(f"{checksum}.review.json")
+
+    def review(self, checksum: str, steamid: str) -> dict[str, Any] | None:
+        """The match as `steamid` played it (`review.document`): their line, Mistakes and places. Worked out from the
+        kept analysis and stats the first time it is asked for and kept beside them; worked out again when either
+        has changed since (FACEIT's line added, the match analyzed again), or the subject has. None when the app has
+        no analysis of the match. A copy that cannot be written is only slower: it is worked out again next time."""
+        try:
+            made_from = [self._path(checksum).stat().st_mtime_ns,
+                         self._stats_path(checksum).stat().st_mtime_ns if self.has_stats(checksum) else 0]
+        except FileNotFoundError:
+            return None
+        try:
+            kept = json.loads(self._review_path(checksum).read_text(encoding="utf-8"))
+            if (kept.get("version"), kept.get("subject"), kept.get("made_from")) == (review.VERSION, steamid,
+                                                                                    made_from):
+                return kept
+        except (FileNotFoundError, ValueError):
+            pass
+        data = self._load(checksum)
+        worked = self.stats(checksum)
+        player = worked["players"].get(steamid) if worked else None
+        made = {**review.document(steamid, review_match(data), places(data, steamid), player),
+                "made_from": made_from}
+        try:
+            paths.atomic_write_text(self._review_path(checksum), json.dumps(made, separators=(",", ":")))
+        except OSError:
+            log.warning("could not keep the review of match %s", checksum, exc_info=True)
+        return made
 
     def _positions_path(self, checksum: str) -> Path:
         return self._path(checksum).with_name(f"{checksum}.positions.json")

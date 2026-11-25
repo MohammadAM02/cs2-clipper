@@ -320,6 +320,10 @@ class Index:
         """Every match but `checksum`, most recently played first."""
         return self._all("SELECT * FROM matches WHERE checksum != ? ORDER BY played_at DESC", (checksum,))
 
+    def all_matches(self) -> list[sqlite3.Row]:
+        """Every match, most recently played first."""
+        return self._all("SELECT * FROM matches ORDER BY played_at DESC")
+
     def save_highlights(self, checksum: str, highlights: Iterable[Highlight]) -> None:
         """A Highlight saved again (its match scored again) is updated in place and keeps whether you picked it. A
         round of the match the scoring no longer gives (a DEATH once Clip your deaths is off) is no longer worth

@@ -2,7 +2,8 @@
 
 The Demo steps add a match's stats when they analyze it. This works through the finished matches from before that:
 one csda run or one FACEIT request a tick, newest match first, and only while the pipeline has nothing to do and
-neither CS2 nor FACEIT AC is open. A failure is tried again a day later, not on every tick.
+neither CS2 nor FACEIT AC is open. A failure is tried again a day later, not on every tick. A match analyzed before
+the app kept its hits or its flashes (which the Mistakes are worked out from) is analyzed again the same way.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from clipper.scoring import score_match
 REPLAY_REQUESTED = "replay_requested:"
 REPLAY_FAILED = "replay_failed:"          # why the last try at a match's replay failed, for the page to show
 REPLAY_TRIED = "replay_tried"
+RADAR_REQUESTED = "radar_requested:"      # a map whose radar Heatmaps asked for, read from CS2 on a clear tick
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +48,15 @@ def replay_request(index: Index, checksum: str) -> tuple[bool, str | None]:
     return index.get_flag(REPLAY_REQUESTED + checksum) is not None, index.get_flag(REPLAY_FAILED + checksum)
 
 
+def request_radar(index: Index, map_name: str, now: datetime) -> None:
+    """Asks for a map's radar: read from the installed CS2 on a tick when CS2 and FACEIT AC are both closed."""
+    index.set_flag(RADAR_REQUESTED + radar.checked_map(map_name), now.isoformat())
+
+
+def radar_requested(index: Index, map_name: str) -> bool:
+    return index.get_flag(RADAR_REQUESTED + map_name) is not None
+
+
 class StatsBackfill:
     def __init__(self, index: Index, cfg: Config, analyses: Analyses, unpack: Callable[[Path, Path], Path],
                  faceit_stats: Callable[[str, str], bool] | None = None,
@@ -59,13 +70,14 @@ class StatsBackfill:
         self.now = now
         self.radar_source = radar_source          # CS2's game\csgo folder, or None when CS2 is not installed
         self._complete: set[str] = set()          # matches whose stats, hits and FACEIT line are settled this run
-        self._hits: dict[str, bool] = {}          # whether each match's kept analysis has its hits, read once a run
+        self._hits: dict[str, bool] = {}          # whether each match's kept analysis has its hits and flashes,
+                                                  # read once a run
 
     def tick(self, clear: Callable[[], bool]) -> None:
-        """Works on one match, if one needs it: a replay asked for, then its stats, then its hits (an analysis made
-        before the app kept them), then FACEIT's line. `clear` says whether CS2 and FACEIT AC are both closed; it is
-        asked only once there is something to do."""
-        if self._replay_work(clear):
+        """Works on one match, if one needs it: a replay asked for, a radar asked for, then its stats, then its hits
+        and flashes (an analysis made before the app kept them), then FACEIT's line. `clear` says whether CS2 and
+        FACEIT AC are both closed; it is asked only once there is something to do."""
+        if self._replay_work(clear) or self._radar_work(clear):
             return
         for demo in self._finished_demos():
             checksum = demo["match_checksum"]
@@ -76,12 +88,12 @@ class StatsBackfill:
                     self._work_out(demo, "stats_tried")
                     return
                 continue
-            if not self._has_hits(checksum) and self._due("hits_tried", checksum):
+            if not self._keeps_all(checksum) and self._due("hits_tried", checksum):
                 if clear():
                     self._work_out(demo, "hits_tried")
                 return
             if self._faceit_settled(demo, checksum):
-                if self._has_hits(checksum):
+                if self._keeps_all(checksum):
                     self._complete.add(checksum)
                 continue
             if self.faceit_stats is not None and self._due("faceit_tried", checksum) and clear():
@@ -118,10 +130,10 @@ class StatsBackfill:
         return (self.index.get_flag(f"faceit_stats:{checksum}") == DONE
                 or faceit_match_id(Path(demo["archive_path"]).name) is None)
 
-    def _has_hits(self, checksum: str) -> bool:
+    def _keeps_all(self, checksum: str) -> bool:
         if checksum not in self._hits:
             try:
-                self._hits[checksum] = self.analyses.has_hits(checksum)
+                self._hits[checksum] = self.analyses.has_hits(checksum) and self.analyses.has_flashes(checksum)
             except MissingAnalysis:
                 self._hits[checksum] = False
         return self._hits[checksum]
@@ -207,6 +219,33 @@ class StatsBackfill:
         self.index.delete_flag(REPLAY_REQUESTED + checksum)
         self.index.delete_flag(REPLAY_FAILED + checksum)
         log.info("demo #%s: replay data ready for match %s", demo["id"], checksum)
+
+    def _radar_work(self, clear: Callable[[], bool]) -> bool:
+        """Reads the radar of the first map asked for that has none from CS2. True when it did a unit of work; False
+        when there is nothing to do or the game holds the work. A map is asked for once: without CS2, or when its
+        radar cannot be read, the request is dropped, and Heatmaps asks again the next time it is opened."""
+        for key in self.index.flags_with_prefix(RADAR_REQUESTED):
+            name = key[len(RADAR_REQUESTED):]
+            try:
+                built = radar.ready(name, self.cfg.radar_dir) is not None
+            except radar.RadarError:                     # not a map name: nothing to read
+                built = True
+            if built:
+                self.index.delete_flag(key)
+                continue
+            if not clear():
+                return False
+            self.index.delete_flag(key)
+            csgo = self.radar_source()
+            if csgo is None:
+                log.info("no CS2 install found: the radar of %s is not built", name)
+                continue
+            try:
+                radar.build(name, csgo, self.cfg.radar_dir)
+            except Exception:  # noqa: BLE001 - the radar is a picture: a failure leaves the heatmap without one
+                log.exception("the radar of %s could not be built from CS2", name)
+            return True
+        return False
 
     def _radar_ready(self, checksum: str) -> bool:
         match = self.index.match(checksum)

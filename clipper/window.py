@@ -49,7 +49,7 @@ from clipper import winjob
 log = logging.getLogger(__name__)
 
 TITLE = "CS2 Clipper"
-WIDTH, HEIGHT = 1180, 820
+WIDTH, HEIGHT = 1320, 820      # wide enough for the side rack with its pages' names beside a full page
 MIN_SIZE = (900, 600)
 
 

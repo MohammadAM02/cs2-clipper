@@ -472,6 +472,14 @@ def test_reel_by_id_and_none_for_an_unknown_one(index):
     assert index.reel(reel_id + 999) is None
 
 
+def test_all_matches_and_other_matches_are_most_recently_played_first(index):
+    older = replace(MATCH, checksum="1111111111111111", played_at=MATCH.played_at - timedelta(days=3))
+    index.save_match(older)
+    index.save_match(MATCH)
+    assert [row["checksum"] for row in index.all_matches()] == [MATCH.checksum, older.checksum]
+    assert [row["checksum"] for row in index.other_matches(MATCH.checksum)] == [older.checksum]
+
+
 def test_matches_and_flags_round_trip(index):
     index.save_match(MATCH)
     row = index.match(MATCH.checksum)

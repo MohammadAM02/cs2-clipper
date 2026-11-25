@@ -72,6 +72,14 @@ the update.
   kills, trades, flashes, utility damage, Clutches and 2K–5K rounds for all ten players, FACEIT's own numbers first,
   with arrows against your last 20 matches. The round timeline links each kill to its Reel, and **Replay this
   round** draws the round on the map's radar.
+- **Shows what to fix.** Each match's Stats lists your **Mistakes**: the round's first death with nobody to trade
+  it, a death while blind, a death that gave back a two-player advantage, a flash that blinded a teammate, a team
+  kill. Each says what happened and what to try next time, and links to the round's Replay and, when a Reel has the
+  moment, to the Reel.
+- **Tracks your game.** **Progress** shows your Form over your last 10, 20 or 50 matches against the matches
+  before: win rate, Rating 2.0, K/D, ADR, HS%, KAST, opening duels and Mistakes a match, with a bar for every match,
+  each map's numbers and your records. **Heatmaps** draws where you get your Frags and where you die on each map's
+  radar, by side, over one match or all of them.
 
 ## A look inside
 
@@ -198,8 +206,9 @@ version's section of [CHANGELOG.md](CHANGELOG.md).
 
 ```text
 clipper/              the app
-├── pages/            Status, Demos to grab, Reels, Stats, Replay and Settings: plain HTML, CSS and JS
-│   └── fonts/        Silkscreen and Pixelify Sans, the 16-bit lettering
+├── pages/            Status, Demos to grab, Reels, Stats, Replay, Progress, Heatmaps and Settings: plain HTML, CSS
+│   │                 and JS
+│   └── fonts/        Silkscreen, the 16-bit lettering, and Space Grotesk, the face everything else is read in
 ├── worker.py         moves each Demo through the steps
 ├── intake.py         takes finished Demos from Downloads
 ├── analysis.py       the only code that reads csda's output
@@ -209,6 +218,9 @@ clipper/              the app
 ├── hlae_render.py    one Render Job: CS2 through HLAE, watched to the end
 ├── join.py           Clips become one Reel per view
 ├── stats.py          what each player did in a Demo, worked out from its events
+├── mistakes.py       your Mistakes in a Demo: untraded deaths, team flashes, thrown advantages
+├── review.py         a match as you played it: your line, your Mistakes, where you fought
+├── progress.py       your Form over your last matches, each map's numbers, your records
 ├── replay.py         a round's positions, once a second, for Replay
 ├── radar.py          each map's radar, read from the installed CS2
 ├── alerts.py         match alerts from the FACEIT Data API
@@ -240,7 +252,7 @@ CS2 Clipper is built on open-source work:
   window and installer started from it.
 - [faceitperf](https://github.com/iffypixy/faceitperf) by iffypixy (MIT): the Rating 2.0 estimate.
 - [FFmpeg](https://ffmpeg.org), in [gyan.dev's builds](https://www.gyan.dev/ffmpeg/builds/), joins the Clips.
-- [Silkscreen](https://github.com/googlefonts/silkscreen) and [Pixelify Sans](https://github.com/eifetx/Pixelify-Sans)
+- [Silkscreen](https://github.com/googlefonts/silkscreen) and [Space Grotesk](https://github.com/floriankarsten/space-grotesk)
   (SIL Open Font License) letter every page.
 
 ## License

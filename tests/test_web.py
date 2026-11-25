@@ -1688,7 +1688,7 @@ def test_the_touches_are_served_to_the_pc_and_the_phone_like_the_shared_files(cl
 
 
 def test_every_page_loads_the_touches_after_the_shared_files(client):
-    for page in ("/status", "/demos", "/reels", "/settings"):
+    for page in ("/status", "/demos", "/reels", "/progress", "/heatmaps", "/settings"):
         html = pc_get(client, page).get_data(as_text=True)
         assert html.index('href="/app.css"') < html.index('href="/touches.css"'), page
         assert html.index('src="/app.js"') < html.index('src="/touches.js"'), page
@@ -1849,10 +1849,9 @@ def test_check_for_demos_says_why_not_with_409(tmp_path):
     assert (response.status_code, response.get_json()) == (409, {"error": "Match alerts are off"})
 
 
-# --- Nugget and the 16-bit Press Box look: nugget.js, pixelscene.js, Silkscreen and Pixelify Sans ----------------
+# --- Nugget and the 16-bit Press Box look: nugget.js, pixelscene.js, Silkscreen and Space Grotesk ----------------
 
-FONT_FILES = ("Silkscreen-Regular.woff2", "Silkscreen-Bold.woff2", "PixelifySans-Regular.woff2",
-              "PixelifySans-Medium.woff2", "PixelifySans-SemiBold.woff2", "PixelifySans-Bold.woff2")
+FONT_FILES = ("Silkscreen-Regular.woff2", "Silkscreen-Bold.woff2", "SpaceGrotesk-Variable.woff2")
 
 
 def test_nugget_the_scene_and_the_fonts_are_served_to_the_pc_and_the_phone_like_the_shared_files(client):
@@ -1871,13 +1870,14 @@ def test_every_font_the_css_loads_is_served(client):
 
 
 def test_only_the_fonts_come_out_of_the_fonts_folder(client):
-    for path in ("/fonts/Silkscreen-OFL.txt", "/fonts/PixelifySans-OFL.txt", "/fonts/Bangers.woff2",
+    for path in ("/fonts/Silkscreen-OFL.txt", "/fonts/SpaceGrotesk-OFL.txt", "/fonts/PixelifySans-Regular.woff2",
+                 "/fonts/Bangers.woff2",
                  "/fonts/Barlow-Regular.woff2", "/fonts/HankenGrotesk.woff2", "/fonts/Saira.woff2"):
         assert pc_get(client, path).status_code == 404, path
 
 
 def test_every_page_loads_nugget_after_the_shared_script(client):
-    for page in ("/status", "/demos", "/reels", "/settings"):
+    for page in ("/status", "/demos", "/reels", "/progress", "/heatmaps", "/settings"):
         html = pc_get(client, page).get_data(as_text=True)
         assert html.index('src="/app.js"') < html.index('src="/nugget.js"'), page
 
@@ -1889,7 +1889,7 @@ def test_the_exe_carries_nugget_the_scene_and_the_fonts():
 
 def test_every_page_loads_the_scene_after_the_shared_script(client):
     # Status's monitor and first-run banner and the Highlights carousels draw the scene
-    for page in ("/status", "/demos", "/reels", "/settings"):
+    for page in ("/status", "/demos", "/reels", "/progress", "/heatmaps", "/settings"):
         html = pc_get(client, page).get_data(as_text=True)
         assert html.index('src="/app.js"') < html.index('src="/pixelscene.js"'), page
 
@@ -1921,6 +1921,8 @@ PC_ONLY_ROUTES = [
     ("GET", "/reels"), ("GET", "/api/reels"), ("GET", "/reels/1.mp4"), ("GET", "/reels/1.jpg"),
     ("POST", f"/api/reels/{'a' * 16}/open-folder"), ("POST", f"/api/reels/{'a' * 16}/render"),
     ("GET", "/settings"), ("GET", "/api/settings"), ("PUT", "/api/settings"),
+    ("GET", "/progress"), ("GET", "/api/progress"), ("GET", "/heatmaps"), ("GET", "/api/heatmap"),
+    ("POST", "/api/radar/de_mirage"),
     ("POST", "/api/faceit/session"), ("POST", "/api/faceit/lookup"),
     ("GET", "/api/window"), ("POST", "/api/window"),
     ("GET", "/api/touches"), ("GET", "/api/week"), ("GET", "/reels/1.strip.jpg"), ("POST", "/api/reels/open-folder"),
@@ -2260,3 +2262,25 @@ def test_the_other_view_is_offered_while_a_picked_round_lacks_it(tmp_path, index
     three = next(h["id"] for h in index.selected_highlights(REEL_MATCH.checksum) if h["round"] == 3)
     index.save_reel(three, "player", tmp_path / "r3-player.mp4", 9.0)
     assert _the_match(app_for(tmp_path).test_client())["can_render"] == ["enemy"]
+
+
+# --- the side rack (spec: Pages): every page it lists is a page the app serves and the window may show ----------
+
+def test_the_side_rack_lists_the_pages_the_window_shows_in_order(client):
+    js = pc_get(client, "/app.js").get_data(as_text=True)
+    listed = re.findall(r'\["(/[a-z]+)", "[^"]+"\]', js[js.index("const NAV_PAGES"):js.index("const NAV_GROUPS")])
+    assert tuple(listed) == links.PAGES
+    for page in listed:
+        assert pc_get(client, page).status_code == 200, page
+        assert f'"{page}": navIcon(' in js, page                  # each has its icon
+
+
+def test_progress_and_heatmaps_are_for_the_pc_only(client):
+    for path in ("/progress", "/api/progress", "/heatmaps", "/api/heatmap"):
+        assert pc_get(client, path).status_code == 200, path
+        assert phone_get(client, path).status_code == 403, path
+
+
+def test_the_exe_carries_every_page_the_side_rack_lists():
+    for page in links.PAGES:
+        assert f"{page.lstrip('/')}.html" in PAGE_FILES, page

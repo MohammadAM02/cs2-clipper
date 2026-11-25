@@ -3,7 +3,7 @@ the scheme for itself at every start, `register`); that second start hands the l
 shows a page in its window, shows a Reel's file in Explorer, or snoozes renders. A web page can open cs2clipper:
 links too, so only the forms below are links at all: anything else is refused, never guessed at.
 
-    cs2clipper://status            (also demos, reels, settings): show that page
+    cs2clipper://status            (also demos, reels, progress, heatmaps, settings): show that page
     cs2clipper://reels?play=12     show Reels and play Reel 12
     cs2clipper://reels?match=1a2b  show Reels open at match 1a2b, to pick its rounds
     cs2clipper://reveal?reel=12    show Reel 12's file in Explorer
@@ -20,7 +20,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 SCHEME = "cs2clipper"
-PAGES = ("/status", "/demos", "/reels", "/settings")   # what the window may be asked to show
+# what the window may be asked to show
+PAGES = ("/status", "/demos", "/reels", "/progress", "/heatmaps", "/settings")
 MAX_SNOOZE_MINUTES = 24 * 60
 _PLAY_PAGE = re.compile(r"/reels\?play=[0-9]{1,9}")
 _MATCH_PAGE = re.compile(r"/reels\?match=[0-9a-f]{1,16}")      # a match's checksum, as csda writes it

@@ -301,7 +301,7 @@ def test_pywebview_shows_the_page_in_a_window_of_the_size_the_app_uses(monkeypat
 
     (args, kwargs), = webview.created
     assert args == (TITLE, url)
-    assert (kwargs["width"], kwargs["height"], kwargs["min_size"]) == (1180, 820, (900, 600))
+    assert (kwargs["width"], kwargs["height"], kwargs["min_size"]) == (1320, 820, (900, 600))
     assert isinstance(kwargs["js_api"], WindowApi)
     assert webview.started == 1
     assert fakes.chromium.launched == [] and fakes.browser.opened == []

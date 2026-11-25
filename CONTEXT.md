@@ -84,3 +84,23 @@ _Avoid_: Camera angle, view, cam
 **Enemy POV**:
 A Clip recorded from an opponent's camera, showing the subject's Frag from the victim's point of view.
 _Avoid_: Victim cam, death cam, reverse angle
+
+**Mistake**:
+A moment in a Demo that usually costs the round and that the subject could have played another way, worked out from
+what the Demo says happened: a death nobody traded, a death while blind, a flash that blinded a teammate. A death is
+a Mistake for at most one reason.
+_Avoid_: Error, blunder, misplay, bad play
+
+**Mistake Type**:
+The classification of a Mistake, for example `OPENING_DEATH`, `DIED_BLIND`, `THREW_ADVANTAGE`, `TEAM_FLASH`.
+_Avoid_: Category, kind, tag
+
+**Form**:
+The subject's numbers over their last matches (10, 20, 50 or all of them), each against the same number of matches
+before those. The Progress page shows it.
+_Avoid_: Trend, streak, shape
+
+**Heatmap**:
+Where the subject's Frags and deaths happened on a map's radar, over one match or many: where they stood for a Frag,
+and where they died.
+_Avoid_: Hot zones, position map, kill map

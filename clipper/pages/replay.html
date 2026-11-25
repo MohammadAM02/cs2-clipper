@@ -135,7 +135,7 @@ function draw() {
     }
   }
   // the players, alive ones in colour and the dead as grey crosses
-  ctx.font = "700 13px 'Pixelify Sans', 'Segoe UI', sans-serif";
+  ctx.font = "700 13px 'Space Grotesk', 'Segoe UI', sans-serif";
   ctx.textAlign = "center";
   for (const p of data.players) {
     const s = placeAt(p.steam_id, now);
@@ -201,7 +201,7 @@ function showState(html) {
 
 function renderPage() {
   const title = document.getElementById("title"), say = document.getElementById("say");
-  title.textContent = `Replay, ${data.map}`;
+  title.textContent = `Replay, ${mapName(data.map)}`;
   const waiting = data.state === "requested";
   if (!waiting && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   if (data.state === "not_computed") {

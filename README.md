@@ -30,19 +30,40 @@
   <sub>Round 9 on Dust2, the start of an Ace. The app found it, recorded it and joined the Reel on its own.</sub>
 </p>
 
-## What's new in 0.15.0
+## What's new in 0.16.0
 
-### Clip your deaths
+### Your Mistakes, your Progress, and Heatmaps
 
-- **A new switch in Settings, under Picture.** Turn on **Clip your deaths** and each of your deaths is listed on
-  Reels to pick, beside your rounds, under a red DIED!.
-- **Each death is a Reel of its own,** apart from your kills: the seconds before you died, from your view, and in
-  the Enemy POV from your killer's. Your kill Reels stay as they were.
-- **A death just after one of your kills still gets its own clip.** CS2 plays the demo once more for it in the
-  same launch, which adds about ten seconds to that render.
-- **Your older matches too.** Turning the switch on lists your deaths in every match the app still has, and turning
-  it off takes the ones you haven't picked off the list again. A death you picked still records.
-- **A Deaths chip on Reels** shows only your deaths.
+- **Mistakes under every match's Stats.** Each match now lists the moments that cost you: the round's first death
+  with nobody close enough to trade it, a death while you were blind, a death that gave back a two-player advantage,
+  a flash of yours that blinded a teammate, a team kill, and a death to the bomb, a fall or your own grenade. Each
+  one says what happened and what to try next time, with **Replay** for its round and **Watch** when a Reel has the
+  moment.
+- **A Progress page.** Your form over your last 10, 20 or 50 matches, or all of them, against the same number
+  before: win rate, Rating 2.0, K/D, ADR, HS%, KAST, opening duels won and Mistakes a match, each with an arrow and a
+  line of its last matches. Under them are a bar for every match (click one for its Stats), your Mistakes by kind
+  with the commonest one's tip, each map's numbers, and your records.
+- **A Heatmaps page.** Where you stood for each Frag and where you died, on the map's radar: green where you win
+  more fights than you lose, red where you lose more. Pick a map, Frags or deaths, T or CT, and the last 10 or 20
+  matches or all of them; **Heatmap of this match** on Stats opens it for one match. Point at a square to see the
+  round and the weapon, and click it to open its match.
+- **Your older matches too.** Everything but the team flashes works at once for every match the app still has.
+  Flashes weren't kept until now, so the app reads each older Demo again, one at a time and only while CS2 and
+  FACEIT AC are closed; until then a match says its team flashes aren't counted yet.
+- **A map's picture is read from your CS2** the first time Heatmaps needs it, once CS2 and FACEIT AC are closed.
+  Until then the places are drawn to scale without it.
+
+### A new layout, and words that are easier to read
+
+- **The pages moved to the side.** Status, Demos to grab and Reels, then Progress and Heatmaps, run down the left of
+  the window with Settings at the foot, and a slim strip along the top holds the page's name, the status pill and
+  the window's buttons. In a narrow window the side folds to a rail of icons, so the page keeps its room.
+- **A clean face for everything you read.** Sentences, labels, tables and every number are now set in Space
+  Grotesk, whose figures line up in columns. Titles, buttons and the pages' names keep their pixel lettering.
+- **Numbers sit in a grid of panels** on Progress, Heatmaps and Stats, and the Stats table is tighter, so all ten
+  players' numbers fit without scrolling sideways.
+- **The window opens a little wider** (1320 pixels, from 1180) so the side shows its names. Keys **1** to **6** go
+  to a page.
 
 Every version before it is in the [changelog](CHANGELOG.md), and the app shows a version's notes when it offers
 the update.

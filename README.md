@@ -30,40 +30,40 @@
   <sub>Round 9 on Dust2, the start of an Ace. The app found it, recorded it and joined the Reel on its own.</sub>
 </p>
 
-## What's new in 0.16.0
+## What's new in 0.17.0
 
-### Your Mistakes, your Progress, and Heatmaps
+### A clean new look
 
-- **Mistakes under every match's Stats.** Each match now lists the moments that cost you: the round's first death
-  with nobody close enough to trade it, a death while you were blind, a death that gave back a two-player advantage,
-  a flash of yours that blinded a teammate, a team kill, and a death to the bomb, a fall or your own grenade. Each
-  one says what happened and what to try next time, with **Replay** for its round and **Watch** when a Reel has the
-  moment.
-- **A Progress page.** Your form over your last 10, 20 or 50 matches, or all of them, against the same number
-  before: win rate, Rating 2.0, K/D, ADR, HS%, KAST, opening duels won and Mistakes a match, each with an arrow and a
-  line of its last matches. Under them are a bar for every match (click one for its Stats), your Mistakes by kind
-  with the commonest one's tip, each map's numbers, and your records.
-- **A Heatmaps page.** Where you stood for each Frag and where you died, on the map's radar: green where you win
-  more fights than you lose, red where you lose more. Pick a map, Frags or deaths, T or CT, and the last 10 or 20
-  matches or all of them; **Heatmap of this match** on Stats opens it for one match. Point at a square to see the
-  round and the weapon, and click it to open its match.
-- **Your older matches too.** Everything but the team flashes works at once for every match the app still has.
-  Flashes weren't kept until now, so the app reads each older Demo again, one at a time and only while CS2 and
-  FACEIT AC are closed; until then a match says its team flashes aren't counted yet.
-- **A map's picture is read from your CS2** the first time Heatmaps needs it, once CS2 and FACEIT AC are closed.
-  Until then the places are drawn to scale without it.
+- **The pixel look is gone.** Every page is now set in one clean face, Space Grotesk, on dark slate panels with soft
+  rounded corners, plain line icons and smooth motion. The pixel weather behind the pages, the pixel scene on Status
+  and Nugget, with his speech bubbles and sound effects, are gone too.
+- **Status says what is going on on a card in the colour of the map** being rendered (or your last Demo's), with
+  the map's radar faint behind it once the app has read it from CS2.
+- **Reels marks each Highlight with a plain badge** (ACE, 4K, Died) where the comic bursts were.
 
-### A new layout, and words that are easier to read
+### Skills progress
 
-- **The pages moved to the side.** Status, Demos to grab and Reels, then Progress and Heatmaps, run down the left of
-  the window with Settings at the foot, and a slim strip along the top holds the page's name, the status pill and
-  the window's buttons. In a narrow window the side folds to a rail of icons, so the page keeps its room.
-- **A clean face for everything you read.** Sentences, labels, tables and every number are now set in Space
-  Grotesk, whose figures line up in columns. Titles, buttons and the pages' names keep their pixel lettering.
-- **Numbers sit in a grid of panels** on Progress, Heatmaps and Stats, and the Stats table is tighter, so all ten
-  players' numbers fit without scrolling sideways.
-- **The window opens a little wider** (1320 pixels, from 1180) so the side shows its names. Keys **1** to **6** go
-  to a page.
+- **A new chart at the top of Progress**, like scope.gg's: your Aim, Utility, Entry, Trading and HLTV Rating 2.1,
+  each rated 0 to 100, your last matches as a coloured arc against the matches before as a filled sector. Point at
+  a part to see what it rates and its numbers, now and before.
+- **Well done and Take a look at these** list the numbers that moved the most, better and worse, with their value
+  now and before. A part is rated against fixed marks the app sets for each number, not against other players.
+
+### FACEIT's official stats, and HLTV Rating 2.1
+
+- **Stats shows FACEIT's official numbers** for everything FACEIT reports: kills, deaths, assists, K/D, ADR, HS%,
+  entry duels, 2K to 5K rounds, enemies flashed, utility damage and 1v1 and 1v2 clutches. KAST and trades, which
+  FACEIT does not report, come from the Demo, and each number says where it is from. The app asks FACEIT again for
+  each match it already has, once, for the fields it did not keep before.
+- **Rating 2.1 in place of Rating 2.0** on Stats, Progress and the skills chart, worked out from KAST, kills,
+  deaths, assists and ADR. HLTV keeps its formula to itself, so this is the community's estimate of it, close to
+  HLTV's but not equal to it. Demos to grab keeps the estimate from FACEIT's numbers alone, as those matches have no
+  Demo yet to take KAST from.
+
+### Heatmaps
+
+- **A smooth heat and round dots.** The heat is a soft glow, green where you win more fights than you lose and red
+  where you lose more, in place of square cells.
 
 Every version before it is in the [changelog](CHANGELOG.md), and the app shows a version's notes when it offers
 the update.

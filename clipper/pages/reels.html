@@ -9,24 +9,22 @@
 </head>
 <body>
 <script src="/app.js"></script>
-<script src="/nugget.js"></script>
-<script src="/pixelscene.js"></script>
 <script src="/touches.js" defer></script>
 <script>renderNav("/reels");</script>
 <main>
   <p class="brand" id="brand" hidden></p>
   <section class="pagehead rise">
     <h1 class="title">Reels</h1>
-    <div class="saybox"><span id="sum-nugget"></span><p class="say" id="sum">Loading…</p></div>
+    <p class="say" id="sum">Loading…</p>
   </section>
   <div id="filters" role="group" aria-label="Show" style="display:flex;gap:8px;flex-wrap:wrap"></div>
   <section class="hero tall rise" id="hero" aria-label="Your best Highlights" tabindex="0" hidden style="animation-delay:.06s"></section>
   <div class="sechead" id="mhead" hidden><h2 class="h2">Matches</h2><span class="lbl">Newest first</span></div>
   <div id="matches" style="display:flex;flex-direction:column;gap:18px"></div>
   <div class="emptybig rise" id="empty" hidden>
-    <span data-nugget-full="idle"></span>
+    <span class="empty-ico"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 13h5l2 3h4l2-3h5"/><path d="M5.5 6.5L3 13v5a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5l-2.5-6.5A2 2 0 0 0 16.6 5H7.4a2 2 0 0 0-1.9 1.5z"/></svg></span>
     <h2>No Reels yet</h2>
-    <p>Grab a Demo and its rounds worth clipping show up here. Tick the ones you want and Nugget films them.</p>
+    <p>Grab a Demo and its rounds worth clipping show up here. Tick the ones you want and the app records them.</p>
     <a class="primary" href="/demos">Demos to grab</a>
   </div>
 </main>
@@ -64,13 +62,10 @@ if (!PC) {
   b.hidden = false;
   b.innerHTML = `${MARK}<span>CS2 Clipper</span><a class="more" href="/demos" style="margin-left:auto">Demos to grab${ICON.next}</a>`;
 }
-document.querySelectorAll("[data-nugget-full]").forEach(n => { n.outerHTML = NUGGET.svg(n.dataset.nuggetFull, "Nugget, asleep on his egg"); });
-// Each Highlight's kind as a comic burst: an Ace is the loudest.
-const BURST_FILL = {ACE: "#FF5500", "5K": "#FF5500", "4K": "#F2EFEA", "3K": "#FFB27A", "2K": "#8F857A", DEATH: "#FF3D2E"};
-// The burst's word is the Type's, but for an Ace's and a death's: "DEATH!" would run off the burst's edges.
-const BURST_WORD = {"5K": "ACE!", DEATH: "DIED!"};
-const hitBurst = type => `<span class="hitb" title="${esc(type)}">${NUGGET.burst(BURST_WORD[type] || esc(type) + "!", BURST_FILL[type] || "#8F857A")}</span>`;
-let sumMood = "";
+// Each Highlight's kind as a badge: an Ace is the loudest, a death is red.
+const HIT_CLASS = {ACE: "ace", "5K": "ace", "4K": "k4", "3K": "k3", DEATH: "died"};
+const HIT_WORD = {"5K": "ACE", DEATH: "Died", TALK: "Talk"};
+const hitBurst = type => `<span class="hitb ${HIT_CLASS[type] || ""}" title="${esc(type)}">${esc(HIT_WORD[type] || type)}</span>`;
 // What a filter chip keeps: Highlights of its Type (a DEATH is your death in a round, with Clip your deaths on in
 // Settings), or with its reason (all headshots).
 const REASON_CHIPS = {hs: /all headshots/i};
@@ -204,7 +199,7 @@ function matchBlock(m) {
       ${maptile(m.map, "width:54px;height:54px;font-size:21px")}
       <span class="nm"><b>${esc(m.map)}</b><small>${dateLabel(m.played_at)}, ${sub}</small></span>
       ${ready ? '<span class="readypill">Ready to pick</span>' : ""}
-      <span class="sc" style="color:${won ? "#F2EFEA" : "#8F857A"}"><b>${esc(m.score)}</b><small>${esc(resultLabel(m.result))}</small></span>
+      <span class="sc" style="color:${won ? "#EEF0F3" : "#7E8591"}"><b>${esc(m.score)}</b><small>${esc(resultLabel(m.result))}</small></span>
       <span class="strip-w" aria-hidden="true"><span class="rstrip">${cells}</span><span class="ends"><span>Round 1</span><span>Round ${rounds(m.score)}</span></span></span>
       ${ICON.chev}
     </button>
@@ -249,8 +244,6 @@ function render() {
     ? `${plural(clips.length, "Highlight")} from ${plural(withClips, "match", "matches")}. `
       + (ready ? `${readyLine}.` : "Click one to watch it and share it.")
     : ready ? `${readyLine}: tick the rounds you want, then Clip.` : "No Reels yet. Finished Demos show up here.";
-  const mood = visible.length ? "ace" : "idle";
-  if (mood !== sumMood) { sumMood = mood; document.getElementById("sum-nugget").innerHTML = NUGGET.head(mood); }
   document.getElementById("mhead").hidden = !visible.length;
   document.getElementById("empty").hidden = visible.length > 0;
   renderFilters();

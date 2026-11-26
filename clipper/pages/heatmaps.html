@@ -9,14 +9,12 @@
 </head>
 <body>
 <script src="/app.js"></script>
-<script src="/nugget.js"></script>
-<script src="/pixelscene.js"></script>
 <script src="/touches.js" defer></script>
 <script>renderNav("/heatmaps");</script>
 <main>
   <section class="pagehead rise">
     <h1 class="title">Heatmaps</h1>
-    <div class="saybox"><span data-nugget="rendering"></span><p class="say" id="say">Loading…</p></div>
+    <p class="say" id="say">Loading…</p>
   </section>
   <div id="tools" hidden style="display:flex;flex-direction:column;gap:10px">
     <div class="toolbar" id="maps" role="group" aria-label="Map"></div>
@@ -34,35 +32,33 @@
     <div class="side">
       <section class="card"><div class="chead"><h2 class="h3">On this map</h2><span class="lbl" id="over"></span></div><div class="duo" id="totals"></div>
         <div class="legend"><span><i style="--c:var(--good)"></i>Where you stood for a Frag</span><span><i style="--c:var(--bad)"></i>Where you died</span></div>
-        <p class="note" style="font-size:13px">A cell is green where you win more fights than you lose, red where you lose more, and brighter the more happens in it. Point at a square to see it; click to open its match.</p></section>
+        <p class="note" style="font-size:13px">The heat is green where you win more fights than you lose, red where you lose more, and stronger the more happens there. Point at a dot to see it; click to open its match.</p></section>
       <section class="card"><div class="chead"><h2 class="h3">By side</h2></div><div class="duo" id="bysides"></div></section>
       <section class="card"><div class="chead"><h2 class="h3">Weapons</h2></div><div class="duo" id="weapons"></div></section>
     </div>
   </div>
   <div class="emptybig rise" id="empty" hidden>
-    <span data-nugget-full="idle"></span>
+    <span class="empty-ico"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 13h5l2 3h4l2-3h5"/><path d="M5.5 6.5L3 13v5a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5l-2.5-6.5A2 2 0 0 0 16.6 5H7.4a2 2 0 0 0-1.9 1.5z"/></svg></span>
     <h2>No map to draw yet</h2>
     <p>Heatmaps fill in once a Demo of yours has been analyzed: where you get your Frags and where you die, on each map.</p>
   </div>
 </main>
 <script>
 // Heatmaps (spec: Progress): where the player's Frags and deaths happen on a map, over one match or many. The radar is
-// CS2's own picture of the map, read from the game on this PC; the heat is drawn over it in square cells, green
-// where they win more fights than they lose and red where they lose more, with a square for each Frag (where they
+// CS2's own picture of the map, read from the game on this PC; the heat is drawn over it as a soft glow, green
+// where they win more fights than they lose and red where they lose more, with a dot for each Frag (where they
 // stood) and each death (where they died). PC-only, like everything but Demos to grab and Reels.
-const SIZE = 768, CELL = 24;                // the canvas and a heat cell, in canvas pixels
-const CROWD = 150;                          // with more places than this on the map, each one's square is drawn smaller
+const SIZE = 768;                           // the canvas, in its own pixels
+const CROWD = 150;                          // with more places than this on the map, each dot is drawn smaller
 const KINDS = [["both", "Both"], ["kill", "Frags"], ["death", "Deaths"]];
 const SIDES = [["", "Both"], ["T", "T"], ["CT", "CT"]];
 const SPANS = [[0, "All"], [10, "Last 10"], [20, "Last 20"]];
-const GOOD = "#8BE08B", BAD = "#FF7A66";
+const GOOD = "#4ADE80", BAD = "#F87171";
 const query = new URLSearchParams(location.search);
 const state = {map: query.get("map") || "", match: query.get("match") || "", kind: "both", side: "", last: 0};
 let data = null, picture = null, pictureOf = "", asked = new Set(), shown = [];
 const canvas = $("#map"), ctx = canvas.getContext("2d");
 
-document.querySelectorAll("[data-nugget]").forEach(n => { n.outerHTML = NUGGET.head(n.dataset.nugget); });
-document.querySelectorAll("[data-nugget-full]").forEach(n => { n.outerHTML = NUGGET.svg(n.dataset.nuggetFull, "Nugget, asleep on his egg"); });
 
 const chips = (list, on, name) => list.map(([value, label]) => `<button class="chip${value === on ? " on" : ""}" data-${name}="${esc(value)}" aria-pressed="${value === on}">${esc(label)}</button>`).join("");
 
@@ -87,39 +83,65 @@ function placer(places) {
 
 const visible = () => data.places.filter(p => (state.kind === "both" || p.kind === state.kind) && (!state.side || p.side === state.side));
 
+// The heat: a soft spot of warmth for each Frag and each death, added up. Where they overlap the colour leans to
+// whichever there is more of (green for Frags, red for deaths), and the more there is the stronger it shows.
+const HEAT_R = 42, GOOD_RGB = [74, 222, 128], BAD_RGB = [248, 113, 113], EVEN_RGB = [238, 240, 243];
+function density(points) {
+  const out = new Float32Array(SIZE * SIZE), r2 = HEAT_R * HEAT_R;
+  for (const p of points) {
+    const x0 = Math.max(0, Math.floor(p.px - HEAT_R)), x1 = Math.min(SIZE - 1, Math.ceil(p.px + HEAT_R));
+    const y0 = Math.max(0, Math.floor(p.py - HEAT_R)), y1 = Math.min(SIZE - 1, Math.ceil(p.py + HEAT_R));
+    for (let y = y0; y <= y1; y++) {
+      const dy = y - p.py, row = y * SIZE;
+      for (let x = x0; x <= x1; x++) {
+        const d2 = (x - p.px) ** 2 + dy * dy;
+        if (d2 < r2) out[row + x] += Math.exp(-3 * d2 / r2);          // a Gaussian bump, gone by its edge
+      }
+    }
+  }
+  return out;
+}
+function heatLayer(points) {
+  const k = density(points.filter(p => p.kind === "kill")), d = density(points.filter(p => p.kind === "death"));
+  let most = 0;
+  for (let i = 0; i < k.length; i++) most = Math.max(most, k[i] + d[i]);
+  const img = ctx.createImageData(SIZE, SIZE), px = img.data;
+  if (!most) return img;
+  for (let i = 0; i < k.length; i++) {
+    const total = k[i] + d[i];
+    if (total < 0.04) continue;
+    const lean = (k[i] - d[i]) / total;                          // -1 all deaths .. +1 all Frags
+    const to = lean >= 0 ? GOOD_RGB : BAD_RGB, w = Math.abs(lean);
+    px[i * 4] = EVEN_RGB[0] + (to[0] - EVEN_RGB[0]) * w;
+    px[i * 4 + 1] = EVEN_RGB[1] + (to[1] - EVEN_RGB[1]) * w;
+    px[i * 4 + 2] = EVEN_RGB[2] + (to[2] - EVEN_RGB[2]) * w;
+    px[i * 4 + 3] = 255 * Math.min(0.55, 0.06 + 0.5 * Math.sqrt(total / most));
+  }
+  return img;
+}
+
 function draw() {
   const places = visible(), at = placer(data.places);
-  ctx.imageSmoothingEnabled = false;
+  ctx.imageSmoothingEnabled = true;
   ctx.clearRect(0, 0, SIZE, SIZE);
-  ctx.fillStyle = "#0A0807";
+  ctx.fillStyle = "#0E1014";
   ctx.fillRect(0, 0, SIZE, SIZE);
-  if (picture && pictureOf === data.map && data.radar) { ctx.globalAlpha = 0.5; ctx.drawImage(picture, 0, 0, SIZE, SIZE); ctx.globalAlpha = 1; }
-  // the heat: each cell's Frags and deaths, the commoner of the two its colour, and the more there are the stronger
-  const cells = new Map();
+  if (picture && pictureOf === data.map && data.radar) { ctx.globalAlpha = 0.55; ctx.drawImage(picture, 0, 0, SIZE, SIZE); ctx.globalAlpha = 1; }
   shown = places.map(p => { const [px, py] = at(p.x, p.y); return {...p, px, py}; });
+  const layer = document.createElement("canvas");
+  layer.width = layer.height = SIZE;
+  layer.getContext("2d").putImageData(heatLayer(shown), 0, 0);
+  ctx.drawImage(layer, 0, 0);
+  // a round dot for each, with a dark ring so it reads on any colour
+  const r = shown.length > CROWD ? 3.2 : 4.5;
   for (const p of shown) {
-    if (p.px < 0 || p.py < 0 || p.px >= SIZE || p.py >= SIZE) continue;
-    const key = Math.floor(p.px / CELL) + "," + Math.floor(p.py / CELL);
-    const cell = cells.get(key) || {kill: 0, death: 0};
-    cell[p.kind] += 1;
-    cells.set(key, cell);
-  }
-  const most = Math.max(1, ...[...cells.values()].map(c => c.kill + c.death));
-  for (const [key, c] of cells) {
-    const [cx, cy] = key.split(",").map(Number), total = c.kill + c.death;
-    const level = Math.min(4, 1 + Math.floor(3.999 * (total - 1) / Math.max(1, most - 1)));     // four steps, no blur
-    ctx.globalAlpha = [0, 0.2, 0.34, 0.5, 0.68][level];
-    ctx.fillStyle = c.kill === c.death ? "#F2E7CF" : c.kill > c.death ? GOOD : BAD;
-    ctx.fillRect(cx * CELL, cy * CELL, CELL, CELL);
-  }
-  ctx.globalAlpha = 1;
-  const DOT = shown.length > CROWD ? 4 : 6, edge = shown.length > CROWD ? 1 : 2;
-  for (const p of shown) {
-    const x = Math.round(p.px - DOT / 2), y = Math.round(p.py - DOT / 2);
-    ctx.fillStyle = "#0D0A08";
-    ctx.fillRect(x - edge, y - edge, DOT + 2 * edge, DOT + 2 * edge);
+    ctx.beginPath();
+    ctx.arc(p.px, p.py, r, 0, Math.PI * 2);
     ctx.fillStyle = p.kind === "kill" ? GOOD : BAD;
-    ctx.fillRect(x, y, DOT, DOT);
+    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = "rgba(14,16,20,.9)";
+    ctx.fill();
+    ctx.stroke();
   }
   sums(places);
 }

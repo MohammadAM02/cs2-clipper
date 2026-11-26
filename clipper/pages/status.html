@@ -9,14 +9,11 @@
 </head>
 <body>
 <script src="/app.js"></script>
-<script src="/nugget.js"></script>
-<script src="/pixelscene.js"></script>
 <script src="/touches.js" defer></script>
 <script>renderNav("/status");</script>
 <main>
   <section class="onboard rise" id="onboard" aria-labelledby="h-onboard" hidden>
     <div class="ob-hero">
-      <canvas id="ob-scene" aria-hidden="true"></canvas>
       <div class="ob-head">
         <h1 id="h-onboard" class="title">Set up in one go</h1>
         <p class="lead promise"><b>Zero FPS cost</b> CS2 Clipper does nothing while CS2 is open, and never opens CS2
@@ -62,13 +59,14 @@
   <div id="home">
   <section class="stage rise" aria-label="Now">
     <div class="art" id="art">
-      <canvas id="scene" class="scene-art" aria-hidden="true"></canvas>
+      <img class="radar-img" id="art-radar" alt="" hidden>
+      <span class="mapword" id="art-map" aria-hidden="true"></span>
       <h1 id="greet" class="cap">Status</h1>
+      <div class="bubble kicker"><p id="say">Loading…</p></div>
+      <p class="mapnote" id="kicker"></p>
       <div class="cap" id="elapsed" aria-hidden="true"></div>
-      <span class="sfx" id="sfx" aria-hidden="true"></span>
     </div>
     <div class="talk">
-      <div class="bubble"><p id="say">Loading…</p></div>
       <div class="facts">
         <div class="nowline"><span class="dot" id="now-dot"></span><span id="now" aria-live="polite">Loading…</span><span class="file" id="now-file"></span></div>
         <div id="now-sub"></div>
@@ -92,7 +90,7 @@
 
   <section class="setup" id="setup" aria-labelledby="h-setup" hidden>
     <div class="head">
-      <span data-nugget="problem"></span>
+      <span class="empty-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.5v.01"/></svg></span>
       <div class="say">
         <h2 id="h-setup" class="h2">Set up this PC</h2>
         <p class="lead" id="setup-lead" aria-live="polite"></p>
@@ -106,7 +104,7 @@
 
   <section class="setup" id="update" aria-labelledby="h-update" hidden>
     <div class="head">
-      <span data-nugget="rendering"></span>
+      <span class="empty-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.5v.01"/></svg></span>
       <div class="say">
         <h2 id="h-update" class="h2">A new CS2 Clipper is out</h2>
         <p class="lead" id="update-lead" aria-live="polite"></p>
@@ -141,8 +139,8 @@
       <h2 id="h-log" class="cap" style="margin-right:10px">Activity log</h2>
       <span id="log-filters" role="group" aria-label="Show" style="display:flex;gap:8px"></span>
       <span class="spacer"></span>
-      <button class="chip" id="copy-log" disabled><svg width="16" height="16" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="M0 0h4v1h-4zM0 1h1v1h-1zM3 1h1v1h-1zM0 2h1v1h-1zM3 2h4v1h-4zM0 3h4v1h-4zM6 3h1v1h-1zM3 4h1v1h-1zM6 4h1v1h-1zM3 5h1v1h-1zM6 5h1v1h-1zM3 6h4v1h-4z"/></svg>Copy</button>
-      <button class="chip on" id="follow" aria-pressed="true"><svg width="16" height="16" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="M3 0h2v1h-2zM3 1h2v1h-2zM3 2h2v1h-2zM3 3h2v1h-2zM0 4h1v1h-1zM3 4h2v1h-2zM7 4h1v1h-1zM1 5h6v1h-6zM2 6h4v1h-4zM3 7h2v1h-2z"/></svg>Follow new lines</button>
+      <button class="chip" id="copy-log" disabled>${ICON.copy}Copy</button>
+      <button class="chip on" id="follow" aria-pressed="true">${ICON.down}Follow new lines</button>
     </div>
     <div id="log" role="log" aria-label="Log"></div>
   </section>
@@ -172,11 +170,11 @@ let setupWasRunning = false, setupUpdates = null;
 
 // The buttons' icons live in app.js; the page's markup names them.
 document.querySelectorAll("main button, main a").forEach(el => {
-  el.innerHTML = el.innerHTML.replace("${PAUSE}", ICON.pause).replace("${PLAY}", ICON.play).replace("${NEXT}", ICON.next);
+  el.innerHTML = el.innerHTML.replace("${PAUSE}", ICON.pause).replace("${PLAY}", ICON.play).replace("${NEXT}", ICON.next)
+    .replace("${ICON.copy}", ICON.copy).replace("${ICON.down}", ICON.down);
 });
 const strip = document.getElementById("strip");
 strip.innerHTML = PHASES.map(([l], i) => `<div class="mini" role="listitem"><small>${String(i + 1).padStart(2, "0")}</small><b>${l}</b><span class="eta"></span></div>`).join("");
-document.querySelectorAll("[data-nugget]").forEach(n => { n.outerHTML = NUGGET.head(n.dataset.nugget); });
 const carousel = Carousel(document.getElementById("hero"));
 
 function greeting() {
@@ -211,78 +209,82 @@ function progressLine(p) {
   return `${sequence} · ${left}`;
 }
 
-// --- the monitor: the pixel scene, what Nugget says, and the sound it makes ------------------------------------
-// The scene plays in the setting of the map being rendered (the last Demo's when nothing renders), and rests while
-// the window is not in front. Nugget's mood comes from what the app is doing; an Ace (touches.js says so with
-// `clipper:ace`) has him crowing a while.
+// --- the card: what the app is doing, in the colour of the map it is on -------------------------------------------
+// The card takes the colour of the map being rendered (the last Demo's when nothing renders), with the map's radar
+// faint behind it once the app has read it from CS2. An Ace (touches.js says so with `clipper:ace`) is said here a while.
 const READING = ["spotted", "unpacked", "analyzed", "scored"];
-const SFX = {rendering: ["REC!", "#FF5500"], idle: ["zzz…", "#F2EFEA"], paused: ["HOLD!", "#F2EFEA"], problem: null,
-  ace: ["POW!", "#FF5500"]};
-let stageKey = "", aceUntil = 0, aceNews = null;
-const stage = PIXELSCENE.mount(document.getElementById("scene"), {map: backdropMap(), start: loopStart(), pauseOnBlur: true, lift: 64,
-  host: document.getElementById("art")});     // `lift`: the ground the lower third covers is extra ground
-const stageMap = data => (data.rendering && data.rendering.map) || (data.demos.find(d => d.map) || {}).map || "rooftop";
+let aceUntil = 0, aceNews = null, cardMap = null;
+const stageMap = data => (data.rendering && data.rendering.map) || (data.demos.find(d => d.map) || {}).map || "";
 
-function nuggetMood(data) {
+function cardMood(data) {
   if (Date.now() < aceUntil) return "ace";
   if (data.problems.length || data.paused_by === "failures") return "problem";
   return data.rendering ? "rendering" : "idle";
 }
 
-function nuggetSays(data, mood) {
+function statusSays(data, mood) {
   if (mood === "ace" && aceNews) {
-    return aceNews.count > 1 ? `Bawk bawk! ${aceNews.count} new Aces, and every one is in your Reels.`
-      : `Bawk bawk! An Ace on ${aceNews.map}. Five frags in one round, and it's in your Reels.`;
+    return aceNews.count > 1 ? `${aceNews.count} new Aces, and every one is in your Reels.`
+      : `An Ace on ${aceNews.map}: five frags in one round, and it's in your Reels.`;
   }
-  if (data.quitting) return data.quitting === "after_render" ? "I'll finish this take, then the app closes." : "Packing up the camera. See you next match.";
+  if (data.quitting) return data.quitting === "after_render" ? "This take finishes, then the app closes." : "Closing the app.";
   if (data.paused_by === "failures") return "Renders kept failing, so rendering stopped. The log says why; resume once it is fixed.";
   if (data.problems.length) return `Rendering waits for ${data.problems.length === 1 ? "the fix" : "the fixes"} below.`;
   const r = data.rendering;
   if (r) {
     const p = r.progress, map = r.map || "match";
-    if (p && p.stage === "starting") return `Starting CS2 for your ${map} Highlights. Hands off for a few minutes!`;
-    if (p && p.stage === "joining") return `Stitching your ${map} Clips into a Reel. Nearly there!`;
+    if (p && p.stage === "starting") return `Starting CS2 for your ${map} Highlights. Leave the PC to it for a few minutes.`;
+    if (p && p.stage === "joining") return `Joining your ${map} Clips into Reels. Nearly there.`;
     const enemy = (p && p.perspective || r.perspective) === "enemy";
-    return `Filming your ${map} Highlights from ${enemy ? "the Enemy POV" : "your view"}.`
+    return `Recording your ${map} Highlights from ${enemy ? "the Enemy POV" : "your view"}.`
       + (enemy ? " Your view is in Reels already." : " They land in Reels the moment this take ends.");
   }
-  if (data.paused_by === "you") return "Camera's down. Demos keep coming in, and I'll film them when you resume.";
-  if (/^Waiting/.test(data.summary)) return `${data.summary}. I'll start filming once that clears.`;
+  if (data.paused_by === "you") return "Rendering is paused. Demos keep coming in, and they record when you resume.";
+  if (/^Waiting/.test(data.summary)) return `${data.summary}. Recording starts once that clears.`;
   const reading = data.demos.find(d => READING.includes(d.state));
-  if (reading) return `Reading your ${reading.map || "new"} Demo for Highlights. Notebook out!`;
+  if (reading) return `Reading your ${reading.map || "new"} Demo for Highlights.`;
   const pending = pendingRows(grabRows).length;
-  if (pending) return `${plural(pending, "match", "matches")} worth clipping on FACEIT. Download ${pending === 1 ? "its Demo" : "a Demo"} and I'll take it from your Downloads.`;
-  return "All quiet. Go play, I'll watch your Downloads and check FACEIT.";
+  if (pending) return `${plural(pending, "match", "matches")} worth clipping on FACEIT. Download ${pending === 1 ? "its Demo" : "a Demo"} and the app takes it from your Downloads.`;
+  return "All quiet. Go play: the app watches your Downloads and checks FACEIT.";
 }
 
-// The caption over his panel: where the story is, or the greeting when nothing is going on.
+// The card's title: what is happening, or the greeting when nothing is going on.
 function captionOf(data, mood) {
-  if (mood === "ace" && aceNews) return aceNews.round ? `${aceNews.map}, round ${aceNews.round}…` : `Meanwhile, on ${aceNews.map}…`;
+  if (mood === "ace" && aceNews) return aceNews.round ? `Ace on ${aceNews.map}, round ${aceNews.round}` : `Ace on ${aceNews.map}`;
   if (mood === "problem") return "On hold";
-  if (data.rendering) return `Meanwhile, on ${data.rendering.map || "the server"}…`;
-  if (data.paused_by === "you") return "Hold the presses…";
+  if (data.rendering) return `Recording ${data.rendering.map || "a match"}`;
+  if (data.paused_by === "you") return "Paused";
   return greeting();
 }
 const restingCaption = (data, mood) => mood === "ace" ? "In your Reels now" : mood === "problem" ? "Waiting for a fix"
   : data.paused_by === "you" ? "Paused" : "Standing by";
 
 function renderStage(data) {
-  const mood = nuggetMood(data);
-  const sfx = mood === "idle" && data.paused_by === "you" ? "paused" : mood;
-  document.getElementById("art").dataset.mood = mood;       // the lower third's recording light (app.css)
-  stage.setMap(stageMap(data));
-  setBackdrop(stageMap(data));
-  if (sfx !== stageKey) {
-    stageKey = sfx;
-    document.getElementById("sfx").innerHTML = SFX[sfx] ? NUGGET.burst(...SFX[sfx]) : "";
+  const mood = cardMood(data), art = document.getElementById("art");
+  art.dataset.mood = mood;                                  // the lower third's recording light (app.css)
+  const map = stageMap(data);
+  setBackdrop(map);
+  if (map !== cardMap) {
+    cardMap = map;
+    const name = mapName(map);
+    art.style.setProperty("--tint", MAP_TINTS[name] || "#FF5500");
+    document.getElementById("art-map").textContent = name;
+    const radar = document.getElementById("art-radar");
+    radar.hidden = true;
+    if (/^[a-z0-9_]{2,40}$/.test(map)) {
+      radar.onload = () => { radar.hidden = false; };
+      radar.onerror = () => { radar.hidden = true; };
+      radar.src = `/radar/${map}.png`;
+    }
   }
   document.getElementById("greet").textContent = captionOf(data, mood);
   if (!data.rendering) document.getElementById("elapsed").textContent = restingCaption(data, mood);
-  const say = document.getElementById("say"), line = nuggetSays(data, mood);
+  const say = document.getElementById("say"), line = statusSays(data, mood);
   if (say.textContent !== line) {
     say.textContent = line;
     say.classList.remove("said"); void say.offsetWidth; say.classList.add("said");
   }
+  document.getElementById("kicker").textContent = data.rendering || !map ? "" : `Last Demo: ${mapName(map)}`;
 }
 
 addEventListener("clipper:ace", e => {
@@ -359,18 +361,9 @@ function renderNow(data) {
   sync(document.getElementById("jobs"), d.jobs, j => j.perspective, jobPill);
 }
 
-// Nugget's head on the panel of the strip he is at, and how far its render has got when it says.
-let buddy = null, buddyMood = "";
+// How far the render of the step it is at has got, on that step's panel, when it says.
 function placeBuddy(panel, mood, overall) {
   if (!panel) return;
-  if (mood !== buddyMood) {
-    buddyMood = mood;
-    const t = document.createElement("template");
-    t.innerHTML = NUGGET.head(mood);
-    buddy?.remove();
-    buddy = t.content.firstElementChild;
-  }
-  if (buddy.parentElement !== panel) panel.appendChild(buddy);
   let bar = panel.querySelector(".mbar");
   document.querySelectorAll("#strip .mbar").forEach(b => { if (b !== bar || overall === null) b.remove(); });
   if (overall === null) return;
@@ -392,7 +385,7 @@ function demoCard(d) {
   const going = deleted.has(d.id), asking = askingDelete.has(d.id) && !going;
   const label = going ? "Deleting…" : d.state === "failed" ? "Failed" : PHASES[phaseOf(d.state)][0];
   const eta = !going && d.state === "rendering" && d.eta_s != null ? `<span class="help" style="display:block;margin-top:5px">${esc(etaLabel(d.eta_s))}</span>` : "";
-  const color = going ? "#8F857A" : d.state === "failed" ? "#7CC4FF" : d.state === "rendering" ? "#FFB27A" : "#D6CBBE";
+  const color = going ? "#7E8591" : d.state === "failed" ? "#6CB6FF" : d.state === "rendering" ? "#FFA366" : "#C7CCD3";
   const bar = d.state === "failed" ? "pbar fail" : d.state === "rendering" && !going ? "pbar live" : "pbar";
   // A joined Demo is in Reels already, past deleting from here.
   const bin = going || d.state === "joined" ? '<span class="nobin"></span>' :
@@ -473,7 +466,7 @@ function renderGrab() {
   setNavCount(pending.length);
   const box = document.getElementById("grab");
   const onHold = lastStatus && lastStatus.problems.length;
-  if (!pending.length) { box.innerHTML = `<div class="empty nug-empty" style="padding:10px 0 6px">${NUGGET.head("idle")}<span>${onHold ? "Nothing to grab yet. Fix what's above first." : "All caught up. Go queue."}</span></div>`; box._ready = false; }
+  if (!pending.length) { box.innerHTML = `<div class="empty" style="display:flex;align-items:center;gap:12px;padding:10px 0 6px"><span class="empty-ico">${ICON.check}</span><span>${onHold ? "Nothing to grab yet. Fix what's above first." : "All caught up. Go queue."}</span></div>`; box._ready = false; }
   else sync(box, pending.slice(0, 3), r => r.id, grabRow);
   document.getElementById("grab-note").hidden = !pending.length;
 }
@@ -642,7 +635,7 @@ async function loadUpdate() {
 }
 
 // --- the first run: one screen, three things -------------------------------------------------------------------
-let onboardWas = null, obScene = null, canPick = !!window.pywebview?.api?.pick_folder;
+let onboardWas = null, canPick = !!window.pywebview?.api?.pick_folder;
 addEventListener("pywebviewready", () => { canPick = !!window.pywebview?.api?.pick_folder; });
 
 function renderOnboard(ob, setup) {
@@ -651,9 +644,6 @@ function renderOnboard(ob, setup) {
   document.getElementById("home").hidden = first;
   if (onboardWas === true && !first) toast(`${ICON.check}<span>You're set. Play a FACEIT match; its Highlights land in Reels.</span>`, 5000);
   onboardWas = first;
-  // the banner's scene plays only while the first-run screen is up
-  if (first && !obScene) obScene = PIXELSCENE.mount(document.getElementById("ob-scene"), {map: "rooftop", start: loopStart(), pauseOnBlur: true});
-  if (!first && obScene) { obScene.destroy(); obScene = null; }
   if (!first) return;
   const tick = (id, ok) => { const el = document.getElementById(id); el.hidden = !ok; el.innerHTML = ok ? ICON.check : ""; };
   document.getElementById("ob-who").classList.toggle("done", ob.steamid);

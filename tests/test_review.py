@@ -17,8 +17,9 @@ def test_the_line_is_the_demos_numbers_with_a_rating_when_faceit_has_no_line():
     assert (line["source"], line["rounds"], line["kills"], line["deaths"], line["assists"]) == ("demo", 3, 4, 1, 0)
     assert (line["opening_kills"], line["opening_deaths"]) == (2, 0)
     assert line["multi_kills"] == {"2": 1, "3": 0, "4": 0, "5": 0}
-    # 0.6845 + 0.656 x 4/3 kills - 0.76 x 1/3 deaths + 0.0037 x 33.3 ADR + 0.7217 x 1/3 rounds with 2+ Frags
-    assert line["rating"] == 1.67
+    # HLTV 2.1, estimated: 0.0073 x 66.7 KAST + 0.3591 x 4/3 KPR - 0.5329 x 1/3 DPR
+    #   + 0.2372 x (2.13 x 4/3 - 0.41) impact + 0.0032 x 33.3 ADR + 0.1587
+    assert line["rating"] == 1.63
 
 
 def test_the_line_leads_with_faceits_numbers_when_the_match_has_them():

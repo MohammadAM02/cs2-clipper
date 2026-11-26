@@ -8,18 +8,18 @@
 <link rel="stylesheet" href="/touches.css">
 <style>
   /* The Stats page's own pieces; the colours, type, frames, tables and Mistakes are app.css's. */
-  .scorecard { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 6px 0 18px; }
-  .tile { background: var(--panel); border: 2px solid var(--line); border-radius: 0; padding: 12px 14px; min-width: 0; clip-path: var(--notch); }
+  .scorecard { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin: 6px 0 18px; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 0; padding: 12px 14px; min-width: 0; border-radius:var(--r); }
   .tile .k { font: 700 12px var(--ui); letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
   .tile .v { font: 700 30px var(--ui); color: var(--ink); margin-top: 2px; white-space: nowrap; }
   .tile .d { font: 600 13px var(--ui); margin-top: 2px; min-height: 18px; color: var(--dim); }
   .arrow.good { color: var(--good); } .arrow.bad { color: var(--bad); }
   .src { font: 700 11px var(--ui); letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
-  .round { border: 2px solid var(--line); border-radius: 0; background: var(--panel); margin-bottom: 10px; clip-path: var(--notch); }
+  .round { border: 1px solid var(--line); border-radius: 0; background: var(--panel); margin-bottom: 10px; border-radius:var(--r); }
   .round summary { cursor: pointer; padding: 12px 16px; font: 700 17px var(--ui); letter-spacing: .04em; }
-  .round[open] summary { border-bottom: 2px solid var(--line); }
+  .round[open] summary { border-bottom: 1px solid var(--line); }
   .events { list-style: none; margin: 0; padding: 6px 16px 12px; }
-  .events li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 7px 0; border-bottom: 2px dashed var(--line); font: 600 15px var(--ui); }
+  .events li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 7px 0; border-bottom: 1px dashed var(--line); font: 600 15px var(--ui); }
   .events li:last-child { border-bottom: 0; }
   .events .t { color: var(--muted); font-family: var(--mono); font-size: 13px; min-width: 52px; }
   .events .weapon { color: var(--muted); }
@@ -33,15 +33,13 @@
 </head>
 <body>
 <script src="/app.js"></script>
-<script src="/nugget.js"></script>
-<script src="/pixelscene.js"></script>
 <script src="/touches.js" defer></script>
 <script>renderNav("/reels");</script>
 <main>
   <p><a class="back" href="/reels">← Reels</a></p>
   <section class="pagehead rise">
     <h1 class="title" id="title">Stats</h1>
-    <div class="saybox"><p class="say" id="say">Loading…</p></div>
+    <p class="say" id="say">Loading…</p>
   </section>
   <div id="body"></div>
 </main>
@@ -52,7 +50,7 @@
 // when the match was analyzed.
 const checksum = new URLSearchParams(location.search).get("match") || "";
 let view = null;
-let sortKey = "kills", sortDir = -1;
+let sortKey = "rating", sortDir = -1;
 
 const pct = v => (v === null || v === undefined) ? "–" : `${v}%`;
 const num = v => (v === null || v === undefined) ? "–" : String(v);
@@ -80,21 +78,22 @@ function tile(label, value, delta, source) {
     `<div class="d">${delta || ""}</div>${source ? `<div class="src">${esc(source)}</div>` : ""}</div>`;
 }
 
+// Your numbers: FACEIT's official ones when the match has FACEIT's line, and where FACEIT reports nothing (KAST,
+// trades) the demo's. Each tile says where its number comes from.
 function scorecard(you) {
-  const h = you.headline, src = h.source === "faceit" ? "FACEIT" : "Demo";
+  const o = you.official, src = o.source === "faceit" ? "FACEIT" : "Demo";
   return `<div class="scorecard" aria-label="Your scorecard">` +
-    tile("K–D–A", `${num(h.kills)}–${num(h.deaths)}–${num(h.assists)}`,
+    tile("K–D–A", `${num(o.kills)}–${num(o.deaths)}–${num(o.assists)}`,
       `${arrow("kills")} ${arrow("deaths", true)}`, src) +
-    tile("ADR", num(h.adr), arrow("adr"), src) +
-    tile("HS%", pct(h.hs_pct), arrow("hs_pct", false, " pts"), src) +
-    tile("Multi-kills", multiText(h.multi_kills), "2K · 3K · 4K · 5K rounds", src) +
-    tile("KAST", pct(you.kast_pct), "", "Demo") +
-    tile("Opening", you.opening_win_pct === null ? "–" : pct(you.opening_win_pct),
-      `${you.opening_kills}–${you.opening_deaths} duels`, "Demo") +
-    tile("Clutches", `${you.clutch_wins}/${you.clutch_attempts}`, "won / tried", "Demo") +
-    tile("Flashes", num(you.enemies_flashed),
-      you.enemy_blind_avg_s === null ? "" : `${you.enemy_blind_avg_s}s avg blind`, "Demo") +
-    tile("Utility", num(you.utility_damage), "damage", "Demo") +
+    tile("Rating 2.1", o.rating === null ? "–" : o.rating.toFixed(2), arrow("rating"), "HLTV 2.1, estimated") +
+    tile("K/D", o.kd === null ? "–" : Number(o.kd).toFixed(2), arrow("kd"), src) +
+    tile("ADR", num(o.adr), arrow("adr"), src) +
+    tile("HS%", pct(o.hs_pct), arrow("hs_pct", false, " pts"), src) +
+    tile("KAST", pct(o.kast_pct), "", "Demo") +
+    tile("Entry", o.entry_pct === null ? "–" : pct(o.entry_pct), `${num(o.entry_won)} of ${plural(o.entry_tried || 0, "duel")} won`, src) +
+    tile("Multi-kills", multiText(o.multi_kills), "2K · 3K · 4K · 5K rounds", src) +
+    tile("Clutches", `${num(o.clutch_won)}/${num(o.clutch_tried)}`, `${o.clutch_kind} won`, src) +
+    tile("Utility", num(o.utility_damage), `damage · ${num(o.enemies_flashed)} flashed`, src) +
     `</div>`;
 }
 
@@ -103,33 +102,38 @@ const MULTI = ["2", "3", "4", "5"];
 const multiText = m => MULTI.map(k => num(m?.[k])).join(" · ");
 const multiRank = m => [...MULTI].reverse().reduce((rank, k) => rank * 100 + (m?.[k] ?? 0), 0);
 
-// Each column's group: "headline" is FACEIT's line when the match has it (else the demo's), "demo" is the demo's only.
+// Each column's group: "official" is FACEIT's number when the match has FACEIT's line (else the demo's); "here" is
+// worked out by the app from the Demo: the rating, KAST and trades, which FACEIT does not report.
+const ratio = (won, tried) => tried ? `${num(won)}/${num(tried)}` : "–";
 const COLUMNS = [
   {key: "name", label: "Player", get: p => p.name, text: true},
-  {key: "kills", label: "K", group: "headline", get: p => p.headline.kills},
-  {key: "deaths", label: "D", group: "headline", get: p => p.headline.deaths},
-  {key: "assists", label: "A", group: "headline", get: p => p.headline.assists},
-  {key: "adr", label: "ADR", group: "headline", get: p => p.headline.adr},
-  {key: "hs_pct", label: "HS%", group: "headline", get: p => p.headline.hs_pct, show: p => pct(p.headline.hs_pct)},
-  {key: "kd", label: "K/D", group: "headline", get: p => p.headline.kd},
-  {key: "multi", label: "2K · 3K · 4K · 5K", group: "headline", get: p => multiRank(p.headline.multi_kills),
-    show: p => multiText(p.headline.multi_kills)},
-  {key: "kast_pct", label: "KAST", group: "demo", get: p => p.kast_pct, show: p => pct(p.kast_pct)},
-  {key: "opening_win_pct", label: "Opening", group: "demo", get: p => p.opening_win_pct,
-    show: p => `${p.opening_kills}–${p.opening_deaths}${p.opening_win_pct === null ? "" : ` (${pct(p.opening_win_pct)})`}`},
-  {key: "trade_kills", label: "Trades", group: "demo", get: p => p.trade_kills, show: p => `${p.trade_kills} / ${p.traded_deaths}`},
-  {key: "enemies_flashed", label: "Flashes", group: "demo", get: p => p.enemies_flashed,
-    show: p => `${p.enemies_flashed}${p.enemy_blind_avg_s === null ? "" : ` · ${p.enemy_blind_avg_s}s`}`},
-  {key: "utility_damage", label: "Util dmg", group: "demo", get: p => p.utility_damage},
-  {key: "clutch_wins", label: "Clutch", group: "demo", get: p => p.clutch_wins, show: p => `${p.clutch_wins}/${p.clutch_attempts}`},
+  {key: "kills", label: "K", group: "official", get: p => p.official.kills},
+  {key: "deaths", label: "D", group: "official", get: p => p.official.deaths},
+  {key: "assists", label: "A", group: "official", get: p => p.official.assists},
+  {key: "kd", label: "K/D", group: "official", get: p => p.official.kd, show: p => p.official.kd === null ? "–" : Number(p.official.kd).toFixed(2)},
+  {key: "adr", label: "ADR", group: "official", get: p => p.official.adr},
+  {key: "hs_pct", label: "HS%", group: "official", get: p => p.official.hs_pct, show: p => pct(p.official.hs_pct)},
+  {key: "entry", label: "Entry", group: "official", get: p => p.official.entry_pct,
+    show: p => ratio(p.official.entry_won, p.official.entry_tried)},
+  {key: "multi", label: "2K·3K·4K·5K", group: "official", get: p => multiRank(p.official.multi_kills),
+    show: p => multiText(p.official.multi_kills)},
+  {key: "flashed", label: "Flashed", group: "official", get: p => p.official.enemies_flashed},
+  {key: "utility", label: "Util dmg", group: "official", get: p => p.official.utility_damage},
+  {key: "clutch", label: "Clutch", group: "official", get: p => p.official.clutch_won,
+    show: p => ratio(p.official.clutch_won, p.official.clutch_tried)},
+  {key: "rating", label: "Rating 2.1", group: "here", get: p => p.official.rating,
+    show: p => p.official.rating === null ? "–" : p.official.rating.toFixed(2)},
+  {key: "kast_pct", label: "KAST", group: "here", get: p => p.official.kast_pct, show: p => pct(p.official.kast_pct)},
+  {key: "trades", label: "Trades", group: "here", get: p => p.official.trade_kills,
+    show: p => `${p.official.trade_kills} / ${p.official.traded_deaths}`},
 ];
 
-// The row above the column names: what the headline columns come from in this match, then the demo's own columns.
+// The row above the column names: where the official columns come from in this match, then the app's own.
 function groupRow() {
-  const lead = COLUMNS.filter(c => c.group === "headline").length, rest = COLUMNS.filter(c => c.group === "demo").length;
-  const sources = new Set(view.players.map(p => p.headline.source));
-  if (!sources.has("faceit")) return `<tr class="grp"><th></th><th colspan="${lead + rest}">From the demo</th></tr>`;
-  const label = sources.has("demo") ? "FACEIT's line (the demo's where FACEIT has none)" : "FACEIT's line";
+  const lead = COLUMNS.filter(c => c.group === "official").length, rest = COLUMNS.filter(c => c.group === "here").length;
+  const sources = new Set(view.players.map(p => p.official.source));
+  const label = !sources.has("faceit") ? "From the demo: FACEIT has no stats for this match yet"
+    : sources.has("demo") ? "FACEIT's official stats (the demo's where FACEIT has none)" : "FACEIT's official stats";
   return `<tr class="grp"><th></th><th colspan="${lead}">${label}</th><th colspan="${rest}">From the demo</th></tr>`;
 }
 
@@ -212,7 +216,7 @@ function render() {
     return;
   }
   say.textContent = `${view.team_score}–${view.opponent_score}, ${won ? "a win" : view.result === "loss" ? "a loss" : "a tie"}.` +
-    (view.faceit ? " Headline numbers are FACEIT's." : " No FACEIT line for this match, so the numbers are the demo's.");
+    (view.faceit ? " The numbers are FACEIT's official stats." : " FACEIT has no stats for this match yet, so the numbers are the demo's.");
   const you = youOf();
   const parts = [];
   if (you) {
@@ -225,7 +229,7 @@ function render() {
   }
   parts.push(`<div class="sechead"><h2 class="h2">All ten</h2><span class="lbl">Click a column to sort</span></div>`);
   parts.push(table());
-  parts.push(`<p class="note">FACEIT's numbers are FACEIT's, as its match page shows them. The demo's are worked out here from the events in the Demo: KAST, openings, trades, flashes, utility damage and Clutches (the last player alive against two or more).</p>`);
+  parts.push(`<p class="note">FACEIT's numbers are its official match stats, as its match page shows them. FACEIT reports no KAST or trades, so those are worked out here from the Demo, as is Rating 2.1: HLTV's formula is not public, so it is an estimate from KAST, kills, deaths, assists and ADR. Clutches are FACEIT's 1v1s and 1v2s.</p>`);
   parts.push(`<div class="sechead"><h2 class="h2">Rounds</h2><span class="lbl">Kills link to their Reel when it has the moment</span></div>`);
   parts.push(timeline());
   body.innerHTML = parts.join("");

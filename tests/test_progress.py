@@ -114,3 +114,41 @@ def test_no_matches_is_an_empty_summary_not_an_error():
     assert (empty["matches"], empty["window"], empty["recent"], empty["maps"], empty["records"]) == (0, 0, [], [], [])
     assert empty["form"]["rating"] == {"value": None, "previous": None, "delta": None, "higher_is_better": True,
                                        "series": []}
+
+
+# --- Skills: each part of the game rated 0-100 -------------------------------------------------------------------
+
+def test_a_number_is_rated_between_its_marks_and_held_at_them():
+    assert progress._rate("hs_pct", 45.0) == 50.0                        # half way from 25 to 65
+    assert progress._rate("hs_pct", 10.0) == 0.0 and progress._rate("hs_pct", 90.0) == 100.0
+    assert progress._rate("hs_pct", None) is None
+
+
+def test_the_skills_compare_the_last_matches_with_the_ones_before():
+    better = [played(n, kills=26, deaths=12, hs=60.0, rating=1.4) for n in range(3)]
+    worse = [played(n + 3, kills=12, deaths=18, hs=30.0, rating=0.8) for n in range(3)]
+    sk = progress.skills(better + worse, 3)
+    assert (sk["current"], sk["previous"]) == (3, 3)
+    aim = next(a for a in sk["areas"] if a["key"] == "aim")
+    assert aim["current"] > aim["previous"]
+    assert [m["key"] for m in aim["measures"]] == ["hs_pct", "kpr", "adr"]
+    assert {e["key"] for e in sk["better"]} >= {"hs_pct", "kpr", "rating"}
+    assert all(e["change"] >= progress.MOVED for e in sk["better"])
+    assert sk["better"] == sorted(sk["better"], key=lambda e: -abs(e["change"]))
+    assert all(e["key"] not in {"hs_pct", "kpr"} for e in sk["worse"])
+
+
+def test_with_all_matches_the_skills_split_them_in_half_and_with_none_before_there_is_nothing_to_compare():
+    matches = [played(n) for n in range(8)]
+    assert (progress.skills(matches, 0)["current"], progress.skills(matches, 0)["previous"]) == (4, 4)
+    alone = progress.skills(matches[:2], 20)
+    assert alone["previous"] == 0 and alone["better"] == alone["worse"] == []
+    assert all(a["previous"] is None for a in alone["areas"])
+
+
+def test_every_part_of_the_game_is_made_of_known_numbers():
+    for key, label, about, measures in progress.AREAS:
+        assert label and about, key
+        for measure in measures:
+            m = progress.MEASURES[measure]
+            assert m.low < m.high, measure

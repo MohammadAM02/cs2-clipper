@@ -3,6 +3,41 @@
 What changed in each release of CS2 Clipper. The release workflow publishes a version's section as the notes of
 its GitHub Release, and the app shows those notes on the Status page when it offers that version.
 
+## 0.17.0
+
+### A clean new look
+
+- **The pixel look is gone.** Every page is now set in one clean face, Space Grotesk, on dark slate panels with soft
+  rounded corners, plain line icons and smooth motion. The pixel weather behind the pages, the pixel scene on Status
+  and Nugget, with his speech bubbles and sound effects, are gone too.
+- **Status says what is going on on a card in the colour of the map** being rendered (or your last Demo's), with
+  the map's radar faint behind it once the app has read it from CS2.
+- **Reels marks each Highlight with a plain badge** (ACE, 4K, Died) where the comic bursts were.
+
+### Skills progress
+
+- **A new chart at the top of Progress**, like scope.gg's: your Aim, Utility, Entry, Trading and HLTV Rating 2.1,
+  each rated 0 to 100, your last matches as a coloured arc against the matches before as a filled sector. Point at
+  a part to see what it rates and its numbers, now and before.
+- **Well done and Take a look at these** list the numbers that moved the most, better and worse, with their value
+  now and before. A part is rated against fixed marks the app sets for each number, not against other players.
+
+### FACEIT's official stats, and HLTV Rating 2.1
+
+- **Stats shows FACEIT's official numbers** for everything FACEIT reports: kills, deaths, assists, K/D, ADR, HS%,
+  entry duels, 2K to 5K rounds, enemies flashed, utility damage and 1v1 and 1v2 clutches. KAST and trades, which
+  FACEIT does not report, come from the Demo, and each number says where it is from. The app asks FACEIT again for
+  each match it already has, once, for the fields it did not keep before.
+- **Rating 2.1 in place of Rating 2.0** on Stats, Progress and the skills chart, worked out from KAST, kills,
+  deaths, assists and ADR. HLTV keeps its formula to itself, so this is the community's estimate of it, close to
+  HLTV's but not equal to it. Demos to grab keeps the estimate from FACEIT's numbers alone, as those matches have no
+  Demo yet to take KAST from.
+
+### Heatmaps
+
+- **A smooth heat and round dots.** The heat is a soft glow, green where you win more fights than you lose and red
+  where you lose more, in place of square cells.
+
 ## 0.16.0
 
 ### Your Mistakes, your Progress, and Heatmaps

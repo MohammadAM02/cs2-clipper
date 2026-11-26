@@ -82,17 +82,17 @@ function paintGlow() {
 addEventListener("clipper:summary", e => { renderingMap = e.detail.rendering ? e.detail.map || "" : null; paintGlow(); });
 addEventListener("clipper:status", e => { renderingMap = e.detail.rendering ? e.detail.rendering.map || "" : null; paintGlow(); });
 
-// --- the Ace moment: Nugget crowing by an ACE!! burst, shards and a toast, only for a new Ace --------------------
-const SHARDS = [[-290, -170, 200, "#FF5500"], [260, -190, -160, "#F2EFEA"], [-330, 70, 320, "#FFB27A"], [310, 100, -280, "#FF5500"],
-  [-90, -260, 120, "#F2EFEA"], [140, -280, -220, "#FF8A3D"], [-220, 210, 260, "#FF5500"], [240, 240, -300, "#F2EFEA"],
-  [0, 290, 180, "#FFB27A"], [360, -20, 90, "#FF5500"]];
+// --- the Ace moment: a big ACE, shards and a toast, only for a new Ace -------------------------------------------
+const SHARDS = [[-290, -170, 200, "#FF5500"], [260, -190, -160, "#EEF0F3"], [-330, 70, 320, "#FFA366"], [310, 100, -280, "#FF5500"],
+  [-90, -260, 120, "#EEF0F3"], [140, -280, -220, "#FF7A33"], [-220, 210, 260, "#FF5500"], [240, 240, -300, "#EEF0F3"],
+  [0, 290, 180, "#FFA366"], [360, -20, 90, "#FF5500"]];
 function aceMoment(ace, count) {
   const text = count > 1 ? `${count} new Aces are in your Reels` : `${ace.map} Ace is in your Reels`;
   toast(`${ICON.check}<span>${esc(text)}</span>${ace.reel !== null ? `<a class="primary dark sm" href="/reels?play=${+ace.reel}">Watch</a>` : ""}`, 6500);
-  dispatchEvent(new CustomEvent("clipper:ace", {detail: {map: ace.map, round: ace.round, count}}));     // Nugget crows on Status
+  dispatchEvent(new CustomEvent("clipper:ace", {detail: {map: ace.map, round: ace.round, count}}));     // Status says so
   blip("ace");
   if (quiet() || stillness()) return;                  // quiet hours and calm mode get the toast alone
-  const parts = [el("div", "t-acefl"), el("div", "t-acest", NUGGET.burst("ACE!!")), el("div", "t-acenug", NUGGET.svg("ace", "Nugget crowing")),
+  const parts = [el("div", "t-acefl"), el("div", "t-acest", "ACE"),
     ...SHARDS.map(([dx, dy, r, c]) => { const s = el("i", "t-shard"); s.style.cssText = `--dx:${dx}px;--dy:${dy}px;--r:${r}deg;background:${c}`; return s; })];
   parts.forEach(p => { p.setAttribute("aria-hidden", "true"); document.body.appendChild(p); });
   setTimeout(() => parts.forEach(p => p.remove()), 2800);
@@ -135,7 +135,7 @@ function played(iso) {
   const d = new Date(iso), days = Math.round((new Date().setHours(0, 0, 0, 0) - new Date(iso).setHours(0, 0, 0, 0)) / 86400000);
   return days === 0 ? "Today" : days === 1 ? "Yesterday" : d.toLocaleDateString([], {weekday: "short"});
 }
-const tile = map => `<span class="t-tile" style="background:${MAP_TINT[map] || "#5A5650"}">${mapAbbr(map)}</span>`;
+const tile = map => `<span class="t-tile" style="background:${MAP_TINT[map] || "#565D69"}">${mapAbbr(map)}</span>`;
 function boardRow(r, i) {
   const pips = Array.from({length: 4}, (_, j) => `<i${j < r.highlights ? "" : ' class="o"'}></i>`).join("");
   const tone = r.tone === "done" ? " g" : r.tone === "off" ? " s" : "";
@@ -151,7 +151,7 @@ function fillBoard(data) {
   if (!data) { sub.textContent = "Can't reach CS2 Clipper right now."; return; }
   sub.textContent = `${plural(data.matches, "match", "matches")} · ${plural(data.highlights, "Highlight")} · ${plural(data.aces, "Ace")}`;
   rows.innerHTML = data.rows.length ? data.rows.map(boardRow).join("")
-    : '<div class="t-r" style="grid-template-columns:1fr;color:#8E8B86">No matches in the last 7 days. Go queue.</div>';
+    : '<div class="t-r" style="grid-template-columns:1fr;color:#8B919B">No matches in the last 7 days. Go queue.</div>';
 }
 function showBoard() {
   if (board) return;

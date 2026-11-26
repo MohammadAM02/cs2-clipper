@@ -9,14 +9,12 @@
 </head>
 <body>
 <script src="/app.js"></script>
-<script src="/nugget.js"></script>
-<script src="/pixelscene.js"></script>
 <script src="/touches.js" defer></script>
 <script>renderNav("/settings");</script>
 <main>
   <section class="pagehead rise">
     <h1 class="title">Settings</h1>
-    <div class="saybox"><span data-nugget="rendering"></span><p class="say">Tweak away. Nothing changes until you hit Save.</p></div>
+    <p class="say">Tweak away. Nothing changes until you hit Save.</p>
   </section>
   <div id="notice" style="display:flex;flex-direction:column;gap:8px"></div>
   <div class="sgrid">
@@ -24,7 +22,7 @@
     <div class="groups">
       <form id="form" class="groups" onsubmit="return false"></form>
       <div class="savebar" id="savebar" role="region" aria-label="Unsaved changes" hidden>
-        <span data-nugget="problem"></span>
+        <span class="empty-ico"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.5v.01"/></svg></span>
         <span id="dirty-text">Unsaved changes</span>
         <button class="ghost" id="discard" type="button">Discard</button>
         <button class="primary dark" id="save" type="button">Save</button>
@@ -62,7 +60,6 @@ const CHOICE_HELP = {kills: "Each Frag starts its own Sequence.", rounds: "A who
 const ROUND_VIEW = "Round Clips are always rendered from your view: a round has no one enemy to follow.";
 const MONO = new Set(["steamid", "folder", "program", "url"]);
 const PAD = ["padding_before_s", "padding_after_s"];
-document.querySelectorAll("[data-nugget]").forEach(n => { n.outerHTML = NUGGET.head(n.dataset.nugget); });
 let fields = [], values = {}, secretsSet = {}, removedSecrets = new Set(), loginUrl = "", signInNote = "", warnings = [];
 let canPick = false;
 
@@ -76,7 +73,7 @@ function control(f) {
   if (f.kind === "secret") {
     const noun = f.name.endsWith("_secret") ? "secret" : "key";
     return secretsSet[f.name]
-      ? `<div class="keycard" id="saved-${f.name}"><svg width="16" height="16" viewBox="0 0 8 8" fill="#FF8A3D" shape-rendering="crispEdges" aria-hidden="true"><path d="M2 0h4v1h-4zM1 1h1v1h-1zM6 1h1v1h-1zM1 2h1v1h-1zM6 2h1v1h-1zM0 3h8v1h-8zM0 4h8v1h-8zM0 5h3v1h-3zM5 5h3v1h-3zM0 6h3v1h-3zM5 6h3v1h-3zM0 7h8v1h-8z"/></svg><b>A ${noun} is saved</b><button type="button" class="ghost sm" data-remove-secret="${f.name}">Remove ${noun}</button></div>
+      ? `<div class="keycard" id="saved-${f.name}"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FF7A33" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><b>A ${noun} is saved</b><button type="button" class="ghost sm" data-remove-secret="${f.name}">Remove ${noun}</button></div>
          <input type="password" class="inp mono" id="${id}" autocomplete="new-password" placeholder="Paste a new ${noun} to replace it" aria-label="${esc(f.label)}">`
       : `<input type="password" class="inp mono" id="${id}" autocomplete="new-password" placeholder="Paste your ${esc(f.label)}">`;
   }
@@ -111,7 +108,7 @@ function padWidget() {
   return `<div class="field wide" data-field="padding">
     <span class="flabel">Seconds around each Frag</span>
     <div class="tl" aria-hidden="true"><span class="pre"></span><span class="post"></span><span class="frag"></span>
-      <span class="lb" id="pad-b" style="left:12px;color:#FFB27A"></span><span class="lb" id="pad-a" style="right:12px;color:#CFC5BA"></span></div>
+      <span class="lb" id="pad-b" style="left:12px;color:#FFA366"></span><span class="lb" id="pad-a" style="right:12px;color:#C7CCD3"></span></div>
     <div class="fgrid">${[b, a].map(f => `<label class="help" style="display:flex;flex-direction:column;gap:4px">${esc(f.label)}
       <input type="range" id="${fid(f.name)}" min="${f.minimum ?? 0}" max="${f.maximum ?? 30}" step="0.5" value="${esc(values[f.name])}"></label>`).join("")}</div>
     ${PAD.map(n => `<span class="err" id="err-${n}"></span>`).join("")}
@@ -405,7 +402,7 @@ document.getElementById("save").addEventListener("click", async () => {
   await load();
   dispatchEvent(new Event("clipper:settings"));        // the Touches switches apply at once (touches.js)
   const result = document.getElementById("result");
-  result.innerHTML = `${NUGGET.head("ace")}<span>${data.restart_needed ? "Saved. The port changes at the next start." : "Saved. Bawk!"}</span>`;
+  result.innerHTML = `${ICON.check}<span>${data.restart_needed ? "Saved. The port changes at the next start." : "Saved."}</span>`;
   result.hidden = false;
   setTimeout(() => { result.hidden = true; }, 2600);
 });

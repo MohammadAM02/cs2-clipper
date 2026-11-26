@@ -67,8 +67,8 @@ def match_view(index: Index, analyses: Analyses, subject: str, checksum: str) ->
     if worked is None:
         return {**head, "state": "not_computed"}
     tickrate = worked["tickrate"]
-    players = [{**player, "steam_id": steam, "you": steam == subject, "headline": stats.headline(player)}
-               for steam, player in worked["players"].items()]
+    players = [{**player, "steam_id": steam, "you": steam == subject, "headline": stats.headline(player),
+                "official": stats.official(player)} for steam, player in worked["players"].items()]
     rounds = []
     for round_ in worked["rounds"]:
         events = []
@@ -94,10 +94,10 @@ def _comparison(index: Index, analyses: Analyses, subject: str, checksum: str,
         worked = analyses.stats(past["checksum"])
         if worked is None or subject not in worked["players"]:
             continue
-        earlier.append(stats.headline(worked["players"][subject]))
+        earlier.append(stats.official(worked["players"][subject]))
         if len(earlier) == COMPARE_WITH:
             break
-    return stats.comparison(stats.headline(you), earlier)
+    return stats.comparison(stats.official(you), earlier)
 
 
 def _mistakes(index: Index, analyses: Analyses, subject: str, checksum: str,

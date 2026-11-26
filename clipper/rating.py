@@ -1,4 +1,14 @@
-"""HLTV Rating 2.0, estimated from what FACEIT reports for one map (spec: Rating 2.0).
+"""Two HLTV-style ratings (spec: Rating).
+
+`hltv21` is HLTV Rating 2.1 as the app shows it wherever it has the match's Demo: worked out from kills, deaths and
+assists per round, ADR and KAST. HLTV has never published the formula of Rating 2.0 or 2.1; 2.1 (October 2024) kept
+2.0's parts and retuned them for CS2. What the app uses is the community's reverse-engineered formula for those parts,
+the one awpy ships (awpy.stats.rating), so it is an estimate: close to HLTV's, not equal to it.
+
+`rating` is the estimate the app had before, from FACEIT's numbers alone, for the matches it has no Demo of (Demos to
+grab): FACEIT reports no KAST, so 2.1 cannot be worked out for them.
+
+`rating`: HLTV Rating 2.0, estimated from what FACEIT reports for one map.
 
 Ported from faceitperf's estimateRating (https://github.com/iffypixy/faceitperf,
 apps/web/src/features/stats.ts). One deliberate difference: with no rounds there is nothing to rate,
@@ -49,3 +59,28 @@ def rating(stats: FaceitStats) -> float:
              + PER_ADR * stats.adr
              + PER_MULTI_KILL * stats.multi_kill_rounds / stats.rounds)
     return max(value, 0.0)
+
+
+# The reverse-engineered HLTV 2.x formula (awpy.stats.rating's defaults): KAST in percent, the others per round.
+KAST_W = 0.0073
+KPR_W = 0.3591
+DPR_W = -0.5329
+IMPACT_W = 0.2372
+ADR_W = 0.0032
+RATING_INTERCEPT = 0.1587
+IMPACT_KPR = 2.13              # impact = 2.13 x kills per round + 0.42 x assists per round - 0.41
+IMPACT_APR = 0.42
+IMPACT_INTERCEPT = -0.41
+
+
+def impact(kills: float, assists: float, rounds: int) -> float:
+    return IMPACT_KPR * kills / rounds + IMPACT_APR * assists / rounds + IMPACT_INTERCEPT if rounds > 0 else 0.0
+
+
+def hltv21(kills: float, deaths: float, assists: float, adr: float, kast_pct: float | None, rounds: int) -> float | None:
+    """HLTV Rating 2.1, estimated (see above). None without rounds or without KAST, which it cannot do without."""
+    if rounds <= 0 or kast_pct is None:
+        return None
+    value = (KAST_W * kast_pct + KPR_W * kills / rounds + DPR_W * deaths / rounds
+             + IMPACT_W * impact(kills, assists, rounds) + ADR_W * adr + RATING_INTERCEPT)
+    return round(max(value, 0.0), 2)

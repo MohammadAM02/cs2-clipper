@@ -51,31 +51,37 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "
 const $ = (sel, root = document) => root.querySelector(sel);
 const plural = (n, word, many) => `${n} ${n === 1 ? word : (many || word + "s")}`;
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const MARK = '<svg width="28" height="28" viewBox="0 0 64 64" aria-hidden="true"><path d="M14 2H62V50L50 62H2V14Z" fill="#141414"/><polygon points="18,50 30.05,43.22 36.22,24.25 18,14" fill="#FF5500"/><polygon points="51.6,28.4 40.86,22.36 36.06,37.14" fill="#FF5500"/></svg>';
+const MARK = '<svg width="28" height="28" viewBox="0 0 64 64" aria-hidden="true"><rect x="2" y="2" width="60" height="60" rx="14" fill="#1E2228" stroke="#3A404A" stroke-width="2"/><polygon points="18,50 30.05,43.22 36.22,24.25 18,14" fill="#FF5500"/><polygon points="51.6,28.4 40.86,22.36 36.06,37.14" fill="#FF5500"/></svg>';
 // The icons are pixel art on an 8 x 8 grid, shown at 2 or 3 px a pixel so they stay crisp.
+// Line icons on a 24-unit grid, drawn in the text colour.
+const svgIcon = (body, size = 16, cls = "") => `<svg${cls ? ` class="${cls}"` : ""} width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 const ICON = {
-  play: '<svg width="16" height="16" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="M0 0h1v1h-1zM0 1h3v1h-3zM0 2h5v1h-5zM0 3h7v1h-7zM0 4h5v1h-5zM0 5h3v1h-3zM0 6h1v1h-1z"/></svg>',
-  pause: '<svg width="16" height="16" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="M1 1h2v1h-2zM5 1h2v1h-2zM1 2h2v1h-2zM5 2h2v1h-2zM1 3h2v1h-2zM5 3h2v1h-2zM1 4h2v1h-2zM5 4h2v1h-2zM1 5h2v1h-2zM5 5h2v1h-2zM1 6h2v1h-2zM5 6h2v1h-2z"/></svg>',
-  check: '<svg width="16" height="16" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="M7 1h1v1h-1zM6 2h2v1h-2zM0 3h1v1h-1zM5 3h2v1h-2zM0 4h2v1h-2zM4 4h2v1h-2zM1 5h4v1h-4zM2 6h2v1h-2z"/></svg>',
-  bang: '<svg width="16" height="16" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="M3 0h2v1h-2zM3 1h2v1h-2zM3 2h2v1h-2zM3 3h2v1h-2zM3 4h2v1h-2zM3 6h2v1h-2zM3 7h2v1h-2z"/></svg>',
-  dash: '<svg width="16" height="16" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="M1 3h6v1h-6zM1 4h6v1h-6z"/></svg>',
-  info: '<svg width="16" height="16" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="M2 0h4v1h-4zM1 1h1v1h-1zM6 1h1v1h-1zM0 2h1v1h-1zM3 2h2v1h-2zM7 2h1v1h-1zM0 3h1v1h-1zM7 3h1v1h-1zM0 4h1v1h-1zM3 4h2v1h-2zM7 4h1v1h-1zM0 5h1v1h-1zM3 5h2v1h-2zM7 5h1v1h-1zM1 6h1v1h-1zM6 6h1v1h-1zM2 7h4v1h-4z"/></svg>',
-  next: '<svg width="16" height="16" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="M2 1h2v1h-2zM3 2h2v1h-2zM4 3h2v1h-2zM4 4h2v1h-2zM3 5h2v1h-2zM2 6h2v1h-2z"/></svg>',
-  out: '<svg width="16" height="16" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="M3 0h2v1h-2zM2 1h4v1h-4zM1 2h6v1h-6zM3 3h2v1h-2zM3 4h2v1h-2zM0 5h1v1h-1zM3 5h2v1h-2zM7 5h1v1h-1zM0 6h1v1h-1zM7 6h1v1h-1zM0 7h8v1h-8z"/></svg>',
-  folder: '<svg width="16" height="16" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="M0 1h3v1h-3zM0 2h1v1h-1zM3 2h4v1h-4zM0 3h7v1h-7zM0 4h1v1h-1zM6 4h1v1h-1zM0 5h1v1h-1zM6 5h1v1h-1zM0 6h7v1h-7z"/></svg>',
-  bin: '<svg width="16" height="16" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="M2 0h4v1h-4zM0 1h8v1h-8zM1 3h6v1h-6zM1 4h1v1h-1zM3 4h2v1h-2zM6 4h1v1h-1zM1 5h1v1h-1zM3 5h2v1h-2zM6 5h1v1h-1zM1 6h1v1h-1zM3 6h2v1h-2zM6 6h1v1h-1zM2 7h4v1h-4z"/></svg>',
-  chev: '<svg class="chev" width="24" height="24" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="M0 2h1v1h-1zM7 2h1v1h-1zM0 3h2v1h-2zM6 3h2v1h-2zM1 4h2v1h-2zM5 4h2v1h-2zM2 5h4v1h-4zM3 6h2v1h-2z"/></svg>',
-  skip: '<svg width="16" height="16" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="M0 0h1v1h-1zM6 0h2v1h-2zM0 1h2v1h-2zM6 1h2v1h-2zM0 2h3v1h-3zM6 2h2v1h-2zM0 3h4v1h-4zM6 3h2v1h-2zM0 4h3v1h-3zM6 4h2v1h-2zM0 5h2v1h-2zM6 5h2v1h-2zM0 6h1v1h-1zM6 6h2v1h-2z"/></svg>',
+  play: svgIcon('<path d="M7.5 5.2v13.6a.8.8 0 0 0 1.2.7l11-6.8a.8.8 0 0 0 0-1.4l-11-6.8a.8.8 0 0 0-1.2.7z" fill="currentColor" stroke="none"/>'),
+  pause: svgIcon('<rect x="6" y="5" width="4" height="14" rx="1" fill="currentColor" stroke="none"/><rect x="14" y="5" width="4" height="14" rx="1" fill="currentColor" stroke="none"/>'),
+  check: svgIcon('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
+  bang: svgIcon('<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5M12 16.5v.01"/>'),
+  dash: svgIcon('<path d="M6 12h12"/>'),
+  info: svgIcon('<circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.5v.01"/>'),
+  next: svgIcon('<path d="M9 6l6 6-6 6"/>'),
+  out: svgIcon('<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/>'),
+  folder: svgIcon('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
+  bin: svgIcon('<path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6 7l1 12a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-12M10 11v5M14 11v5"/>'),
+  chev: svgIcon('<path d="M6 9l6 6 6-6"/>', 22, "chev"),
+  skip: svgIcon('<path d="M6 5.5v13l9-6.5z" fill="currentColor" stroke="none"/><path d="M18 5v14"/>'),
+  copy: svgIcon('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>'),
+  down: svgIcon('<path d="M12 4v13M6 11l6 6 6-6"/>'),
+  empty: svgIcon('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/>', 26),
+  chart: svgIcon('<path d="M5 20v-6M12 20V5M19 20v-10"/>', 26),
+  target: svgIcon('<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>', 26),
 };
-// The side rack's icons, one per page, at 3 px a pixel.
-const navIcon = d => `<svg width="24" height="24" viewBox="0 0 8 8" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true"><path d="${d}"/></svg>`;
+// The side rack's icons, one per page.
 const NAV_ICONS = {
-  "/status": navIcon("M0 0h8v1h-8zM0 1h1v4h-1zM7 1h1v4h-1zM3 2h2v2h-2zM0 5h8v1h-8zM3 6h2v1h-2zM2 7h4v1h-4z"),
-  "/demos": navIcon("M3 0h2v3h-2zM1 3h6v1h-6zM2 4h4v1h-4zM3 5h2v1h-2zM0 5h1v2h-1zM7 5h1v2h-1zM0 7h8v1h-8z"),
-  "/reels": navIcon("M0 0h8v1h-8zM0 1h1v6h-1zM7 1h1v6h-1zM3 2h1v4h-1zM4 3h1v2h-1zM5 3h1v2h-1zM0 7h8v1h-8z"),
-  "/progress": navIcon("M0 5h2v3h-2zM3 3h2v5h-2zM6 0h2v8h-2z"),
-  "/heatmaps": navIcon("M3 0h2v2h-2zM3 6h2v2h-2zM0 3h2v2h-2zM6 3h2v2h-2zM3 3h2v2h-2z"),
-  "/settings": navIcon("M0 2h8v1h-8zM1 1h2v3h-2zM0 5h8v1h-8zM5 4h2v3h-2z"),
+  "/status": svgIcon('<path d="M3 12h4l3-8 4 16 3-8h4"/>', 20),
+  "/demos": svgIcon('<path d="M12 4v11M7 10l5 5 5-5M5 20h14"/>', 20),
+  "/reels": svgIcon('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/>', 20),
+  "/progress": svgIcon('<path d="M5 20v-6M12 20V5M19 20v-10"/>', 20),
+  "/heatmaps": svgIcon('<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>', 20),
+  "/settings": svgIcon('<path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/>', 20),
 };
 const BADGE = {ACE: "b-ace", "5K": "b-ace", "4K": "b-4k", "3K": "b-3k", "2K": "b-2k"};
 const badge = type => `<span class="badge ${BADGE[String(type).toUpperCase()] || "b-2k"}">${esc(String(type).toUpperCase())}</span>`;
@@ -92,19 +98,22 @@ const maptile = (map, style = "") => {
 // A map as people say it: "de_inferno" is Inferno (alerts.py's map_label, for the pages the app labels itself).
 const mapName = map => String(map || "").replace(/^(de|cs)_/, "").split("_").map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
 
-// A run of numbers as a stepped line (app.css, .spark), oldest first: each value holds until the next, the way the
-// rest of the app moves. A gap (null) holds the value before it. Nothing is drawn for fewer than two values.
+// A run of numbers as a line (app.css, .spark), oldest first, with a soft fill under it. A gap (null) is skipped.
+// Nothing is drawn for fewer than two values.
 function spark(values) {
-  const known = values.filter(v => v !== null && v !== undefined);
-  if (known.length < 2) return '<svg class="spark" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><path class="base" d="M0 17H100"/></svg>';
-  const low = Math.min(...known), high = Math.max(...known), span = high - low || 1, step = 100 / values.length;
-  const y = v => (30 - 26 * (v - low) / span).toFixed(1);
-  let last = known[0], d = `M0 ${y(last)}`;
-  values.forEach((v, i) => {
-    if (v !== null && v !== undefined) last = v;
-    d += `V${y(last)}H${((i + 1) * step).toFixed(1)}`;
-  });
-  return `<svg class="spark" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><path d="${d}"/></svg>`;
+  const flat = '<svg class="spark" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><path class="base" d="M0 17H100"/></svg>';
+  const known = values.map((v, i) => [i, v]).filter(([, v]) => v !== null && v !== undefined);
+  if (known.length < 2) return flat;
+  const low = Math.min(...known.map(([, v]) => v)), high = Math.max(...known.map(([, v]) => v)), span = high - low || 1;
+  const x = i => (values.length === 1 ? 50 : 100 * i / (values.length - 1)).toFixed(1), y = v => (30 - 26 * (v - low) / span).toFixed(1);
+  const pts = known.map(([i, v]) => [x(i), y(v)]);
+  let d = `M${pts[0][0]} ${pts[0][1]}`;
+  for (let k = 1; k < pts.length; k++) {                      // a gentle curve through every point
+    const [x0, y0] = pts[k - 1], [x1, y1] = pts[k], mid = ((+x0 + +x1) / 2).toFixed(1);
+    d += ` C${mid} ${y0} ${mid} ${y1} ${x1} ${y1}`;
+  }
+  const area = `${d} L${pts[pts.length - 1][0]} 34 L${pts[0][0]} 34 Z`;
+  return `<svg class="spark" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><path class="fill" d="${area}"/><path d="${d}"/></svg>`;
 }
 
 // --- updating lists without replaying everything ------------------------------------------------------
@@ -150,8 +159,6 @@ function toast(html, ms = 5200) {
   el.className = "toast";
   el.setAttribute("role", "status");
   el.innerHTML = html;
-  // Nugget brings the news (nugget.js): worried for a problem, otherwise all eyes.
-  if (typeof NUGGET !== "undefined") el.insertAdjacentHTML("afterbegin", NUGGET.head(html.startsWith(ICON.info) ? "problem" : "rendering"));
   document.body.appendChild(el);
   setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 400); }, ms);
 }
@@ -162,65 +169,20 @@ async function hasRoute(path) {
   try { return (await fetch(path, {method: "OPTIONS", cache: "no-store"})).status !== 404; } catch (e) { return false; }
 }
 
-// --- the backdrop: the map's weather behind every page ----------------------------------------------------------
-// Pixel weather fills the window behind the panels (app.css): snow for Office, sand for Dust2 and Mirage, embers for
-// Inferno and Nuke, rain for Anubis and Overpass, fireflies for Ancient, and a clear night for any other map. It
-// follows the map Status last showed (kept in localStorage, so every page opens on the same one), and every page
-// starts its loops from the clock, so going from page to page does not jump. It rests while the window is not in
-// front (.asleep), and holds still when Windows asks for less motion or Calm mode is on.
+// --- the background, and the map Status last showed --------------------------------------------------------------
+// Every page stands on the same slate (app.css, .bg). The map Status last showed is kept (localStorage) so the other
+// pages can tint things with it.
 const BACKDROP_KEY = "clipper.backdrop";
-// by a demo's map name or label ("de_inferno", "Inferno"), or by the scene's setting that 0.12 kept here ("desert")
-const WEATHER_OF = {office: "snow", snow: "snow", dust2: "sand", mirage: "sand", desert: "sand",
-  inferno: "embers", italy: "embers", village: "embers", nuke: "embers", plant: "embers",
-  anubis: "rain", overpass: "rain", river: "rain", ancient: "fireflies", jungle: "fireflies"};
-const weatherFor = map => WEATHER_OF[String(map || "").toLowerCase().replace(/^(de|cs)_/, "")] || "night";
-// The few weathers drawn with sprites besides their layers: where each sits and how it moves (app.css's keyframes).
-const bgRun = (name, seconds, steps, phase) => `${name} ${seconds}s steps(${steps},end) calc(var(--wt,0s) + ${phase}s) infinite`;
-const WEATHER_BITS = {
-  rain: [[11, "bottom:24px", bgRun("bgwSplash", 1.2, 1, -0.3)], [26, "bottom:24px", bgRun("bgwSplash", 0.9, 1, -0.6)],
-    [41, "bottom:24px", bgRun("bgwSplash", 1.2, 1, -0.1)], [59, "bottom:24px", bgRun("bgwSplash", 1, 1, -0.8)],
-    [77, "bottom:24px", bgRun("bgwSplash", 1.2, 1, -0.4)], [92, "bottom:24px", bgRun("bgwSplash", 0.9, 1, -0.7)]],
-  fireflies: [[9, "bottom:180px", bgRun("bgwFly1", 12, 6, -2) + "," + bgRun("bgwGlow", 3.2, 1, -1)],
-    [20, "bottom:100px", bgRun("bgwFly2", 15, 6, -5) + "," + bgRun("bgwGlow", 2.4, 1, -0.4)],
-    [33, "bottom:220px", bgRun("bgwFly3", 16, 6, -7) + "," + bgRun("bgwGlow", 4, 1, -2.2)],
-    [44, "bottom:60px", bgRun("bgwFly1", 12, 6, -9) + "," + bgRun("bgwGlow", 3.6, 1, -1.7)],
-    [55, "bottom:160px", bgRun("bgwFly2", 15, 6, -3) + "," + bgRun("bgwGlow", 3, 1, -0.9)],
-    [67, "bottom:100px", bgRun("bgwFly3", 12, 6, -6) + "," + bgRun("bgwGlow", 4, 1, -3)],
-    [78, "bottom:200px", bgRun("bgwFly1", 16, 6, -4) + "," + bgRun("bgwGlow", 3.2, 1, -2.6)],
-    [89, "bottom:120px", bgRun("bgwFly2", 18, 6, -8) + "," + bgRun("bgwGlow", 4, 1, -0.2)],
-    [42, "top:22%", bgRun("bgwFly3", 18, 6, -1) + "," + bgRun("bgwGlow", 3.6, 1, -1.3)],
-    [97, "top:46%", bgRun("bgwFly1", 15, 6, -10) + "," + bgRun("bgwGlow", 2.4, 1, -2)]],
-  night: [[37, "top:14%", bgRun("bgwTwinkle", 8, 1, -1)], [48, "top:20%", bgRun("bgwTwinkle", 9, 1, -4)],
-    [11, "top:74%", bgRun("bgwTwinkle", 8, 1, -2)], [28, "top:85%", bgRun("bgwTwinkle", 12, 1, -7)],
-    [46, "top:78%", bgRun("bgwTwinkle", 6, 1, -3)], [64, "top:92%", bgRun("bgwTwinkle", 10, 1, -6)],
-    [79, "top:72%", bgRun("bgwTwinkle", 9, 1, -5)], [98, "top:36%", bgRun("bgwTwinkle", 12, 1, -8)]],
-};
-let backdrop = null;
-function backdropMap() { try { return localStorage.getItem(BACKDROP_KEY) || "rooftop"; } catch (e) { return "rooftop"; } }
-// Status says which map is on: the backdrop follows, now and on the next page opened.
+function backdropMap() { try { return localStorage.getItem(BACKDROP_KEY) || ""; } catch (e) { return ""; } }
 function setBackdrop(map) {
   if (!map) return;
-  try { localStorage.setItem(BACKDROP_KEY, map); } catch (e) { /* a page without storage keeps today's weather */ }
-  if (backdrop) paintWeather(backdrop, weatherFor(map));
+  try { localStorage.setItem(BACKDROP_KEY, map); } catch (e) { /* a page without storage forgets it */ }
 }
-const loopStart = () => (Date.now() / 1000) % 30;
-
-function paintWeather(bg, weather) {
-  if (bg.dataset.weather === weather) return;
-  bg.dataset.weather = weather;
-  // every loop runs a whole number of times an hour, so a phase taken from the clock picks up where the last page was
-  bg.style.setProperty("--wt", `-${((Date.now() / 1000) % 3600).toFixed(2)}s`);
-  bg.innerHTML = `<i class="w-sky"></i><i class="w-a"></i><i class="w-b"></i><i class="w-c"></i>` +
-    (WEATHER_BITS[weather] || []).map(([left, place, run]) => `<i class="w-bit" style="left:${left}%;${place};animation:${run}"></i>`).join("");
-}
-
 function drawBackground() {
   const bg = document.createElement("div");
   bg.className = "bg";
   bg.setAttribute("aria-hidden", "true");
   document.body.insertBefore(bg, document.body.firstChild);
-  backdrop = bg;
-  paintWeather(bg, weatherFor(backdropMap()));
 }
 
 // How fast the radar sweeps: quick while a render runs, slow when something needs fixing.
@@ -240,7 +202,7 @@ function renderNav(current) {
   const nav = document.createElement("nav");
   nav.className = "nav";
   nav.setAttribute("aria-label", "Pages");
-  const face = typeof NUGGET !== "undefined" ? NUGGET.head("rendering") : MARK;
+  const face = MARK;
   const tab = ([href, label], i) => {
     const group = NAV_GROUPS[href];
     const cls = ["tab", href === current ? "on" : "", group && i ? "sep" : "", href === "/settings" ? "foot" : ""].filter(Boolean).join(" ");
@@ -341,15 +303,6 @@ function summaryMode(s) {
 }
 
 // --- the Highlights carousel ------------------------------------------------------------------------------
-// Each slide's still: the moment of the scene's loop that reads best in that setting (pixelscene.js draws it).
-const PIXELSCENE_ROTA = ["rooftop", "village", "desert", "river", "jungle"];   // for slides with no map
-const SCENE_STILLS = {rooftop: 21.4, desert: 6.3, jungle: 27.8, village: 13.4, plant: 24.5, railyard: 6.3, snow: 10.5, river: 20.3};
-const paintScene = canvas => {
-  if (typeof PIXELSCENE === "undefined") return;
-  const theme = PIXELSCENE.themeFor(canvas.dataset.map);
-  PIXELSCENE.paint(canvas, {map: theme, t: SCENE_STILLS[theme], lift: 56});   // the agent stands above the tabs
-};
-
 // Highlights worth putting up front: Aces first, then 4K, 3K, 2K; newer matches first within a type.
 const RANK = {ACE: 0, "5K": 0, "4K": 1, "3K": 2, "2K": 3};
 function bestHighlights(matches, n) {
@@ -378,12 +331,7 @@ function Carousel(root, {slideMs = 7000, onPlay} = {}) {
   root.innerHTML = `<div class="scenes"></div><div class="hshade"></div>
     <div class="hcopy"></div><div class="htabs" role="group" aria-label="Choose a slide"></div>`;
   const scenes = $(".scenes", root), copy = $(".hcopy", root), tabs = $(".htabs", root);
-  let slides = [], si = 0, timer = 0, started = 0, left = slideMs, shown = "", sized = 0;
-  const repaint = () => scenes.querySelectorAll("canvas").forEach(paintScene);
-  // a still is drawn for the box it is in: a new width draws them again (once per frame at most)
-  if (typeof ResizeObserver === "function") {
-    new ResizeObserver(() => { if (!sized) sized = requestAnimationFrame(() => { sized = 0; repaint(); }); }).observe(root);
-  }
+  let slides = [], si = 0, timer = 0, started = 0, left = slideMs, shown = "";
 
   const show = i => {
     si = (i + slides.length) % slides.length;
@@ -421,10 +369,12 @@ function Carousel(root, {slideMs = 7000, onPlay} = {}) {
       if (text === shown) return;
       const keep = slides[si] && next.findIndex(s => s.key === slides[si].key);
       shown = text; slides = next;
-      scenes.innerHTML = slides.map((s, i) => `<div class="scene"><canvas aria-hidden="true" data-map="${esc(s.map || PIXELSCENE_ROTA[i % PIXELSCENE_ROTA.length])}"></canvas>${s.thumb ? `<img alt="" src="/reels/${+s.thumb}.jpg" onerror="this.remove()">` : ""}</div>`).join("");
-      repaint();
+      scenes.innerHTML = slides.map(s => {
+        const name = mapName(s.map), tint = MAP_TINTS[name] || "#FF5500";
+        return `<div class="scene" style="--tint:${tint}"><span class="mapword" aria-hidden="true">${esc(name)}</span>${s.thumb ? `<img alt="" src="/reels/${+s.thumb}.jpg" onerror="this.remove()">` : ""}</div>`;
+      }).join("");
       copy.innerHTML = slides.map(s => `<div class="hb" aria-hidden="true">
-        <div style="display:flex;gap:8px;align-items:center">${s.type ? badge(s.type) : ""}<span style="font-size:14px;color:#D6D3CE">${esc(s.meta)}</span></div>
+        <div style="display:flex;gap:8px;align-items:center">${s.type ? badge(s.type) : ""}<span style="font-size:13px;color:var(--ink2)">${esc(s.meta)}</span></div>
         <h2>${esc(s.title)}</h2><p>${esc(s.sub)}</p>
         <div class="acts">${(s.acts || []).map(a => a.play !== undefined
           ? `<button class="${a.primary ? "primary" : "ghost"}" data-play="${+a.play}">${ICON.play}${esc(a.label)}</button>`

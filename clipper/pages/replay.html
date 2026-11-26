@@ -11,23 +11,23 @@
   .back { color: var(--muted); text-decoration: none; font: 700 14px var(--ui); letter-spacing: .06em; text-transform: uppercase; }
   .back:hover { color: var(--ink); }
   .rounds { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 12px; }
-  .rounds button { all: unset; cursor: pointer; padding: 6px 12px; border-radius: 0; border: 2px solid var(--line2); font: 700 14px var(--ui); color: var(--ink2); }
+  .rounds button { all: unset; cursor: pointer; padding: 6px 12px; border-radius: 0; border: 1px solid var(--line2); font: 700 14px var(--ui); color: var(--ink2); }
   .rounds button[aria-pressed="true"] { background: var(--accent); color: var(--k); border-color: var(--accent); }
   .rounds button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .viewer { display: grid; grid-template-columns: minmax(0, 640px) minmax(220px, 1fr); gap: 16px; align-items: start; }
   @media (max-width: 900px) { .viewer { grid-template-columns: 1fr; } }
-  .stage { position: relative; width: min(100%, 640px); aspect-ratio: 1 / 1; background: #0A0806; border: 2px solid var(--line); border-radius: 0; overflow: hidden; clip-path: var(--notch); }
+  .stage { position: relative; width: min(100%, 640px); aspect-ratio: 1 / 1; background: #0E1014; border: 1px solid var(--line); border-radius: 0; overflow: hidden; border-radius:var(--r); }
   .stage canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
   .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 10px; max-width: 640px; }
-  .controls button { all: unset; cursor: pointer; padding: 7px 14px; border-radius: 0; background: var(--panel2); border: 2px solid var(--line2); font: 700 14px var(--ui); color: var(--ink); }
+  .controls button { all: unset; cursor: pointer; padding: 7px 14px; border-radius: 0; background: var(--panel2); border: 1px solid var(--line2); font: 700 14px var(--ui); color: var(--ink); }
   .controls button:focus-visible, .controls select:focus-visible, .controls input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-  .controls select { background: var(--panel2); color: var(--ink); border: 2px solid var(--line2); border-radius: 0; padding: 6px 8px; font: 700 14px var(--ui); }
+  .controls select { background: var(--panel2); color: var(--ink); border: 1px solid var(--line2); border-radius: 0; padding: 6px 8px; font: 700 14px var(--ui); }
   .controls input[type="range"] { flex: 1 1 220px; accent-color: var(--accent); }
   .clock { font: 600 14px var(--mono); color: var(--muted); min-width: 92px; text-align: right; }
   .legend { display: flex; gap: 14px; flex-wrap: wrap; font: 600 14px var(--ui); color: var(--muted); margin: 8px 0; }
   .legend i { display: inline-block; width: 11px; height: 11px; border-radius: 0; margin-right: 6px; vertical-align: -1px; }
-  .feed { list-style: none; margin: 0; padding: 0; border: 2px solid var(--line); border-radius: 0; background: var(--panel); max-height: 520px; overflow: auto; clip-path: var(--notch); }
-  .feed li { padding: 9px 14px; border-bottom: 2px solid var(--line); font: 600 15px var(--ui); display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
+  .feed { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 0; background: var(--panel); max-height: 520px; overflow: auto; border-radius:var(--r); }
+  .feed li { padding: 9px 14px; border-bottom: 1px solid var(--line); font: 600 15px var(--ui); display: flex; gap: 8px; flex-wrap: wrap; align-items: baseline; }
   .feed li:last-child { border-bottom: 0; }
   .feed button { all: unset; cursor: pointer; display: flex; gap: 8px; flex-wrap: wrap; width: 100%; }
   .feed button:hover b, .feed button:focus-visible b { color: var(--accent); }
@@ -35,22 +35,20 @@
   .feed .w { color: var(--dim); font-size: 13px; }
   .feed .you { color: var(--accent); }
   .note { color: var(--dim); font: 500 14px var(--body); margin: 8px 0 14px; max-width: 760px; }
-  .statebox { border: 2px solid var(--line); border-radius: 0; background: var(--panel); padding: 18px 20px; max-width: 760px; clip-path: var(--notch); }
+  .statebox { border: 1px solid var(--line); border-radius: 0; background: var(--panel); padding: 18px 20px; max-width: 760px; border-radius:var(--r); }
   .statebox p { margin: 6px 0 0; color: var(--ink2); }
   .statebox .ghost, .statebox .primary { margin-top: 12px; }
 </style>
 </head>
 <body>
 <script src="/app.js"></script>
-<script src="/nugget.js"></script>
-<script src="/pixelscene.js"></script>
 <script src="/touches.js" defer></script>
 <script>renderNav("/reels");</script>
 <main>
   <p><a class="back" id="back" href="/reels">← Reels</a></p>
   <section class="pagehead rise">
     <h1 class="title" id="title">Replay</h1>
-    <div class="saybox"><p class="say" id="say">Loading…</p></div>
+    <p class="say" id="say">Loading…</p>
   </section>
   <div id="body"></div>
 </main>
@@ -65,7 +63,7 @@ let byRound = {};         // round number -> steam id -> the player's samples, b
 let roundNo = +params.get("round") || 1;
 let t = 0;                // seconds into the round
 let playing = false, speed = 1, last = 0, pollTimer = null;
-const COLOR = {you: "#FF5500", other: "#7CC4FF", dead: "#8F857A", ink: "#F2EFEA", bomb: "#FFB27A"};
+const COLOR = {you: "#FF5500", other: "#6CB6FF", dead: "#7E8591", ink: "#EEF0F3", bomb: "#FFA366"};
 const back = document.getElementById("back");
 back.href = `/stats?match=${encodeURIComponent(checksum)}`;
 
@@ -144,7 +142,7 @@ function draw() {
     const mine = p.team === youTeam();
     if (s.alive) {
       ctx.fillStyle = mine ? COLOR.you : COLOR.other;
-      ctx.strokeStyle = "#0D0A08"; ctx.lineWidth = 2;
+      ctx.strokeStyle = "#121418"; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(x, y, p.you ? 9 : 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
       ctx.fillStyle = COLOR.ink;
       ctx.fillText(p.name, x, y - 12);

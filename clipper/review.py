@@ -11,10 +11,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from clipper import mistakes, rating, stats
-from clipper.model import FaceitStats
+from clipper import mistakes, stats
 
-VERSION = 1                      # raised when this or mistakes.py changes what a kept document would say
+VERSION = 2                      # raised when this or mistakes.py changes what a kept document would say
 SIDES = {2: "T", 3: "CT"}        # csda's numbers for the sides
 
 
@@ -39,25 +38,23 @@ class Place:
 
 
 def line(player: Mapping[str, Any] | None) -> dict[str, Any] | None:
-    """The subject's numbers Progress tracks from match to match, from their entry in the match's stats: the headline
-    ones (FACEIT's when the match has its line), the demo's own, and the Rating 2.0 estimate. None without stats."""
+    """The subject's numbers Progress tracks from match to match, from their entry in the match's stats: FACEIT's
+    official number for each field FACEIT reports when the match has FACEIT's line, else the demo's
+    (`stats.official`), KAST, trades and flash assists from the demo, and HLTV Rating 2.1. None without stats."""
     if player is None:
         return None
-    head = stats.headline(player)
-    rounds = player.get("rounds") or 0
-    multi = sum(int(count or 0) for count in head["multi_kills"].values())
+    o = stats.official(player)
     return {
-        "source": head["source"], "rounds": rounds,
-        "kills": head["kills"], "deaths": head["deaths"], "assists": head["assists"], "adr": head["adr"],
-        "hs_pct": head["hs_pct"], "kd": head["kd"], "multi_kills": head["multi_kills"],
-        "kast_pct": player.get("kast_pct"),
-        "opening_kills": player.get("opening_kills", 0), "opening_deaths": player.get("opening_deaths", 0),
-        "trade_kills": player.get("trade_kills", 0), "traded_deaths": player.get("traded_deaths", 0),
-        "utility_damage": player.get("utility_damage", 0), "enemies_flashed": player.get("enemies_flashed", 0),
-        "clutch_wins": player.get("clutch_wins", 0), "clutch_attempts": player.get("clutch_attempts", 0),
-        "rating": round(rating.rating(FaceitStats(
-            rounds=rounds, kills=int(head["kills"] or 0), deaths=int(head["deaths"] or 0),
-            assists=int(head["assists"] or 0), adr=float(head["adr"] or 0.0), double_kills=multi)), 2),
+        "source": o["source"], "rounds": o["rounds"],
+        "kills": o["kills"], "deaths": o["deaths"], "assists": o["assists"], "adr": o["adr"],
+        "hs_pct": o["hs_pct"], "kd": o["kd"], "multi_kills": o["multi_kills"], "kast_pct": o["kast_pct"],
+        "opening_kills": o["entry_won"] or 0, "opening_deaths": max(0, (o["entry_tried"] or 0) - (o["entry_won"] or 0)),
+        "first_kills": o["first_kills"] or 0,
+        "trade_kills": o["trade_kills"], "traded_deaths": o["traded_deaths"],
+        "utility_damage": o["utility_damage"] or 0, "enemies_flashed": o["enemies_flashed"] or 0,
+        "flash_assists": player.get("flash_assists", 0),
+        "clutch_wins": o["clutch_won"] or 0, "clutch_attempts": o["clutch_tried"] or 0,
+        "rating": o["rating"],
     }
 
 

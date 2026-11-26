@@ -28,7 +28,8 @@ RADAR_REQUESTED = "radar_requested:"      # a map whose radar Heatmaps asked for
 log = logging.getLogger(__name__)
 
 RETRY_AFTER = timedelta(hours=24)
-DONE = "done"
+DONE = "done:2"     # FACEIT's line is in. Raised when the app keeps more of the line: a match whose flag says an older
+                    # value is asked again, once (2: every field FACEIT reports, for Stats' official numbers)
 
 
 def _utc_now() -> datetime:

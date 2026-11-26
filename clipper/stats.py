@@ -13,6 +13,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from clipper import rating
+
 VERSION = 1
 TRADE_WINDOW_S = 5.0                                                          # a kill trades a death this soon after it
 UTILITY_WEAPONS = frozenset({"HE Grenade", "Molotov", "Incendiary Grenade"})  # csda's names for the damaging grenades
@@ -27,6 +29,9 @@ FACEIT_FIELDS = {
     "entry_wins": "Entry Wins", "enemies_flashed": "Enemies Flashed", "flash_successes": "Flash Successes",
     "utility_damage": "Utility Damage", "clutch_kills": "Clutch Kills", "one_v1": "1v1Count",
     "one_v1_wins": "1v1Wins", "one_v2": "1v2Count", "one_v2_wins": "1v2Wins",
+    "flash_count": "Flash Count", "utility_count": "Utility Count", "utility_successes": "Utility Successes",
+    "utility_enemies": "Utility Enemies", "sniper_kills": "Sniper Kills", "pistol_kills": "Pistol Kills",
+    "knife_kills": "Knife Kills", "zeus_kills": "Zeus Kills",
 }
 
 
@@ -304,7 +309,8 @@ def attach_faceit(stats: dict[str, Any], lines: Mapping[str, Mapping[str, Any]])
         if sid in out["players"]:
             raw = line.get("stats", {})
             out["players"][sid]["faceit"] = {"nickname": line.get("nickname", ""), **{
-                key: _number(raw.get(name)) for key, name in FACEIT_FIELDS.items()}}
+                key: _number(raw.get(name)) for key, name in FACEIT_FIELDS.items()},
+                "raw": {str(name): str(value) for name, value in raw.items()}}      # every field, for later
     return out
 
 
@@ -332,7 +338,7 @@ def headline(player: Mapping[str, Any]) -> dict[str, Any]:
             "multi_kills": dict(player["multi_kill_rounds"])}
 
 
-COMPARED = ("kills", "deaths", "assists", "adr", "hs_pct")
+COMPARED = ("kills", "deaths", "assists", "adr", "hs_pct", "kd", "rating")
 
 
 def comparison(now: Mapping[str, Any], earlier: list[Mapping[str, Any]]) -> dict[str, Any]:
@@ -347,3 +353,56 @@ def comparison(now: Mapping[str, Any], earlier: list[Mapping[str, Any]]) -> dict
         deltas[metric] = round(current - averages[metric], 2) if current is not None and averages[metric] is not None \
             else None
     return {"count": len(earlier), "averages": averages, "deltas": deltas}
+
+
+def _or(value: Any, fallback: Any) -> Any:
+    return fallback if value is None else value
+
+
+def official(player: Mapping[str, Any]) -> dict[str, Any]:
+    """Everything the Stats page shows for a player: FACEIT's official number for each field FACEIT reports when the
+    match has FACEIT's line (`source` "faceit"), else the demo's (`source` "demo"); KAST and trades, which FACEIT does
+    not report, are always the demo's; and HLTV Rating 2.1, estimated from those (`rating.hltv21`)."""
+    faceit = player.get("faceit")
+    rounds = int(player.get("rounds") or 0)
+    head = headline(player)
+    kills, deaths, assists = head["kills"], head["deaths"], head["assists"]
+    out: dict[str, Any] = {
+        "source": head["source"], "rounds": rounds,
+        "kills": kills, "deaths": deaths, "assists": assists, "kd": head["kd"], "adr": head["adr"],
+        "hs_pct": head["hs_pct"], "multi_kills": head["multi_kills"],
+        "kast_pct": player.get("kast_pct"),
+        "trade_kills": player.get("trade_kills", 0), "traded_deaths": player.get("traded_deaths", 0),
+        "mvps": None, "sniper_kills": None, "flash_successes": None,
+    }
+    if faceit:
+        one_v1, one_v2 = faceit.get("one_v1"), faceit.get("one_v2")
+        out.update({
+            "mvps": faceit.get("mvps"), "sniper_kills": faceit.get("sniper_kills"),
+            "flash_successes": faceit.get("flash_successes"),
+            "entry_won": _or(faceit.get("entry_wins"), player.get("opening_kills", 0)),
+            "entry_tried": _or(faceit.get("entry_count"),
+                               player.get("opening_kills", 0) + player.get("opening_deaths", 0)),
+            "first_kills": _or(faceit.get("first_kills"), player.get("opening_kills", 0)),
+            "enemies_flashed": _or(faceit.get("enemies_flashed"), player.get("enemies_flashed", 0)),
+            "utility_damage": _or(faceit.get("utility_damage"), player.get("utility_damage", 0)),
+            "clutch_won": None if one_v1 is None and one_v2 is None
+            else (faceit.get("one_v1_wins") or 0) + (faceit.get("one_v2_wins") or 0),
+            "clutch_tried": None if one_v1 is None and one_v2 is None else (one_v1 or 0) + (one_v2 or 0),
+            "clutch_kind": "1v1 and 1v2",
+        })
+        if out["clutch_won"] is None:
+            out.update(clutch_won=player.get("clutch_wins", 0), clutch_tried=player.get("clutch_attempts", 0),
+                       clutch_kind="1v2 or more")
+    else:
+        out.update({
+            "entry_won": player.get("opening_kills", 0),
+            "entry_tried": player.get("opening_kills", 0) + player.get("opening_deaths", 0),
+            "first_kills": player.get("opening_kills", 0),
+            "enemies_flashed": player.get("enemies_flashed", 0), "utility_damage": player.get("utility_damage", 0),
+            "clutch_won": player.get("clutch_wins", 0), "clutch_tried": player.get("clutch_attempts", 0),
+            "clutch_kind": "1v2 or more",
+        })
+    out["entry_pct"] = _pct(out["entry_won"] or 0, out["entry_tried"] or 0)
+    out["rating"] = rating.hltv21(kills or 0, deaths or 0, assists or 0, out["adr"] or 0.0, out["kast_pct"], rounds)
+    return out

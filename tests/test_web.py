@@ -1849,18 +1849,18 @@ def test_check_for_demos_says_why_not_with_409(tmp_path):
     assert (response.status_code, response.get_json()) == (409, {"error": "Match alerts are off"})
 
 
-# --- Nugget and the 16-bit Press Box look: nugget.js, pixelscene.js, Silkscreen and Space Grotesk ----------------
+# --- the look: one face, Space Grotesk, and nothing of the pixel look left ------------------------------------------
 
-FONT_FILES = ("Silkscreen-Regular.woff2", "Silkscreen-Bold.woff2", "SpaceGrotesk-Variable.woff2")
+FONT_FILES = ("SpaceGrotesk-Variable.woff2",)
+PAGE_NAMES = ("status", "demos", "reels", "stats", "replay", "progress", "heatmaps", "settings")
 
 
-def test_nugget_the_scene_and_the_fonts_are_served_to_the_pc_and_the_phone_like_the_shared_files(client):
-    for path, mimetype in (("/nugget.js", "text/javascript"), ("/pixelscene.js", "text/javascript"),
-                           *((f"/fonts/{name}", "font/woff2") for name in FONT_FILES)):
-        response = pc_get(client, path)
-        assert (response.status_code, response.mimetype) == (200, mimetype), path
-        assert response.data == (PAGES_DIR / path.lstrip("/")).read_bytes(), path
-        assert phone_get(client, path).status_code == 200, path
+def test_the_font_is_served_to_the_pc_and_the_phone_like_the_shared_files(client):
+    for name in FONT_FILES:
+        response = pc_get(client, f"/fonts/{name}")
+        assert (response.status_code, response.mimetype) == (200, "font/woff2"), name
+        assert response.data == (PAGES_DIR / "fonts" / name).read_bytes(), name
+        assert phone_get(client, f"/fonts/{name}").status_code == 200, name
 
 
 def test_every_font_the_css_loads_is_served(client):
@@ -1869,47 +1869,28 @@ def test_every_font_the_css_loads_is_served(client):
     assert loaded == set(FONT_FILES)
 
 
-def test_only_the_fonts_come_out_of_the_fonts_folder(client):
-    for path in ("/fonts/Silkscreen-OFL.txt", "/fonts/SpaceGrotesk-OFL.txt", "/fonts/PixelifySans-Regular.woff2",
-                 "/fonts/Bangers.woff2",
-                 "/fonts/Barlow-Regular.woff2", "/fonts/HankenGrotesk.woff2", "/fonts/Saira.woff2"):
+def test_only_the_font_comes_out_of_the_fonts_folder(client):
+    for path in ("/fonts/SpaceGrotesk-OFL.txt", "/fonts/Silkscreen-Regular.woff2", "/fonts/PixelifySans-Regular.woff2",
+                 "/fonts/Bangers.woff2"):
         assert pc_get(client, path).status_code == 404, path
 
 
-def test_every_page_loads_nugget_after_the_shared_script(client):
-    for page in ("/status", "/demos", "/reels", "/progress", "/heatmaps", "/settings"):
-        html = pc_get(client, page).get_data(as_text=True)
-        assert html.index('src="/app.js"') < html.index('src="/nugget.js"'), page
+def test_the_pixel_look_is_gone(client):
+    for path in ("/nugget.js", "/pixelscene.js"):
+        assert pc_get(client, path).status_code == 404, path
+    for page in PAGE_NAMES:
+        html = (PAGES_DIR / f"{page}.html").read_text(encoding="utf-8")
+        for gone in ("nugget.js", "pixelscene.js", "NUGGET", "PIXELSCENE", "crispEdges", "pixelated", "--notch"):
+            assert gone not in html, (page, gone)
+    for name in ("app.css", "app.js", "touches.css", "touches.js"):
+        text = (PAGES_DIR / name).read_text(encoding="utf-8")
+        for gone in ("NUGGET", "PIXELSCENE", "Silkscreen", "crispEdges", "steps(", "--notch"):
+            assert gone not in text, (name, gone)
 
 
-def test_the_exe_carries_nugget_the_scene_and_the_fonts():
-    for name in ("nugget.js", "pixelscene.js", *(f"fonts/{font}" for font in FONT_FILES)):
-        assert name in PAGE_FILES, name
-
-
-def test_every_page_loads_the_scene_after_the_shared_script(client):
-    # Status's monitor and first-run banner and the Highlights carousels draw the scene
-    for page in ("/status", "/demos", "/reels", "/progress", "/heatmaps", "/settings"):
-        html = pc_get(client, page).get_data(as_text=True)
-        assert html.index('src="/app.js"') < html.index('src="/pixelscene.js"'), page
-
-
-def test_every_weather_the_backdrop_picks_is_drawn_by_the_stylesheet(client):
-    # app.js picks the backdrop's weather from the map Status last showed, and app.css draws it: a weather it could
-    # pick with no rules there would leave the window bare
-    js = pc_get(client, "/app.js").get_data(as_text=True)
-    css = pc_get(client, "/app.css").get_data(as_text=True)
-    table = re.search(r"const WEATHER_OF = \{(.*?)\};", js, re.S)
-    assert table, "app.js has no WEATHER_OF table"
-    weathers = set(re.findall(r'"(\w+)"', table.group(1))) | {"night"}
-    assert weathers == {"snow", "sand", "embers", "rain", "fireflies", "night"}
-    for weather in weathers:
-        assert f'.bg[data-weather="{weather}"]' in css, weather
-
-
-def test_the_backdrop_rests_while_the_window_is_not_in_front(client):
-    css = "".join(pc_get(client, "/app.css").get_data(as_text=True).split())
-    assert ".asleep.bg*{animation-play-state:paused!important}" in css
+def test_the_exe_carries_the_font():
+    for font in FONT_FILES:
+        assert f"fonts/{font}" in PAGE_FILES, font
 
 
 # --- every route Tasks 10-14 added is PC-only: a foreign Host is refused on all of them -------------
@@ -2272,7 +2253,7 @@ def test_the_side_rack_lists_the_pages_the_window_shows_in_order(client):
     assert tuple(listed) == links.PAGES
     for page in listed:
         assert pc_get(client, page).status_code == 200, page
-        assert f'"{page}": navIcon(' in js, page                  # each has its icon
+        assert f'"{page}": svgIcon(' in js, page                  # each has its icon
 
 
 def test_progress_and_heatmaps_are_for_the_pc_only(client):

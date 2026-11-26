@@ -98,9 +98,12 @@ the update.
   kill. Each says what happened and what to try next time, and links to the round's Replay and, when a Reel has the
   moment, to the Reel.
 - **Tracks your game.** **Progress** shows your Form over your last 10, 20 or 50 matches against the matches
-  before: win rate, Rating 2.0, K/D, ADR, HS%, KAST, opening duels and Mistakes a match, with a bar for every match,
+  before: win rate, HLTV Rating 2.1, K/D, ADR, HS%, KAST, opening duels and Mistakes a match, with a bar for every match,
   each map's numbers and your records. **Heatmaps** draws where you get your Frags and where you die on each map's
   radar, by side, over one match or all of them.
+- **Rates your skills.** **Skills progress**, at the top of Progress, rates your Aim, Utility, Entry, Trading and
+  HLTV Rating 2.1 from 0 to 100, your last matches against the ones before, and lists what got better and what to
+  look at.
 
 ## A look inside
 
@@ -229,7 +232,7 @@ version's section of [CHANGELOG.md](CHANGELOG.md).
 clipper/              the app
 ├── pages/            Status, Demos to grab, Reels, Stats, Replay, Progress, Heatmaps and Settings: plain HTML, CSS
 │   │                 and JS
-│   └── fonts/        Silkscreen, the 16-bit lettering, and Space Grotesk, the face everything else is read in
+│   └── fonts/        Space Grotesk, the face every page is set in
 ├── worker.py         moves each Demo through the steps
 ├── intake.py         takes finished Demos from Downloads
 ├── analysis.py       the only code that reads csda's output
@@ -271,9 +274,11 @@ CS2 Clipper is built on open-source work:
   commands its video export sends are ported in [`hlae_plan.py`](clipper/hlae_plan.py).
 - [Aegis](https://github.com/thelifeofsuleyman/cs2-clipper) by thelifeofsuleyman (MIT): the app shell, tray,
   window and installer started from it.
-- [faceitperf](https://github.com/iffypixy/faceitperf) by iffypixy (MIT): the Rating 2.0 estimate.
+- [faceitperf](https://github.com/iffypixy/faceitperf) by iffypixy (MIT): the rating estimate from FACEIT's numbers alone.
+- [awpy](https://github.com/pnxenopoulos/awpy) (MIT): the reverse-engineered HLTV rating formula the Rating 2.1
+  estimate uses.
 - [FFmpeg](https://ffmpeg.org), in [gyan.dev's builds](https://www.gyan.dev/ffmpeg/builds/), joins the Clips.
-- [Silkscreen](https://github.com/googlefonts/silkscreen) and [Space Grotesk](https://github.com/floriankarsten/space-grotesk)
+- [Space Grotesk](https://github.com/floriankarsten/space-grotesk)
   (SIL Open Font License) letter every page.
 
 ## License

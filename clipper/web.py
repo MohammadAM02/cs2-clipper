@@ -94,12 +94,12 @@ _MATCH_ID_PATTERN = r"1-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]
 _CHECKSUM_PATTERN = r"[0-9a-f]{1,16}"         # as csda writes it: hex without its leading zeros
 # Flask endpoint names (not paths) reachable from another device (spec: Reach from other devices).
 _PHONE_ENDPOINTS = frozenset({"demos_page", "demos_json", "demos_action", "app_css", "app_js", "touches_css",
-                              "touches_js", "nugget_js", "pixelscene_js", "font"})
+                              "touches_js", "font"})
 # Reels to watch and download from another device too -- reading only, and only under a Host a DNS-rebinding page
 # cannot send (`_plain_host`), since what they show is the player's own clips.
 _WATCH_ENDPOINTS = frozenset({"reels_page", "api_reels", "reel_video", "reel_frame", "reel_strip"})
 # The fonts the pages load from /fonts/ (their licences sit next to them and are not served).
-_FONTS = frozenset({"Silkscreen-Regular.woff2", "Silkscreen-Bold.woff2", "SpaceGrotesk-Variable.woff2"})
+_FONTS = frozenset({"SpaceGrotesk-Variable.woff2"})
 MOST_MATCHES = 500                             # the most matches one heatmap is asked over
 
 
@@ -1193,14 +1193,6 @@ def create_app(ctx: WebContext) -> Flask:
     @app.get("/touches.js")
     def touches_js():
         return Response((PAGES_DIR / "touches.js").read_bytes(), mimetype="text/javascript")
-
-    @app.get("/nugget.js")
-    def nugget_js():
-        return Response((PAGES_DIR / "nugget.js").read_bytes(), mimetype="text/javascript")
-
-    @app.get("/pixelscene.js")
-    def pixelscene_js():
-        return Response((PAGES_DIR / "pixelscene.js").read_bytes(), mimetype="text/javascript")
 
     @app.get("/fonts/<name>")
     def font(name: str):

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from clipper import stats
+from clipper import rating, stats
 from clipper.stats import Bomb, Clutch, Damage, Flash, Kill, Match, Player, Round
 
 A, B = "alpha", "bravo"
@@ -228,3 +228,27 @@ def test_the_comparison_with_no_earlier_matches_has_no_averages():
     assert out["count"] == 0
     assert all(value is None for value in out["averages"].values())
     assert all(value is None for value in out["deltas"].values())
+
+
+# --- FACEIT's official numbers, and HLTV Rating 2.1 -----------------------------------------------------------------
+
+def test_the_official_numbers_are_faceits_where_it_has_them_and_the_demos_for_kast_and_trades(result):
+    line = {"nickname": "a1", "stats": {**FACEIT_LINE["stats"], "Entry Count": "5", "Entry Wins": "3",
+                                        "1v1Count": "2", "1v1Wins": "1", "1v2Count": "1", "1v2Wins": "1"}}
+    player = stats.attach_faceit(result, {"1": line})["players"]["1"]
+    o = stats.official(player)
+    assert (o["source"], o["kills"], o["deaths"], o["adr"], o["hs_pct"]) == ("faceit", 18.0, 21.0, 65.8, 44.0)
+    assert (o["entry_won"], o["entry_tried"], o["entry_pct"]) == (3.0, 5.0, 60.0)
+    assert (o["clutch_won"], o["clutch_tried"], o["clutch_kind"]) == (2.0, 3.0, "1v1 and 1v2")
+    assert (o["enemies_flashed"], o["utility_damage"]) == (12.0, 150.0)
+    assert o["kast_pct"] == player["kast_pct"] and o["trade_kills"] == player["trade_kills"]
+    assert player["faceit"]["raw"]["Entry Count"] == "5"                        # every field FACEIT sent is kept
+
+
+def test_without_faceits_line_the_official_numbers_are_the_demos_with_the_rating_worked_out(result):
+    player = result["players"]["1"]
+    o = stats.official(player)
+    assert (o["source"], o["kills"], o["entry_won"], o["clutch_kind"]) == ("demo", 4, player["opening_kills"],
+                                                                          "1v2 or more")
+    assert o["rating"] == rating.hltv21(4, player["deaths"], player["assists"], player["adr"], player["kast_pct"],
+                                        player["rounds"])
